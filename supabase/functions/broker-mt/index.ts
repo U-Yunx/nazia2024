@@ -32,6 +32,11 @@
  *   summary | open-trades | closed-trades | open-position | close-position
  */
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import {
+  humanizeBrokerError,
+  terminalStatus,
+  type BrokerErrorCode,
+} from "./brokerErrors.ts";
 
 const METAAPI_PROVISIONING_BASE = "https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai";
 const METAAPI_BASE = "https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai";
@@ -355,10 +360,15 @@ async function validateMetaApiTokenCached(token: string): Promise<{ ok: boolean;
 }
 
 /** In-flight provisioning lock: one create/deploy per connection at a time. */
-const provisionLocks = new Map<
-  string,
-  Promise<{ ok: boolean; state: string | null; accountId: string | null; error: string | null }>
->();
+type ProvisionResult = {
+  ok: boolean;
+  state: string | null;
+  accountId: string | null;
+  error: string | null;
+  code?: BrokerErrorCode;
+  details?: string | null;
+};
+const provisionLocks = new Map<string, Promise<ProvisionResult>>();
 
 /**
  * AUTO-CONNECT engine: make sure `login@server` exists in MetaApi and deploy
@@ -375,7 +385,7 @@ async function ensureMetaAccountDeployed(args: {
   password: string;
   provisioningProfileId?: string;
   magic?: number;
-}): Promise<{ ok: boolean; state: string | null; accountId: string | null; error: string | null }> {
+}): Promise<ProvisionResult> {
   const { metaHeaders, apiToken, conn, login, server, platform, password } = args;
   const lockKey = conn.id;
   const inFlight = provisionLocks.get(lockKey);
@@ -406,11 +416,14 @@ async function ensureMetaAccountDeployed(args: {
       }, 20_000);
       const created = await createRes.json().catch(() => ({})) as { id?: string; error?: string; message?: string };
       if (!createRes.ok || !created.id) {
+        const reason = humanizeBrokerError(created.error ?? created.message ?? `MetaApi could not provision this account (HTTP ${createRes.status}).`);
         return {
           ok: false,
           state: null,
           accountId: null,
-          error: created.error ?? created.message ?? `MetaApi could not provision this account (HTTP ${createRes.status}).`,
+          error: reason.message,
+          code: reason.code,
+          details: reason.raw,
         };
       }
       meta = { id: String(created.id), state: "UNDEFINED", connectionStatus: "", name: "", type: "" };
@@ -427,7 +440,8 @@ async function ensureMetaAccountDeployed(args: {
         if (/already deployed|in the process of deployment|deploying/i.test(msg)) {
           return { ok: true, state: "DEPLOYING", accountId: meta.id, error: null };
         }
-        return { ok: false, state: null, accountId: meta.id, error: msg };
+        const reason = humanizeBrokerError(msg);
+        return { ok: false, state: null, accountId: meta.id, error: reason.message, code: reason.code, details: reason.raw };
       }
       meta = { ...meta, state: "DEPLOYING" };
     }
@@ -441,8 +455,15 @@ async function ensureMetaAccountDeployed(args: {
           const stRes = await fetchWithTimeout(`${METAAPI_PROVISIONING_BASE}/users/current/accounts/${meta.id}`, {
             headers: metaHeaders,
           });
-          const stData = (await stRes.json().catch(() => ({}))) as { state?: string };
+          const stData = (await stRes.json().catch(() => ({}))) as { state?: string; failureReason?: string; connectionStatus?: string };
           state = String(stData.state ?? "");
+          // A FAILED/ERROR/UNDEPLOYED provisioning state will never become
+          // DEPLOYED on its own — fail now with the mapped reason instead of
+          // reporting "deploying" forever.
+          if (/^(FAILED|ERROR|UNDEPLOYED)$/.test(state) || /FAILED|ERROR/i.test(String(stData.connectionStatus ?? ""))) {
+            const reason = humanizeBrokerError(stData.failureReason ?? `MetaApi could not deploy this account (${state}).`);
+            return { ok: false, state, accountId: meta.id, error: reason.message, code: reason.code, details: reason.raw };
+          }
         } catch {
           /* keep polling */
         }
@@ -852,7 +873,7 @@ Deno.serve(async (req: Request) => {
         magic: toNumber(body.magic),
       });
       if (!provisioned.ok) {
-        return json({ ok: false, code: "provision_failed", error: provisioned.error ?? "MetaApi could not provision this account." }, 400);
+        return json({ ok: false, code: provisioned.code ?? "provision_failed", error: provisioned.error ?? "MetaApi could not provision this account.", details: provisioned.details ?? null }, 400);
       }
       const now = new Date().toISOString();
       const saveErr = await persistMetaApiState({
@@ -905,7 +926,7 @@ Deno.serve(async (req: Request) => {
         magic: toNumber(body.magic),
       });
       if (!provisioned.ok) {
-        return json({ ok: false, code: "provision_failed", error: provisioned.error ?? "MetaApi could not provision this account." }, 400);
+        return json({ ok: false, code: provisioned.code ?? "provision_failed", error: provisioned.error ?? "MetaApi could not provision this account.", details: provisioned.details ?? null }, 400);
       }
       return json({
         ok: true,
@@ -938,7 +959,7 @@ Deno.serve(async (req: Request) => {
         password: String(password ?? ""),
       });
       if (!provisioned.ok) {
-        return json({ ok: false, code: "provision_failed", error: provisioned.error ?? "MetaApi could not provision this account." }, 400);
+        return json({ ok: false, code: provisioned.code ?? "provision_failed", error: provisioned.error ?? "MetaApi could not provision this account.", details: provisioned.details ?? null }, 400);
       }
       if (provisioned.state !== "DEPLOYED") {
         return json({ ok: false, code: "account_deploying", state: provisioned.state, error: "MetaTrader account is connecting for the first time (deploying on the MetaApi cloud). The app reconnects automatically in a few seconds." }, 503);
@@ -956,16 +977,79 @@ Deno.serve(async (req: Request) => {
     const accountUrl = `${METAAPI_BASE}/users/current/accounts/${meta.id}`;
 
     if (action === "state") {
+      // The provisioning record is the authoritative source for the account's
+      // connectionStatus / failureReason — read it fresh so a broker that
+      // REJECTED the login surfaces as a terminal error instead of a
+      // "deploying…" spinner that silently times out.
+      let provState = meta.state ?? "";
+      let provConnStatus = meta.connectionStatus ?? "";
+      let provFailure = "";
+      try {
+        const provRes = await fetchWithTimeout(`${METAAPI_PROVISIONING_BASE}/users/current/accounts/${meta.id}`, {
+          headers: metaHeaders,
+        });
+        const prov = (await provRes.json().catch(() => ({}))) as { state?: string; connectionStatus?: string; failureReason?: string };
+        provState = String(prov.state ?? provState).toUpperCase();
+        provConnStatus = String(prov.connectionStatus ?? provConnStatus).toUpperCase();
+        provFailure = String(prov.failureReason ?? "").trim();
+      } catch {
+        /* the trading state fetch below stays the fallback */
+      }
+
       const cachedState = readCacheHit<{ status?: string; connectedToBroker?: boolean }>(conn.id, "state");
       if (cachedState) {
-        return json({ ok: true, ...cachedState, connectionStatus: meta.connectionStatus ?? null, cached: true });
+        return json({
+          ok: true,
+          ...cachedState,
+          state: provState || null,
+          connectionStatus: provConnStatus || null,
+          failureReason: provFailure || null,
+          cached: true,
+        });
       }
+
+      // Terminal failure (broker rejected the login, broker offline, deploy
+      // failed): stop the polling loop now with an actionable message.
+      const terminal = terminalStatus(provConnStatus, provState);
+      if (terminal.terminal) {
+        const reason = provFailure
+          ? humanizeBrokerError(provFailure)
+          : { code: terminal.code ?? "deploy_failed", message: terminal.message ?? "The broker rejected this connection.", raw: null };
+        return json({
+          ok: false,
+          code: reason.code,
+          error: reason.message,
+          details: reason.raw ?? null,
+          state: provState || null,
+          connectionStatus: provConnStatus || null,
+          failureReason: provFailure || null,
+          terminal: true,
+        }, 400);
+      }
+
       const res = await fetchWithTimeout(`${accountUrl}/state`, { headers: metaHeaders });
       const data = (await res.json().catch(() => ({}))) as { status?: string; connectedToBroker?: boolean; error?: string; message?: string };
-      if (!res.ok) return json({ ok: false, error: data.error ?? data.message ?? "Could not read MetaApi account state." }, 502);
+      if (!res.ok) {
+        const reason = humanizeBrokerError(data.error ?? data.message ?? `MetaApi could not read the account state (HTTP ${res.status}).`);
+        return json({
+          ok: false,
+          code: reason.code,
+          error: reason.message,
+          details: reason.raw ?? null,
+          state: provState || null,
+          connectionStatus: provConnStatus || null,
+          failureReason: provFailure || null,
+        }, 502);
+      }
       const payload = { status: data.status ?? "unknown", connectedToBroker: !!data.connectedToBroker };
       readCachePut(conn.id, "state", payload);
-      return json({ ok: true, ...payload, connectionStatus: meta.connectionStatus ?? null });
+      return json({
+        ok: true,
+        ...payload,
+        state: provState || null,
+        connectionStatus: provConnStatus || null,
+        failureReason: provFailure || null,
+      });
     }
 
     if (action === "summary") {
@@ -976,7 +1060,10 @@ Deno.serve(async (req: Request) => {
         balance?: number; equity?: number; currency?: string;
         margin?: number; freeMargin?: number; error?: string; message?: string;
       };
-      if (!res.ok) return json({ ok: false, error: data.error ?? data.message ?? "MetaApi could not load the account summary." }, 502);
+      if (!res.ok) {
+        const reason = humanizeBrokerError(data.error ?? data.message ?? "MetaApi could not load the account summary.");
+        return json({ ok: false, code: reason.code, error: reason.message, details: reason.raw ?? null }, 502);
+      }
       const balance = toNumber(data.balance);
       const payload = {
         ok: true,
@@ -999,7 +1086,8 @@ Deno.serve(async (req: Request) => {
       const res = await fetchWithTimeout(`${accountUrl}/positions`, { headers: metaHeaders });
       const data = (await res.json().catch(() => ({}))) as { positions?: Array<Record<string, unknown>>; error?: string; message?: string };
       if (!res.ok || !data.positions) {
-        return json({ ok: false, error: data.error ?? data.message ?? "MetaApi could not load open positions." }, 502);
+        const reason = humanizeBrokerError(data.error ?? data.message ?? "MetaApi could not load open positions.");
+        return json({ ok: false, code: reason.code, error: reason.message, details: reason.raw ?? null }, 502);
       }
       const payload = { ok: true, positions: data.positions };
       readCachePut(conn.id, "open-trades", payload);
@@ -1018,7 +1106,8 @@ Deno.serve(async (req: Request) => {
       );
       const data = (await res.json().catch(() => ({}))) as { historyOrders?: Array<Record<string, unknown>>; error?: string; message?: string };
       if (!res.ok || !data.historyOrders) {
-        return json({ ok: false, error: data.error ?? data.message ?? "MetaApi could not load trade history." }, 502);
+        const reason = humanizeBrokerError(data.error ?? data.message ?? "MetaApi could not load trade history.");
+        return json({ ok: false, code: reason.code, error: reason.message, details: reason.raw ?? null }, 502);
       }
       const filled = data.historyOrders.filter((o) => String(o.state) === "ORDER_STATE_FILLED");
       const payload = { ok: true, trades: filled };
@@ -1114,8 +1203,8 @@ Deno.serve(async (req: Request) => {
       });
       const data = (await res.json().catch(() => ({}))) as { id?: string; error?: string; message?: string; numericCode?: number };
       if (!res.ok) {
-        const reason = data.error ?? data.message ?? `MetaApi rejected the order (code ${data.numericCode ?? "?"}).`;
-        return json({ ok: false, error: reason }, 400);
+        const reason = humanizeBrokerError(data.error ?? data.message ?? `MetaApi rejected the order (code ${data.numericCode ?? "?"}).`);
+        return json({ ok: false, code: reason.code, error: reason.message, details: reason.raw ?? null }, 400);
       }
       readCacheInvalidate(conn.id);
       return json({ ok: true, orderId: data.id ?? null });
@@ -1131,8 +1220,8 @@ Deno.serve(async (req: Request) => {
       });
       const data = (await res.json().catch(() => ({}))) as { id?: string; profit?: number; error?: string; message?: string; numericCode?: number };
       if (!res.ok) {
-        const reason = data.error ?? data.message ?? `MetaApi could not close the position (code ${data.numericCode ?? "?"}).`;
-        return json({ ok: false, error: reason }, 400);
+        const reason = humanizeBrokerError(data.error ?? data.message ?? `MetaApi could not close the position (code ${data.numericCode ?? "?"}).`);
+        return json({ ok: false, code: reason.code, error: reason.message, details: reason.raw ?? null }, 400);
       }
       readCacheInvalidate(conn.id);
       return json({ ok: true, profit: toNumber(data.profit) || null });
@@ -1144,6 +1233,7 @@ Deno.serve(async (req: Request) => {
     if (/invalid peer certificate|UnknownIssuer|certificate has expired|self[- ]signed/i.test(detail)) {
       return json({ ok: false, error: "MetaApi's trading API is temporarily unreachable from the server (its certificate could not be verified). Your account and settings are safe — please try again in a few minutes." }, 502);
     }
-    return json({ ok: false, error: detail ? `MetaApi request failed: ${detail}` : "Could not reach MetaApi. Check the network and try again." }, 502);
+    const reason = humanizeBrokerError(detail || "Could not reach MetaApi. Check the network and try again.");
+    return json({ ok: false, code: reason.code, error: reason.message, details: reason.raw ?? null }, 502);
   }
 });

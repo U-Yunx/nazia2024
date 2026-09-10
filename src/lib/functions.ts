@@ -21,6 +21,10 @@ interface InvokeOptions {
 interface EdgeErrorShape {
   error?: string
   message?: string
+  /** Stable machine-readable failure code (e.g. 'auth_rejected'). */
+  code?: string
+  /** Raw broker/MetaApi detail kept for diagnostics. */
+  details?: string
 }
 
 /** Best-effort extraction of a human-readable reason from an error body. */
@@ -41,10 +45,29 @@ async function reasonFromBody(body: unknown): Promise<string | null> {
   return null
 }
 
+function extractMeta(body: unknown): { code?: string | null; details?: string | null } | null {
+  if (!body || typeof body !== 'object') return null
+  const o = body as { code?: unknown; details?: unknown }
+  if (o.code === undefined && o.details === undefined) return null
+  return {
+    code: typeof o.code === 'string' ? o.code : null,
+    details: typeof o.details === 'string' ? o.details : null,
+  }
+}
+
+export interface FnResult<T> {
+  data: T | null
+  error: string | null
+  /** Stable machine-readable failure code returned by the edge function, when present. */
+  code?: string | null
+  /** Raw broker/MetaApi detail for diagnostics, when the edge function included it. */
+  details?: string | null
+}
+
 export async function fn<T>(
   name: string,
   options: InvokeOptions = {},
-): Promise<{ data: T | null; error: string | null }> {
+): Promise<FnResult<T>> {
   if (!isSupabaseConfigured) {
     return { data: null, error: options.fallback ?? 'Service not configured.' }
   }
@@ -61,14 +84,17 @@ export async function fn<T>(
       // ever says "Could not load your MetaTrader account." and hides why.
       if (err instanceof FunctionsHttpError) {
         const body = await err.context?.json().catch(() => null)
+        const meta = extractMeta(body)
         const real = await reasonFromBody(body)
-        if (real) return { data: null, error: real }
+        if (real) return { data: null, error: real, code: meta?.code ?? null, details: meta?.details ?? null }
         const status = err.context?.status
         return {
           data: null,
           error: status
             ? `The ${name} service returned an error (HTTP ${status}). Try again shortly.`
             : (options.fallback ?? error.message),
+          code: meta?.code ?? null,
+          details: meta?.details ?? null,
         }
       }
       // The relay couldn't reach the function, or the network request itself
@@ -81,9 +107,9 @@ export async function fn<T>(
       return { data: null, error: options.fallback ?? error.message }
     }
     if (data && typeof data === 'object' && 'error' in (data as object)) {
-      const e = (data as EdgeErrorShape).error
-      if (e) {
-        return { data: null, error: (data as EdgeErrorShape).message ?? e }
+      const o = data as EdgeErrorShape
+      if (o.error) {
+        return { data: null, error: o.message ?? o.error, code: o.code ?? null, details: o.details ?? null }
       }
     }
     return { data: data as T, error: null }

@@ -77,6 +77,27 @@ function toOandaSymbol(symbol: string): string {
   return symbol.includes("/") ? symbol.replace("/", "_") : symbol;
 }
 
+/**
+ * Normalize OANDA's v20 error strings before they reach the UI. OANDA's
+ * `errorMessage` is usually already human-readable, but auth failures and
+ * the generic "Multiple errors were returned" wrapper are not actionable —
+ * map those to friendly copy and keep the rest intact.
+ */
+function oandaReason(raw: string, fallback: string): string {
+  const text = raw?.trim() ?? "";
+  const lower = text.toLowerCase();
+  if (/invalid token|unauthorized|authentication failed|\b401\b|\b403\b/i.test(lower)) {
+    return "OANDA rejected this API token. Check that the token is valid, not expired, and matches this account type (practice vs live), then try again.";
+  }
+  if (/multiple errors were|one or more|the configuration for account/i.test(lower)) {
+    return "OANDA rejected the request. Make sure the token and account id belong to the same OANDA account, then try again.";
+  }
+  if (/was not found|does not exist|invalid account/i.test(lower)) {
+    return "OANDA couldn't find this account. Check the account id is correct for the token you're using (practice vs live), then try again.";
+  }
+  return text || fallback;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return json({ ok: true });
   try {
@@ -122,7 +143,7 @@ Deno.serve(async (req) => {
         const res = await fetch(`${base}/v3/accounts`, { headers });
         const data = (await res.json().catch(() => ({}))) as { accounts?: unknown[]; errorMessage?: string };
         if (!res.ok) {
-          const reason = data.errorMessage ?? `OANDA rejected this API token (HTTP ${res.status}).`;
+          const reason = oandaReason(data.errorMessage ?? "", `OANDA rejected this API token (HTTP ${res.status}).`);
           return json({ ok: false, error: `${reason} Double-check your token (practice vs live) and try again.` }, 400);
         }
         const accounts = Array.isArray(data.accounts) ? data.accounts : [];
@@ -133,7 +154,7 @@ Deno.serve(async (req) => {
         const res = await fetch(`${base}/v3/accounts/${accountId}/summary`, { headers });
         const data = (await res.json().catch(() => ({}))) as { account?: Record<string, unknown>; errorMessage?: string };
         if (!res.ok || !data.account) {
-          return json({ ok: false, error: data.errorMessage ?? "OANDA rejected the request." });
+          return json({ ok: false, error: oandaReason(data.errorMessage ?? "", "OANDA rejected the request.") });
         }
         return json({ ok: true, account: data.account });
       }
@@ -141,14 +162,14 @@ Deno.serve(async (req) => {
       case "open-trades": {
         const res = await fetch(`${base}/v3/accounts/${accountId}/openTrades`, { headers });
         const data = (await res.json().catch(() => ({}))) as { trades?: unknown[]; errorMessage?: string };
-        if (!res.ok) return json({ ok: false, error: data.errorMessage ?? "Could not load open trades." });
+        if (!res.ok) return json({ ok: false, error: oandaReason(data.errorMessage ?? "", "Could not load open trades.") });
         return json({ ok: true, trades: data.trades ?? [] });
       }
 
       case "closed-trades": {
         const res = await fetch(`${base}/v3/accounts/${accountId}/trades?state=CLOSED&count=100`, { headers });
         const data = (await res.json().catch(() => ({}))) as { trades?: unknown[]; errorMessage?: string };
-        if (!res.ok) return json({ ok: false, error: data.errorMessage ?? "Could not load trade history." });
+        if (!res.ok) return json({ ok: false, error: oandaReason(data.errorMessage ?? "", "Could not load trade history.") });
         return json({ ok: true, trades: data.trades ?? [] });
       }
 
@@ -187,7 +208,7 @@ Deno.serve(async (req) => {
           errorMessage?: string;
         };
         if (!res.ok || !data.orderFillTransaction?.tradeOpened?.tradeID) {
-          return json({ ok: false, error: data.errorMessage ?? "OANDA rejected the order." });
+          return json({ ok: false, error: oandaReason(data.errorMessage ?? "", "OANDA rejected the order.") });
         }
         return json({ ok: true });
       }
@@ -204,7 +225,7 @@ Deno.serve(async (req) => {
           body: "{}",
         });
         const data = (await res.json().catch(() => ({}))) as { errorMessage?: string };
-        if (!res.ok) return json({ ok: false, error: data.errorMessage ?? "OANDA could not close the position." });
+        if (!res.ok) return json({ ok: false, error: oandaReason(data.errorMessage ?? "", "OANDA could not close the position.") });
         return json({ ok: true });
       }
 

@@ -34,10 +34,19 @@ import {
   saveMetaApiToken,
 } from '../lib/platform'
 import { fn } from '../lib/functions'
+import { terminalStatus } from '../lib/brokerErrors'
 import type { BrokerConnectionRow, BrokerPlatform, BrokerRow, BrokerTokenStatus, MetaApiStatus } from '../lib/types'
 import { cn } from '../lib/cn'
 import { formatDateTime } from '../lib/format'
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, PageHeader, Select, Skeleton } from '../components/ui'
+
+/**
+ * Failure codes that mean "your MT credentials/server/token are wrong" — the
+ * user can fix them on this very form. Everything else (bridge not configured,
+ * MetaApi unreachable, still deploying) is transient and the connection stays
+ * saved.
+ */
+const CREDENTIAL_ISSUES = new Set(['auth_rejected', 'server_not_found', 'account_blocked', 'invalid_token'])
 
 const STATUS_STYLES: Record<string, string> = {
   available: 'border-up/40 bg-up/10 text-up',
@@ -97,7 +106,12 @@ function MtConnectionStatus({ connectionId }: { connectionId: string }) {
   /** Verify against the bridge. Returns the outcome so callers can chain. */
   const check = useCallback(async (): Promise<{ provisioned: boolean; error: string | null }> => {
     setStatus({ kind: 'checking' })
-    const { data, error } = await fn<{ ok?: boolean; provisioned?: boolean }>(
+    const { data, error } = await fn<{
+      ok?: boolean
+      provisioned?: boolean
+      connectionStatus?: string | null
+      state?: string | null
+    }>(
       'broker-mt',
       { body: { action: 'verify', connection_id: connectionId }, fallback: 'Could not reach the MetaTrader bridge.' },
     )
@@ -105,6 +119,16 @@ function MtConnectionStatus({ connectionId }: { connectionId: string }) {
       const message = error ?? 'Could not reach the MetaTrader bridge.'
       setStatus({ kind: 'error', message })
       return { provisioned: false, error: message }
+    }
+    // A provisioned account can still be in a TERMINAL state — the broker
+    // rejected the login, is offline, or deployment failed. Surface that
+    // immediately instead of claiming "Live trading ready".
+    const terminal = terminalStatus(data.connectionStatus, data.state)
+    if (data.provisioned && terminal.terminal) {
+      const message =
+        terminal.message ?? 'The broker rejected this connection — check your MT credentials on the Brokers page.'
+      setStatus({ kind: 'error', message })
+      return { provisioned: true, error: message }
     }
     if (data.provisioned) {
       setStatus({ kind: 'ready' })
@@ -124,18 +148,24 @@ function MtConnectionStatus({ connectionId }: { connectionId: string }) {
         'broker-mt',
         { body: { action: 'state', connection_id: connectionId } },
       )
-      if (error) {
-        setStatus({ kind: 'error', message: error })
+      if (error || !data?.ok) {
+        // Terminal failure — the broker rejected the login, is offline, or the
+        // deployment failed. The bridge already mapped it to an actionable
+        // message, so stop the spinner immediately.
+        setStatus({ kind: 'error', message: error ?? 'Could not read the connection state.' })
         clearPoll()
         return
       }
-      if (data?.ok && data.connectedToBroker) {
+      if (data.connectedToBroker) {
         setStatus({ kind: 'ready' })
         clearPoll()
         return
       }
       if (ticks >= 18) {
-        setStatus({ kind: 'error', message: 'Your account is still deploying after a few minutes — try again shortly.' })
+        setStatus({
+          kind: 'error',
+          message: 'Your account is still connecting after a few minutes — check the server name and password, then retry.',
+        })
         clearPoll()
         return
       }
