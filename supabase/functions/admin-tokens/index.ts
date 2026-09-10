@@ -35,7 +35,12 @@
 //  - Caller must be a signed-in admin (server-authoritative).
 // ---------------------------------------------------------------------------
 
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
+
+// Deno's jsr build of @supabase/supabase-js resolves `ReturnType<typeof
+// createClient>` to a never-schema overload that poisons every chain. Helpers
+// accept the same concrete client type the handler infers (see robot-runner).
+type AdminClient = SupabaseClient<any, "public", "public", any, any>;
 
 const MANAGEMENT_API = "https://api.supabase.com/v1/projects";
 
@@ -73,18 +78,18 @@ function randomHex(bytes: number): string {
 
 // --- Secure token store (app_secrets, service-role only) ---------------------
 
-async function storeGet(admin: ReturnType<typeof createClient>, key: string): Promise<string | null> {
+async function storeGet(admin: AdminClient, key: string): Promise<string | null> {
   const { data } = await admin.from("app_secrets").select("value").eq("key", key).maybeSingle();
   const v = data?.value;
   return typeof v === "string" && v.trim() ? v.trim() : null;
 }
 
-async function storeSet(admin: ReturnType<typeof createClient>, key: string, value: string): Promise<string | null> {
+async function storeSet(admin: AdminClient, key: string, value: string): Promise<string | null> {
   const { error } = await admin.from("app_secrets").upsert({ key, value }, { onConflict: "key" });
   return error?.message ?? null;
 }
 
-async function storeDelete(admin: ReturnType<typeof createClient>, key: string): Promise<string | null> {
+async function storeDelete(admin: AdminClient, key: string): Promise<string | null> {
   const { error } = await admin.from("app_secrets").delete().eq("key", key);
   return error?.message ?? null;
 }
@@ -271,13 +276,13 @@ const MARKET_DATA_MAP: Record<string, string> = {
 };
 
 /** Auto-mode state: true once the one-click bootstrap has run. */
-async function storeMode(admin: ReturnType<typeof createClient>): Promise<"auto" | "manual"> {
+async function storeMode(admin: AdminClient): Promise<"auto" | "manual"> {
   const mode = await storeGet(admin, "token_store_mode");
   return mode === "auto" ? "auto" : "manual";
 }
 
 /** Read which tokens are configured (env or store) + the bootstrap state. */
-async function tokenStatuses(admin: ReturnType<typeof createClient>) {
+async function tokenStatuses(admin: AdminClient) {
   const auto = await storeMode(admin);
   const tokens = [];
   for (const [name, meta] of Object.entries(VALIDATORS)) {
@@ -314,7 +319,7 @@ Deno.serve(async (req: Request) => {
   const auth = (req.headers.get("Authorization") ?? "").replace("Bearer ", "").trim();
   if (!auth) return json({ ok: false, error: "Missing authorization." }, 401);
 
-  const supabase = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+  const supabase: AdminClient = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
 
   const { data: { user }, error: authError } = await supabase.auth.getUser(auth);
   if (authError || !user) return json({ ok: false, error: "Invalid session." }, 401);

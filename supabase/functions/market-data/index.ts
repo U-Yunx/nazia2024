@@ -1355,10 +1355,11 @@ async function yahooTimeSeries(
     for (let i = 0; i < ts.length; i++) {
       const o = q.open?.[i], h = q.high?.[i], l = q.low?.[i], c = q.close?.[i];
       if (o == null || h == null || l == null || c == null) continue;
+      const vol = q.volume?.[i];
       bars.push({
         time: new Date(ts[i] * 1000).toISOString(),
         open: o, high: h, low: l, close: c,
-        volume: q.volume?.[i] != null ? q.volume[i] : undefined,
+        volume: vol != null ? vol : undefined,
       });
     }
     if (interval === "4h") bars = aggregateBars(bars, 4);

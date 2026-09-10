@@ -31,12 +31,19 @@
  *   metaapi-token-set (admin) | metaapi-token-clear (admin) | state |
  *   summary | open-trades | closed-trades | open-position | close-position
  */
-import { createClient } from "jsr:@supabase/supabase-js@2";
 import {
   humanizeBrokerError,
   terminalStatus,
   type BrokerErrorCode,
 } from "./brokerErrors.ts";
+import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
+
+// Deno's jsr build of @supabase/supabase-js resolves overloads to a
+// never-schema client that poisons every `.from(...)` chain with
+// `GenericStringError[]` row types. The service-role client is cast to the
+// concrete generic form (same pattern as robot-runner) so all chains below
+// keep the `any` row type they intend.
+type AdminClient = SupabaseClient<any, "public", "public", any, any>;
 
 const METAAPI_PROVISIONING_BASE = "https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai";
 const METAAPI_BASE = "https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai";
@@ -541,7 +548,7 @@ Deno.serve(async (req: Request) => {
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? Deno.env.get("SUPABASE_ANON_KEY") ?? "";
-  const supabase = createClient(supabaseUrl, serviceKey);
+  const supabase: AdminClient = createClient(supabaseUrl, serviceKey);
 
   // Verify the caller's JWT so only signed-in users can reach their account.
   const { data: { user }, error: authError } = await supabase.auth.getUser(token);
@@ -616,7 +623,10 @@ Deno.serve(async (req: Request) => {
   const brokerId = String(body.broker_id ?? url.searchParams.get("broker_id") ?? "").trim();
   const robotNumber = Number(body.robot_number ?? url.searchParams.get("robot_number") ?? 1);
 
-  let connQuery = supabase
+  // The `any` annotation breaks the jsr build's chained-builder type quirk:
+  // reassigning a `let` chained builder re-resolves its type to the base
+  // `PostgrestBuilder<any, GenericStringError[]>` and breaks every `.eq()`.
+  let connQuery: any = supabase
     .from("broker_connections")
     .select(
       "id, api_key, account_id, account_type, platform, server, robot_number, " +
@@ -665,7 +675,7 @@ Deno.serve(async (req: Request) => {
   const tokenDiagnosticAction = action === "metaapi-status" || action === "metaapi-check";
   const tokenFreeAction = action === "metaapi-save" || action === "metaapi-remove";
 
-  let metaApiToken: string | null;
+  let metaApiToken: string | null = null;
   let tokenSource: "user" | "general" | null;
   let tokenFallbackReason: string | null = null;
 
@@ -940,7 +950,7 @@ Deno.serve(async (req: Request) => {
     }
 
     // Every action below needs the provisioned + deployed MetaApi account.
-    let accountsFor = await fetchAccountsFor(metaApiToken);
+    let accountsFor = await fetchAccountsFor(metaApiToken as string);
     if (!accountsFor.ok) {
       return json({ ok: false, error: accountsFor.error ?? "Could not reach MetaApi. Check the network and try again." }, 502);
     }
@@ -951,7 +961,7 @@ Deno.serve(async (req: Request) => {
       console.info(`broker-mt: auto-connecting ${platform} account #${login} on ${server}`);
       const provisioned = await ensureMetaAccountDeployed({
         metaHeaders,
-        apiToken: metaApiToken,
+        apiToken: metaApiToken as string,
         conn,
         login,
         server,
@@ -964,7 +974,7 @@ Deno.serve(async (req: Request) => {
       if (provisioned.state !== "DEPLOYED") {
         return json({ ok: false, code: "account_deploying", state: provisioned.state, error: "MetaTrader account is connecting for the first time (deploying on the MetaApi cloud). The app reconnects automatically in a few seconds." }, 503);
       }
-      accountsFor = await fetchAccountsFor(metaApiToken);
+      accountsFor = await fetchAccountsFor(metaApiToken as string);
       if (!accountsFor.ok) {
         return json({ ok: false, error: accountsFor.error ?? "Could not reach MetaApi. Check the network and try again." }, 502);
       }
@@ -1153,9 +1163,9 @@ Deno.serve(async (req: Request) => {
         return json({ ok: false, error: "Live execution is currently disabled by the platform. Switch to a demo account." }, 400);
       }
       let openForSymbol: number;
-      const cachedPositions = readCacheHit<{ positions: Array<{ symbol?: string }> }>(conn.id, "positions");
+      const cachedPositions = readCacheHit<{ positions: Array<{ symbol?: string }> }>(conn.id, "open-trades");
       if (cachedPositions) {
-        openForSymbol = cachedPositions.filter((p) => String(p.symbol).toUpperCase() === symbol).length;
+        openForSymbol = cachedPositions.positions.filter((p) => String(p.symbol).toUpperCase() === symbol).length;
       } else {
         const posRes = await fetchWithTimeout(`${accountUrl}/positions`, { headers: metaHeaders });
         const posData = (await posRes.json().catch(() => ({}))) as { positions?: Array<{ symbol?: string }> };
