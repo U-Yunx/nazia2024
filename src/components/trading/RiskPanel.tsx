@@ -115,6 +115,14 @@ export function RiskPanel({ risk, onChange, onReset, isLive }: Props) {
             suffix="$"
           />
           <Field
+            label="Max loss per trade"
+            value={risk.maxLossPerTradeUsd}
+            onChange={(v) => onChange({ maxLossPerTradeUsd: Math.max(0, v) })}
+            min={0}
+            step={5}
+            suffix="$"
+          />
+          <Field
             label="Trailing stop"
             value={risk.trailPips}
             onChange={(v) => onChange({ trailPips: v })}
@@ -149,8 +157,8 @@ export function RiskPanel({ risk, onChange, onReset, isLive }: Props) {
           />
         </div>
         <p className="mt-3 text-xs text-muted-foreground">
-          Per-trade money target: the robot closes a trade as soon as it's up this amount ($).
-          Set to 0 to use price targets only.
+          Per-trade $ targets: the robot closes a trade as soon as it's up the profit target,
+          or down the loss cap. Set both to 0 to use pip targets only.
         </p>
         <label className="mt-4 flex cursor-pointer items-center gap-2 text-sm text-foreground">
           <input

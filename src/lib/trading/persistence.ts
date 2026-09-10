@@ -76,6 +76,8 @@ interface PaperTradeRow {
   entry_equity: number | null
   close_reason: string | null
   strategy: string | null
+  target_profit_usd: number | null
+  target_loss_usd: number | null
   created_at: string | null
 }
 
@@ -102,6 +104,8 @@ function toRow(account: AccountState, userId: string): {
       entry_equity: p.entryEquity,
       close_reason: null,
       strategy: p.strategy ?? null,
+      target_profit_usd: p.targetProfitUsd ?? null,
+      target_loss_usd: p.targetLossUsd ?? null,
       created_at: null,
     })),
     ...account.trades.map<PaperTradeRow>((t) => ({
@@ -122,6 +126,8 @@ function toRow(account: AccountState, userId: string): {
       entry_equity: t.entryEquity,
       close_reason: t.closeReason,
       strategy: t.strategy ?? null,
+      target_profit_usd: null,
+      target_loss_usd: null,
       created_at: null,
     })),
   ]
@@ -154,6 +160,8 @@ function fromRows(row: PaperAccountRow, trades: PaperTradeRow[]): AccountState {
         takeProfitPrice: t.take_profit ?? 0,
         entryEquity: t.entry_equity ?? Number(row.balance ?? 0),
         strategy: t.strategy ?? undefined,
+        targetProfitUsd: t.target_profit_usd ?? undefined,
+        targetLossUsd: t.target_loss_usd ?? undefined,
         status: 'open',
       })
     } else {

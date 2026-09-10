@@ -10,7 +10,7 @@ export type Side = 'long' | 'short'
 export type Signal = 'buy' | 'sell' | 'neutral'
 export type StrategyType = 'MA' | 'RSI' | 'MACD' | 'BOLLINGER'
 export type Interval = '1min' | '5min' | '15min' | '30min' | '1h' | '4h' | '1day'
-export type CloseReason = 'signal' | 'stop_loss' | 'take_profit' | 'manual' | 'risk' | 'robot_stop'
+export type CloseReason = 'signal' | 'stop_loss' | 'take_profit' | 'target' | 'manual' | 'risk' | 'robot_stop'
 export type TradingMethod = 'scalping' | 'longterm'
 export type StrategyMode = 'auto' | 'manual'
 
@@ -36,6 +36,8 @@ export interface Position {
   entryTime: string
   stopPrice: number
   takeProfitPrice: number
+  targetProfitUsd?: number
+  targetLossUsd?: number
   entryEquity: number
   strategy?: string
   status: 'open'
@@ -65,6 +67,10 @@ export interface RiskConfig {
   maxOpenPositions: number
   defaultStopPips: number
   takeProfitRatio: number
+  /** Per-trade profit target in USD (0 = off) — close when a trade is worth this. */
+  targetPerTradeUsd: number
+  /** Per-trade loss cap in USD (0 = off) — close when a trade is down -$this. */
+  maxLossPerTradeUsd: number
   maxDailyLossPct: number
   autoTrade: boolean
   trailingStop: boolean
@@ -81,6 +87,8 @@ export const DEFAULT_RISK: RiskConfig = {
   maxOpenPositions: 5,
   defaultStopPips: 20,
   takeProfitRatio: 2,
+  targetPerTradeUsd: 0,
+  maxLossPerTradeUsd: 0,
   maxDailyLossPct: 5,
   autoTrade: false,
   trailingStop: true,
@@ -615,12 +623,26 @@ export function markToMarket(
     const cur = rates[p.symbol]
     if (cur == null) continue
     let reason: CloseReason | null = null
-    if (p.side === 'long') {
-      if (cur <= p.stopPrice) reason = 'stop_loss'
-      else if (cur >= p.takeProfitPrice) reason = 'take_profit'
-    } else {
-      if (cur >= p.stopPrice) reason = 'stop_loss'
-      else if (cur <= p.takeProfitPrice) reason = 'take_profit'
+    // A stop hit always wins — nothing is allowed to hold a dying trade.
+    if (p.side === 'long' && cur <= p.stopPrice) reason = 'stop_loss'
+    else if (p.side === 'short' && cur >= p.stopPrice) reason = 'stop_loss'
+
+    // Per-trade USD targets, checked before the price take-profit so a $ rule
+    // can fire on a smaller favourable move: the position's own stamp wins
+    // (loaded from the account), otherwise the robot's per-trade knobs
+    // (0 = off). The loss cap is enforced like a stop — a trade bleeding
+    // money is cut at -$limit.
+    if (!reason) {
+      const pnl = pnlUsd(p.side, p.entryPrice, cur, p.units, p.symbol, rates)
+      const profitTarget = p.targetProfitUsd ?? state.risk.targetPerTradeUsd
+      const lossTarget = p.targetLossUsd ?? state.risk.maxLossPerTradeUsd
+      if (lossTarget > 0 && pnl <= -lossTarget) reason = 'stop_loss'
+      else if (profitTarget > 0 && pnl >= profitTarget) reason = 'target'
+    }
+
+    if (!reason) {
+      if (p.side === 'long' && cur >= p.takeProfitPrice) reason = 'take_profit'
+      else if (p.side === 'short' && cur <= p.takeProfitPrice) reason = 'take_profit'
     }
     if (reason) {
       const res = closePosition(next, p.id, { price: cur, reason, rates })
@@ -681,6 +703,8 @@ export function openPosition(
     takeProfitPips: number
     units: number
     strategy?: string
+    targetProfitUsd?: number
+    targetLossUsd?: number
     time?: string
   },
   rates: RatesMap,
@@ -724,6 +748,8 @@ export function openPosition(
     takeProfitPrice,
     entryEquity: equity(state, rates),
     strategy: input.strategy,
+    targetProfitUsd: input.targetProfitUsd ?? undefined,
+    targetLossUsd: input.targetLossUsd ?? undefined,
     status: 'open',
   }
 

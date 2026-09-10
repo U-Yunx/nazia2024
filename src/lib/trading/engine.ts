@@ -94,6 +94,8 @@ export function openPosition(
     takeProfitPrice,
     entryEquity: equity(state, rates),
     strategy: input.strategy,
+    targetProfitUsd: input.targetProfitUsd ?? undefined,
+    targetLossUsd: input.targetLossUsd ?? undefined,
     status: 'open' as const,
   }
 
@@ -159,12 +161,16 @@ export function markToMarket(
     if (p.side === 'long' && cur <= p.stopPrice) reason = 'stop_loss'
     else if (p.side === 'short' && cur >= p.stopPrice) reason = 'stop_loss'
 
-    // Per-trade money target: once this trade is worth $targetPerTradeUsd
-    // (0 = off) close it and bank the win. Checked before the price-based
-    // take-profit, so the $ rule can fire on a smaller favourable move.
-    if (!reason && state.risk.targetPerTradeUsd > 0) {
+    // Per-trade USD targets, checked before the price take-profit so a $ rule
+    // can fire on a smaller favourable move: the position's own stamp wins
+    // (manual form), otherwise the robot's per-trade knobs (0 = off). The loss
+    // cap is enforced like a stop — a trade bleeding money is cut at -$limit.
+    if (!reason) {
       const pnl = pnlUsd(p.side, p.entryPrice, cur, p.units, p.symbol, rates)
-      if (pnl >= state.risk.targetPerTradeUsd) reason = 'target'
+      const profitTarget = p.targetProfitUsd ?? state.risk.targetPerTradeUsd
+      const lossTarget = p.targetLossUsd ?? state.risk.maxLossPerTradeUsd
+      if (lossTarget > 0 && pnl <= -lossTarget) reason = 'stop_loss'
+      else if (profitTarget > 0 && pnl >= profitTarget) reason = 'target'
     }
 
     if (!reason) {

@@ -30,6 +30,8 @@ export function TradeForm({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [ok, setOk] = useState(false)
+  const [profitTargetUsd, setProfitTargetUsd] = useState(0)
+  const [lossCapUsd, setLossCapUsd] = useState(0)
 
   const price = rates[symbol]
   const pipValue = pipValueUsd(symbol, rates)
@@ -70,6 +72,8 @@ export function TradeForm({
         takeProfitPips: takePips,
         units: effectiveUnits,
         strategy: 'manual',
+        targetProfitUsd: profitTargetUsd || undefined,
+        targetLossUsd: lossCapUsd || undefined,
       },
       rates,
     )
@@ -141,6 +145,22 @@ export function TradeForm({
             onChange={(e) => setTakePips(Number(e.target.value))}
           />
           <Input
+            label="Profit target ($)"
+            type="number"
+            min={0}
+            step={5}
+            value={profitTargetUsd}
+            onChange={(e) => setProfitTargetUsd(Math.max(0, Number(e.target.value)))}
+          />
+          <Input
+            label="Loss cap ($)"
+            type="number"
+            min={0}
+            step={5}
+            value={lossCapUsd}
+            onChange={(e) => setLossCapUsd(Math.max(0, Number(e.target.value)))}
+          />
+          <Input
             label={`Units (suggested ${suggested})`}
             type="number"
             min={1}
@@ -160,6 +180,10 @@ export function TradeForm({
             </div>
           </div>
         </div>
+
+        <p className="mt-3 text-xs text-muted-foreground">
+          $ targets auto-close the trade at that profit or that loss; 0 = off.
+        </p>
 
         {pipValue != null && (
           <p className="mt-3 text-xs text-muted-foreground">

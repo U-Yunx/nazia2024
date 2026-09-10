@@ -29,6 +29,19 @@ export interface Position {
   entryTime: string
   stopPrice: number
   takeProfitPrice: number
+  /**
+   * USD profit target for this position: markToMarket closes it as soon as
+   * unrealized PnL reaches this amount. 0 / undefined = off. Manual orders
+   * stamp their own value; robot trades fall back to the robot's per-trade
+   * target at close time.
+   */
+  targetProfitUsd?: number
+  /**
+   * USD loss cap for this position: markToMarket closes it if unrealized PnL
+   * ever dips to -$this. 0 / undefined = off. Enforced like a stop — a trade
+   * bleeding money is cut at the $ limit.
+   */
+  targetLossUsd?: number
   /** Account equity at the moment the position was opened (for PnL %). */
   entryEquity: number
   strategy?: string
@@ -73,6 +86,12 @@ export interface RiskConfig {
    * price-based take-profit applies).
    */
   targetPerTradeUsd: number
+  /**
+   * Per-trade loss cap in USD: when an open trade's unrealized PnL reaches
+   * -$this the robot closes it and cuts the loss. 0 = off (only the
+   * price-based stop applies).
+   */
+  maxLossPerTradeUsd: number
   /** Daily loss limit as % of starting equity — blocks new entries when hit. */
   maxDailyLossPct: number
   /** When true, the robot acts on strategy signals automatically. */
@@ -103,6 +122,7 @@ export const DEFAULT_RISK: RiskConfig = {
   defaultStopPips: 20,
   takeProfitRatio: 2,
   targetPerTradeUsd: 0,
+  maxLossPerTradeUsd: 0,
   maxDailyLossPct: 5,
   autoTrade: false,
   trailingStop: true,
@@ -136,6 +156,10 @@ export interface OpenPositionRequest {
   takeProfitPips: number
   units: number
   strategy?: string
+  /** Optional per-order $ profit target (0 / undefined = off). */
+  targetProfitUsd?: number
+  /** Optional per-order $ loss cap (0 / undefined = off). */
+  targetLossUsd?: number
   time?: string
 }
 
