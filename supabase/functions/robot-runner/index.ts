@@ -1,5 +1,5 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import {
   type AccountState,
   type Bar,
@@ -8,6 +8,7 @@ import {
   type RobotConfig,
   type RobotCycleInput,
   type StrategyType,
+  DEFAULT_RISK,
   atr,
   bestStrategyFor,
   closeRobotPositions,
@@ -73,11 +74,16 @@ const json = (body: unknown, status = 200) =>
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 
+// Deno's jsr build of @supabase/supabase-js resolves `ReturnType<typeof
+// createClient>` to a never-schema overload that poisons every `.from(...)`
+// chain. Helpers accept the same concrete client type the handler infers.
+type AdminClient = SupabaseClient<any, "public", "public", any, any>;
+
 // ---------------------------------------------------------------------------
 // Auth — the cron job sends the `x-robot-token` it read from app_secrets;
 // admins/ops may trigger manually with the service role key.
 // ---------------------------------------------------------------------------
-async function authorized(req: Request, admin: ReturnType<typeof createClient>): Promise<boolean> {
+async function authorized(req: Request, admin: AdminClient): Promise<boolean> {
   const token = req.headers.get("x-robot-token");
   if (token) {
     const { data } = await admin
@@ -174,7 +180,8 @@ interface PaperTradeRow {
   strategy: string | null;
   target_profit_usd: number | null;
   target_loss_usd: number | null;
-  created_at: string | null;
+  /** Optional — `created_at` is deliberately omitted on insert (DB default applies). */
+  created_at?: string | null;
 }
 
 function fromRows(row: PaperAccountRow, trades: PaperTradeRow[]): AccountState {
@@ -224,7 +231,7 @@ function fromRows(row: PaperAccountRow, trades: PaperTradeRow[]): AccountState {
     currency: "USD",
     initialBalance: Number(row.initial_balance ?? 0),
     balance: Number(row.balance ?? 0),
-    risk: { ...row.risk },
+    risk: { ...DEFAULT_RISK, ...(row.risk ?? {}) },
     positions,
     trades: closed,
     createdAt: row.created_at,
@@ -293,7 +300,7 @@ function toRows(account: AccountState, userId: string): {
   };
 }
 
-async function loadAccount(admin: ReturnType<typeof createClient>, run: RobotRunRow): Promise<AccountState | null> {
+async function loadAccount(admin: AdminClient, run: RobotRunRow): Promise<AccountState | null> {
   const { data: acct } = await admin
     .from("paper_accounts")
     .select("*")
@@ -309,7 +316,7 @@ async function loadAccount(admin: ReturnType<typeof createClient>, run: RobotRun
   return fromRows(acct as unknown as PaperAccountRow, (trades as unknown as PaperTradeRow[]) ?? []);
 }
 
-async function saveAccount(admin: ReturnType<typeof createClient>, userId: string, account: AccountState): Promise<void> {
+async function saveAccount(admin: AdminClient, userId: string, account: AccountState): Promise<void> {
   const { account: accRow, trades } = toRows(account, userId);
   await admin.from("paper_accounts").upsert(accRow, { onConflict: "user_id" });
   if (trades.length > 0) {
@@ -360,7 +367,7 @@ interface RobotRunRow {
 
 /** Latest still-running robot session for the account, or null. */
 async function latestRunningSession(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   run: RobotRunRow,
 ): Promise<string | null> {
   const { data } = await admin
@@ -374,7 +381,7 @@ async function latestRunningSession(
   return data?.id ?? null;
 }
 
-async function ensureSession(admin: ReturnType<typeof createClient>, run: RobotRunRow, initialBalance: number): Promise<string | null> {
+async function ensureSession(admin: AdminClient, run: RobotRunRow, initialBalance: number): Promise<string | null> {
   const existing = await latestRunningSession(admin, run);
   if (existing) return existing;
   const { data } = await admin
@@ -393,7 +400,7 @@ async function ensureSession(admin: ReturnType<typeof createClient>, run: RobotR
 }
 
 async function recordHistory(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   run: RobotRunRow,
   sessionId: string | null,
   account: AccountState,
@@ -412,7 +419,7 @@ async function recordHistory(
 
 /** Close every running session for the account with final figures. */
 async function closeSessions(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   run: RobotRunRow,
   account: AccountState,
 ): Promise<void> {
@@ -432,7 +439,7 @@ async function closeSessions(
 // ---------------------------------------------------------------------------
 // Access — mirrors useAccess() from src/hooks/usePlatform.ts.
 // ---------------------------------------------------------------------------
-async function hasAccess(admin: ReturnType<typeof createClient>, userId: string): Promise<boolean> {
+async function hasAccess(admin: AdminClient, userId: string): Promise<boolean> {
   const { data: profile } = await admin
     .from("profiles")
     .select("role, trial_ends_at")
@@ -454,7 +461,7 @@ async function hasAccess(admin: ReturnType<typeof createClient>, userId: string)
 // src/pages/Trading.tsx.
 // ---------------------------------------------------------------------------
 async function tickRun(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   run: RobotRunRow,
 ): Promise<{ action: string; reason?: string }> {
   const nowMs = Date.now();
@@ -626,7 +633,7 @@ async function tickRun(
  * the session and mark the run finished. Rates may be empty (weekend / data
  * outage) — the engine then closes at the last known price. */
 async function finishRun(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   run: RobotRunRow,
   reason: string,
 ): Promise<void> {
