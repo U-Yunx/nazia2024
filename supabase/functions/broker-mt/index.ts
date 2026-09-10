@@ -553,6 +553,7 @@ Deno.serve(async (req: Request) => {
   // Verify the caller's JWT so only signed-in users can reach their account.
   const { data: { user }, error: authError } = await supabase.auth.getUser(token);
   if (authError || !user) return json({ ok: false, error: "Invalid session." }, 401);
+  const currentUser = user;
 
   const url = new URL(req.url);
   let action = url.searchParams.get("action") ?? "verify";
@@ -763,7 +764,7 @@ Deno.serve(async (req: Request) => {
       .from("broker_connections")
       .update({ ...fields, updated_at: new Date().toISOString() })
       .eq("id", conn.id)
-      .eq("user_id", user.id);
+      .eq("user_id", currentUser.id);
     return { error: error?.message ?? null };
   }
 
@@ -787,7 +788,7 @@ Deno.serve(async (req: Request) => {
 
   try {
     if (action === "verify") {
-      const accounts = await fetchAccountsFor(metaApiToken);
+      const accounts = await fetchAccountsFor(metaApiToken as string);
       if (!accounts.ok) {
         return json({ ok: false, error: accounts.error ?? "Could not reach MetaApi. Check the network and try again." }, 502);
       }
@@ -800,7 +801,7 @@ Deno.serve(async (req: Request) => {
       let state: string | null = null;
       let connectionStatus: string | null = null;
       try {
-        const accounts = await fetchAccountsFor(metaApiToken);
+        const accounts = await fetchAccountsFor(metaApiToken as string);
         if (accounts.ok) {
           const meta = findMetaApiAccount(accounts.list, login, server, platform);
           accountFound = !!meta;
@@ -842,7 +843,7 @@ Deno.serve(async (req: Request) => {
     if (action === "metaapi-check") {
       await persistMetaApiState({ metaapi_security: "checking" });
       conn.metaapi_security = "checking";
-      const pass = await securityPass(metaApiToken);
+      const pass = await securityPass(metaApiToken as string);
       const checkedAt = new Date().toISOString();
       const saveErr = await persistMetaApiState({
         metaapi_security: pass.verdict,
@@ -855,7 +856,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "metaapi-activate") {
-      const pass = await securityPass(metaApiToken);
+      const pass = await securityPass(metaApiToken as string);
       if (pass.verdict !== "passed") {
         return json({ ok: false, error: pass.note, security: "failed", securityNote: pass.note }, 400);
       }
@@ -873,7 +874,7 @@ Deno.serve(async (req: Request) => {
       }
       const provisioned = await ensureMetaAccountDeployed({
         metaHeaders,
-        apiToken: metaApiToken,
+        apiToken: metaApiToken as string,
         conn,
         login,
         server,
@@ -926,7 +927,7 @@ Deno.serve(async (req: Request) => {
     if (action === "provision") {
       const provisioned = await ensureMetaAccountDeployed({
         metaHeaders,
-        apiToken: metaApiToken,
+        apiToken: metaApiToken as string,
         conn,
         login,
         server,
