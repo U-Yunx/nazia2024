@@ -10,7 +10,7 @@ export type Side = 'long' | 'short'
 export type Signal = 'buy' | 'sell' | 'neutral'
 export type StrategyType = 'MA' | 'RSI' | 'MACD' | 'BOLLINGER'
 export type Interval = '1min' | '5min' | '15min' | '30min' | '1h' | '4h' | '1day'
-export type CloseReason = 'signal' | 'stop_loss' | 'take_profit' | 'target' | 'manual' | 'risk' | 'robot_stop'
+export type CloseReason = 'signal' | 'stop_loss' | 'take_profit' | 'manual' | 'risk' | 'robot_stop'
 export type TradingMethod = 'scalping' | 'longterm'
 export type StrategyMode = 'auto' | 'manual'
 
@@ -65,8 +65,6 @@ export interface RiskConfig {
   maxOpenPositions: number
   defaultStopPips: number
   takeProfitRatio: number
-  /** Per-trade profit target in USD (0 = off) — close when a trade is worth this. */
-  targetPerTradeUsd: number
   maxDailyLossPct: number
   autoTrade: boolean
   trailingStop: boolean
@@ -83,7 +81,6 @@ export const DEFAULT_RISK: RiskConfig = {
   maxOpenPositions: 5,
   defaultStopPips: 20,
   takeProfitRatio: 2,
-  targetPerTradeUsd: 0,
   maxDailyLossPct: 5,
   autoTrade: false,
   trailingStop: true,
@@ -618,21 +615,12 @@ export function markToMarket(
     const cur = rates[p.symbol]
     if (cur == null) continue
     let reason: CloseReason | null = null
-    // A stop hit always wins — nothing is allowed to hold a dying trade.
-    if (p.side === 'long' && cur <= p.stopPrice) reason = 'stop_loss'
-    else if (p.side === 'short' && cur >= p.stopPrice) reason = 'stop_loss'
-
-    // Per-trade money target: once this trade is worth $targetPerTradeUsd
-    // (0 = off) close it and bank the win. Checked before the price-based
-    // take-profit, so the $ rule can fire on a smaller favourable move.
-    if (!reason && state.risk.targetPerTradeUsd > 0) {
-      const pnl = pnlUsd(p.side, p.entryPrice, cur, p.units, p.symbol, rates)
-      if (pnl >= state.risk.targetPerTradeUsd) reason = 'target'
-    }
-
-    if (!reason) {
-      if (p.side === 'long' && cur >= p.takeProfitPrice) reason = 'take_profit'
-      else if (p.side === 'short' && cur <= p.takeProfitPrice) reason = 'take_profit'
+    if (p.side === 'long') {
+      if (cur <= p.stopPrice) reason = 'stop_loss'
+      else if (cur >= p.takeProfitPrice) reason = 'take_profit'
+    } else {
+      if (cur >= p.stopPrice) reason = 'stop_loss'
+      else if (cur <= p.takeProfitPrice) reason = 'take_profit'
     }
     if (reason) {
       const res = closePosition(next, p.id, { price: cur, reason, rates })
