@@ -111,7 +111,9 @@ export function humanizeBrokerError(raw: unknown): BrokerErrorReason {
   if (/already (exists|deployed|connected|in use|created)/i.test(body)) {
     return { code: "account_exists", message: BROKER_ERROR_MESSAGES.account_exists, raw: text };
   }
-  if (/deploy\w* (failed|error)|failed to deploy|(failed|error).*deploy/i.test(body)) {
+  if (
+    /deploy\w*(\s+\w+){0,4}\s+(failed|error)|fail(ed|ure|s)?(\s+to)?\s+deploy\w*/i.test(body)
+  ) {
     return { code: "deploy_failed", message: BROKER_ERROR_MESSAGES.deploy_failed, raw: text };
   }
   if (/deploying|deployment in progress|in the process of deployment|connecting for the first time/i.test(body)) {

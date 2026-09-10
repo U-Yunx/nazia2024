@@ -540,23 +540,29 @@ function ConnectPanel({
   /** Verify an MT account against the MetaApi bridge through broker-mt.
    *  `brokerId` pins the call to the connection just saved for that broker, so
    *  with several MT4/5 accounts connected, each card's flow verifies its own. */
-  const verifyMt = useCallback(async (brokerId?: string): Promise<{ provisioned: boolean; error: string | null }> => {
-    const { data, error } = await fn<{ ok?: boolean; provisioned?: boolean }>(
-      'broker-mt',
-      { body: { action: 'verify', broker_id: brokerId }, fallback: 'Could not reach the MetaTrader bridge.' },
-    )
-    if (!data?.ok) return { provisioned: false, error: error ?? 'Could not reach the MetaTrader bridge.' }
-    return { provisioned: !!data.provisioned, error: null }
-  }, [])
+  const verifyMt = useCallback(
+    async (brokerId?: string): Promise<{ provisioned: boolean; error: string | null; code: string | null }> => {
+      const { data, error, code } = await fn<{ ok?: boolean; provisioned?: boolean }>(
+        'broker-mt',
+        { body: { action: 'verify', broker_id: brokerId }, fallback: 'Could not reach the MetaTrader bridge.' },
+      )
+      if (!data?.ok) return { provisioned: false, error: error ?? 'Could not reach the MetaTrader bridge.', code: code ?? null }
+      return { provisioned: !!data.provisioned, error: null, code: null }
+    },
+    [],
+  )
 
   /** Provision a saved MT account in MetaApi (deploy to their cloud) via broker-mt. */
-  const provisionMt = useCallback(async (brokerId?: string): Promise<string | null> => {
-    const { error } = await fn<{ ok?: boolean }>(
-      'broker-mt',
-      { body: { action: 'provision', broker_id: brokerId }, fallback: 'MetaApi could not provision this account.' },
-    )
-    return error
-  }, [])
+  const provisionMt = useCallback(
+    async (brokerId?: string): Promise<{ error: string | null; code: string | null }> => {
+      const { error, code } = await fn<{ ok?: boolean }>(
+        'broker-mt',
+        { body: { action: 'provision', broker_id: brokerId }, fallback: 'MetaApi could not provision this account.' },
+      )
+      return { error, code: code ?? null }
+    },
+    [],
+  )
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
@@ -645,8 +651,15 @@ function ConnectPanel({
       }
       // The credentials are saved. Now verify against the MetaApi bridge and, if
       // the account isn't provisioned yet, provision it so live trading works.
-      const { provisioned, error: verifyErr } = await verifyMt(broker.id)
+      const { provisioned, error: verifyErr, code: verifyCode } = await verifyMt(broker.id)
       if (verifyErr) {
+        if (verifyCode != null && CREDENTIAL_ISSUES.has(verifyCode)) {
+          // The broker REJECTED the login/server — the user can fix this right
+          // here on the form. Show it as an error, not a premature success.
+          setError(verifyErr)
+          setBusy(false)
+          return
+        }
         // The bridge itself isn't reachable (e.g. METAAPI_TOKEN not set yet).
         // The connection is saved and will become tradeable once the bridge is configured.
         setSuccess(
@@ -655,12 +668,24 @@ function ConnectPanel({
       } else if (provisioned) {
         setSuccess('MetaTrader account connected & verified — ready to trade live.')
       } else {
-        const provisionErr = await provisionMt(broker.id)
-        setSuccess(
-          provisionErr
-            ? `MetaTrader account connected & saved. One more step to activate live trading: ${provisionErr}`
-            : 'MetaTrader account connected & provisioned — deploying on MetaApi, ready to trade in about a minute.',
-        )
+        const { error: provisionErr, code: provisionCode } = await provisionMt(broker.id)
+        if (provisionErr) {
+          if (provisionCode === 'account_deploying') {
+            setSuccess(
+              'MetaTrader account connected & provisioned — deploying on the MetaApi cloud, ready to trade in about a minute.',
+            )
+          } else if (provisionCode != null && CREDENTIAL_ISSUES.has(provisionCode)) {
+            setError(provisionErr)
+            setBusy(false)
+            return
+          } else {
+            setSuccess(
+              `MetaTrader account connected & saved. One more step to activate live trading: ${provisionErr}`,
+            )
+          }
+        } else {
+          setSuccess('MetaTrader account connected & provisioned — deploying on MetaApi, ready to trade in about a minute.')
+        }
       }
     }
 
