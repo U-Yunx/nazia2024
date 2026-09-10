@@ -390,6 +390,77 @@ function findMetaApiAccount(
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+// ---------------------------------------------------------------------------
+// Connection pacing — read cache + token check cache.
+//
+// Every live-refresh tick fires `summary`, `open-trades` and `closed-trades`
+// in parallel, robot cycles repeat that every few seconds, and (in per-user
+// token mode) every trading action live-validates the saved MetaApi token
+// against MetaApi. Left unpaced, that is many MetaApi round-trips per minute
+// per connection — the exact pattern that trips MetaApi's throttle AND makes
+// brokers see a constantly-logged-in cloud session (the kind of behaviour
+// that gets MT4/5 accounts flagged or restricted). So:
+//
+//   1. readCache serves `summary` / `open-trades` / `closed-trades` / `state`
+//      from a short-lived in-memory cache per connection (TTLs below), so the
+//      bridge makes ONE physical MetaApi fetch per kind per TTL regardless of
+//      how many parallel refreshes or cycles arrive. Writes invalidate it.
+//   2. token checks are cached per token (5 min on success, 90 s on failure)
+//      so the hot trading path costs no extra MetaApi round-trip. Security
+//      passes (activate/save/check) still validate fresh.
+// ---------------------------------------------------------------------------
+const READ_TTL_MS: Record<string, number> = {
+  state: 8_000,
+  summary: 4_000,
+  "open-trades": 4_000,
+  "closed-trades": 30_000,
+  daypnl: 30_000,
+};
+
+const readCache = new Map<string, { at: number; data: unknown }>();
+
+function readCacheHit<T>(connId: string, kind: string): T | null {
+  const key = `${connId}|${kind}`;
+  const hit = readCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at >= (READ_TTL_MS[kind] ?? 4_000)) {
+    readCache.delete(key);
+    return null;
+  }
+  return hit.data as T;
+}
+
+function readCachePut(connId: string, kind: string, data: unknown): void {
+  readCache.set(`${connId}|${kind}`, { at: Date.now(), data });
+}
+
+/** Forget every cached MetaApi payload for a connection (called after a
+ *  successful write so the mirror reflects the trade immediately). */
+function readCacheInvalidate(connId: string): void {
+  const prefix = `${connId}|`;
+  for (const key of [...readCache.keys()]) if (key.startsWith(prefix)) readCache.delete(key);
+}
+
+const tokenCheckCache = new Map<string, { ok: boolean; at: number }>();
+/** Successful token verifications are reusable for 5 min; failures only 90 s
+ *  so a token the owner just fixed is picked up quickly. */
+const TOKEN_CHECK_OK_TTL_MS = 5 * 60 * 1000;
+const TOKEN_CHECK_BAD_TTL_MS = 90 * 1000;
+
+/** validateMetaApiToken, paced: hot-path token checks hit MetaApi at most
+ *  once per TTL per token instead of on every trading request. */
+async function validateMetaApiTokenCached(token: string): Promise<{ ok: boolean; error: string | null }> {
+  const hit = tokenCheckCache.get(token);
+  if (hit) {
+    const ttl = hit.ok ? TOKEN_CHECK_OK_TTL_MS : TOKEN_CHECK_BAD_TTL_MS;
+    if (Date.now() - hit.at < ttl) return { ok: hit.ok, error: hit.ok ? null : "MetaApi rejected this API token (checked recently)." };
+    tokenCheckCache.delete(token);
+  }
+  const validation = await validateMetaApiToken(token);
+  tokenCheckCache.set(token, { ok: validation.ok, at: Date.now() });
+  return { ok: validation.ok, error: validation.error };
+}
+
 /**
  * In-flight provisioning lock. The Trading page fires `summary`, `open-trades`
  * and `closed-trades` in the same refresh tick, and several robot cycles can
@@ -793,8 +864,10 @@ Deno.serve(async (req: Request) => {
       userToken,
       platformToken: platformSecret,
       check: async (candidate) => {
-        const validation = await validateMetaApiToken(candidate);
-        return { ok: validation.ok, reason: validation.error ?? undefined };
+        // Paced check (5 min success / 90 s failure TTL) — the hot robot path
+        // must not pay a MetaApi round-trip for every single trading action.
+        const verdict = await validateMetaApiTokenCached(candidate);
+        return { ok: verdict.ok, reason: verdict.error ?? undefined };
       },
     });
     metaApiToken = resolved.token;
@@ -1175,18 +1248,27 @@ Deno.serve(async (req: Request) => {
     const accountUrl = `${METAAPI_BASE}/users/current/accounts/${meta.id}`;
 
     if (action === "state") {
+      const cachedState = readCacheHit<{ status?: string; connectedToBroker?: boolean }>(conn.id, "state");
+      if (cachedState) {
+        return json({ ok: true, ...cachedState, connectionStatus: meta.connectionStatus ?? null, cached: true });
+      }
       const res = await fetchWithTimeout(`${accountUrl}/state`, { headers: metaHeaders });
       const data = (await res.json().catch(() => ({}))) as { status?: string; connectedToBroker?: boolean; error?: string; message?: string };
       if (!res.ok) return json({ ok: false, error: data.error ?? data.message ?? "Could not read MetaApi account state." }, 502);
+      const payload = { status: data.status ?? "unknown", connectedToBroker: !!data.connectedToBroker };
+      readCachePut(conn.id, "state", payload);
       return json({
         ok: true,
-        status: data.status ?? "unknown",
-        connectedToBroker: !!data.connectedToBroker,
+        ...payload,
         connectionStatus: meta.connectionStatus ?? null,
       });
     }
 
     if (action === "summary") {
+      const cachedSummary = readCacheHit<{
+        account: Record<string, unknown>;
+      }>(conn.id, "summary");
+      if (cachedSummary) return json({ ok: true, account: cachedSummary.account, cached: true });
       const res = await fetchWithTimeout(`${accountUrl}/account-information`, { headers: metaHeaders });
       const data = (await res.json().catch(() => ({}))) as {
         balance?: number; equity?: number; currency?: string;
@@ -1194,7 +1276,7 @@ Deno.serve(async (req: Request) => {
       };
       if (!res.ok) return json({ ok: false, error: data.error ?? data.message ?? "MetaApi could not load the account summary." }, 502);
       const balance = toNumber(data.balance);
-      return json({
+      const payload = {
         ok: true,
         account: {
           balance,
@@ -1204,24 +1286,34 @@ Deno.serve(async (req: Request) => {
           freeMargin: toNumber(data.freeMargin),
           connectionStatus: meta.connectionStatus ?? null,
         },
-      });
+      };
+      readCachePut(conn.id, "summary", payload);
+      return json(payload);
     }
 
     if (action === "open-trades") {
+      const cachedPos = readCacheHit<{ positions: Array<Record<string, unknown>> }>(conn.id, "open-trades");
+      if (cachedPos) return json({ ok: true, positions: cachedPos.positions, cached: true });
       const res = await fetchWithTimeout(`${accountUrl}/positions`, { headers: metaHeaders });
       const data = (await res.json().catch(() => ({}))) as { positions?: Array<Record<string, unknown>>; error?: string; message?: string };
       if (!res.ok || !data.positions) {
         return json({ ok: false, error: data.error ?? data.message ?? "MetaApi could not load open positions." }, 502);
       }
-      return json({ ok: true, positions: data.positions });
+      const payload = { ok: true, positions: data.positions };
+      readCachePut(conn.id, "open-trades", payload);
+      return json(payload);
     }
 
     if (action === "closed-trades") {
-      const days = Math.min(90, Math.max(1, Number(body.days ?? 30)));
+      const cachedHistory = readCacheHit<{ trades: Array<Record<string, unknown>> }>(conn.id, "closed-trades");
+      if (cachedHistory) return json({ ok: true, trades: cachedHistory.trades, cached: true });
+      // 14 days by default — plenty for the journal and the daily-loss guard,
+      // and a fraction of the payload of a full quarter, so refreshes stay snappy.
+      const days = Math.min(90, Math.max(1, Number(body.days ?? 14)));
       const end = Date.now();
       const start = end - days * 24 * 60 * 60 * 1000;
       const res = await fetchWithTimeout(
-        `${accountUrl}/history-orders?startTime=${start}&endTime=${end}&limit=${Number(body.limit ?? 100)}`,
+        `${accountUrl}/history-orders?startTime=${start}&endTime=${end}&limit=${Math.min(500, Math.max(1, Number(body.limit ?? 100)))}`,
         { headers: metaHeaders },
       );
       const data = (await res.json().catch(() => ({}))) as { historyOrders?: Array<Record<string, unknown>>; error?: string; message?: string };
@@ -1230,7 +1322,9 @@ Deno.serve(async (req: Request) => {
       }
       // Only fully filled orders represent real closed trades.
       const filled = data.historyOrders.filter((o) => String(o.state) === "ORDER_STATE_FILLED");
-      return json({ ok: true, trades: filled });
+      const payload = { ok: true, trades: filled };
+      readCachePut(conn.id, "closed-trades", payload);
+      return json(payload);
     }
 
     if (action === "open-position") {
@@ -1273,11 +1367,55 @@ Deno.serve(async (req: Request) => {
       if (conn.account_type === "live" && liveGate.liveExecutionEnabled === false) {
         return json({ ok: false, error: "Live execution is currently disabled by the platform. Switch to a demo account." }, 400);
       }
-      const posRes = await fetchWithTimeout(`${accountUrl}/positions`, { headers: metaHeaders });
-      const posData = (await posRes.json().catch(() => ({}))) as { positions?: Array<{ symbol?: string }> };
-      const openForSymbol = (posData.positions ?? []).filter((p) => String(p.symbol).toUpperCase() === symbol).length;
+      // Current per-symbol exposure — served from the paced read cache when
+      // possible so the cap is enforced without an extra broker round-trip.
+      let openForSymbol: number;
+      const cachedPositions = readCacheHit<{ positions: Array<{ symbol?: string }> }>(conn.id, "open-trades");
+      if (cachedPositions) {
+        openForSymbol = (cachedPositions.positions ?? []).filter((p) => String(p.symbol).toUpperCase() === symbol).length;
+      } else {
+        const posRes = await fetchWithTimeout(`${accountUrl}/positions`, { headers: metaHeaders });
+        const posData = (await posRes.json().catch(() => ({}))) as { positions?: Array<{ symbol?: string }> };
+        readCachePut(conn.id, "open-trades", { positions: posData.positions ?? [] });
+        openForSymbol = (posData.positions ?? []).filter((p) => String(p.symbol).toUpperCase() === symbol).length;
+      }
       if (openForSymbol >= risk.maxOpenPositions) {
         return json({ ok: false, error: `Maximum ${risk.maxOpenPositions} open position(s) reached for ${symbol}. Close one first.` }, 400);
+      }
+
+      // Daily-loss backstop: block NEW orders once the broker's own filled
+      // history shows today's realized loss has hit `maxDailyLossPct` of the
+      // current equity. Computed server-side from the venue (never from the
+      // client's mirror) and paced through the read cache.
+      if (risk.maxDailyLossPct > 0) {
+        const cachedDay = readCacheHit<{ realizedToday: number; equity: number }>(conn.id, "daypnl");
+        let realizedToday: number;
+        let equityNow: number;
+        if (cachedDay) {
+          realizedToday = cachedDay.realizedToday;
+          equityNow = cachedDay.equity;
+        } else {
+          const hRes = await fetchWithTimeout(
+            `${accountUrl}/history-orders?startTime=${startOfTodayMs()}&endTime=${Date.now()}&limit=500`,
+            { headers: metaHeaders },
+          );
+          const hData = (await hRes.json().catch(() => ({}))) as { historyOrders?: Array<{ state?: string; profit?: number }> };
+          realizedToday = (hData.historyOrders ?? [])
+            .filter((o) => String(o.state) === "ORDER_STATE_FILLED")
+            .reduce((sum, o) => sum + toNumber(o.profit), 0);
+          const sRes = await fetchWithTimeout(`${accountUrl}/account-information`, { headers: metaHeaders });
+          const sData = (await sRes.json().catch(() => ({}))) as { equity?: number; balance?: number };
+          equityNow = toNumber(sData.equity ?? sData.balance);
+          readCachePut(conn.id, "daypnl", { realizedToday, equity: equityNow });
+        }
+        const lossCap = equityNow > 0 ? (equityNow * risk.maxDailyLossPct) / 100 : 0;
+        if (realizedToday <= -lossCap && lossCap > 0) {
+          return json({
+            ok: false,
+            code: "daily_loss_cap",
+            error: `Daily loss cap reached — the platform blocks new live orders after losing ${risk.maxDailyLossPct}% of the account in a day. The robot will resume tomorrow or when you adjust the setting.`,
+          }, 400);
+        }
       }
 
       const res = await fetchWithTimeout(`${accountUrl}/trading/orders`, {
@@ -1290,6 +1428,9 @@ Deno.serve(async (req: Request) => {
         const reason = data.error ?? data.message ?? `MetaApi rejected the order (code ${data.numericCode ?? "?"}).`;
         return json({ ok: false, error: reason }, 400);
       }
+      // The position just changed — drop every cached read so the next refresh
+      // reflects the new position without waiting out a TTL.
+      readCacheInvalidate(conn.id);
       return json({ ok: true, orderId: data.id ?? null });
     }
 
@@ -1306,6 +1447,9 @@ Deno.serve(async (req: Request) => {
         const reason = data.error ?? data.message ?? `MetaApi could not close the position (code ${data.numericCode ?? "?"}).`;
         return json({ ok: false, error: reason }, 400);
       }
+      // The position just changed — drop every cached read so the next refresh
+      // reflects the close without waiting out a TTL.
+      readCacheInvalidate(conn.id);
       return json({ ok: true, profit: toNumber(data.profit) || null });
     }
 

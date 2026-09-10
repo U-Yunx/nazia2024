@@ -51,13 +51,26 @@ async function connectionFor(client: any, userId: string) {
 /** True when the request carries the stored robot REST API token for a connection. */
 async function validToken(client: any, connectionId: string, token: unknown): Promise<boolean> {
   if (typeof token !== "string" || !token) return false;
-  const { data } = await client
-    .from("broker_tokens")
-    .select("token")
-    .eq("connection_id", connectionId)
-    .eq("token", token)
+  // The robot REST API token lives encrypted at rest on the connection itself
+  // (see broker-token `generate` + the guard_broker_cred_encrypt trigger), so
+  // validate against THAT column — the legacy broker_tokens table is no longer
+  // written and would reject every valid token. Decrypt server-side with the
+  // service-role-only RPC, then constant-time compare.
+  const { data: row } = await client
+    .from("broker_connections")
+    .select("rest_api_token")
+    .eq("id", connectionId)
     .maybeSingle();
-  return !!data;
+  if (!row?.rest_api_token) return false;
+  const { data: plain } = await client.rpc("decrypt_broker_cred", { p_enc: row.rest_api_token });
+  const expected = typeof plain === "string" ? plain : "";
+  if (!expected) return false;
+  const a = new TextEncoder().encode(expected);
+  const b = new TextEncoder().encode(token);
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
 }
 
 function toOandaSymbol(symbol: string): string {

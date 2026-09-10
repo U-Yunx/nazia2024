@@ -18,7 +18,7 @@ const ROOT = resolve(new URL('..', import.meta.url).pathname)
 
 // Files to scan — the full source tree plus the root configs that
 // previously carried the corruption.
-const SCAN_PATHS = ['src', 'supabase', 'scripts', 'public', 'index.html', 'vite.config.ts', 'vite-env.d.ts', 'tsconfig.json', 'package.json', 'wrangler.toml']
+const SCAN_PATHS = ['src', 'supabase', 'scripts', 'public', 'index.html', 'vite.config.ts', 'vite-env.d.ts', 'tsconfig.json', 'package.json', '.gitignore']
 
 // Files we intentionally skip (binary assets, lockfiles, images, etc.)
 const SKIP_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.woff', '.woff2', '.ttf', '.eot', '.svg', '.lock'])
