@@ -1,0 +1,1080 @@
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
+import {
+  Check,
+  CircleDot,
+  CloudUpload,
+  Copy,
+  KeyRound,
+  Link2,
+  Loader2,
+  Lock,
+  PlugZap,
+  Plus,
+  RefreshCw,
+  ShieldAlert,
+  ShieldCheck,
+  Trash2,
+  TriangleAlert,
+  UserRound,
+} from 'lucide-react'
+import { useAuth } from '../hooks/useAuth'
+import { useBrokers, useProfile } from '../hooks/usePlatform'
+import {
+  activateMetaApi,
+  checkMetaApi,
+  fetchBrokerTokenStatus,
+  fetchMetaApiStatus,
+  generateBrokerToken,
+  provisionMarketDataFromBroker,
+  removeConnection,
+  removeMetaApiToken,
+  revokeBrokerToken,
+  saveConnection,
+  saveMetaApiToken,
+} from '../lib/platform'
+import { fn } from '../lib/functions'
+import type { BrokerConnectionRow, BrokerPlatform, BrokerRow, BrokerTokenStatus, MetaApiStatus } from '../lib/types'
+import { cn } from '../lib/cn'
+import { formatDateTime } from '../lib/format'
+import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, PageHeader, Select, Skeleton } from '../components/ui'
+
+const STATUS_STYLES: Record<string, string> = {
+  available: 'border-up/40 bg-up/10 text-up',
+  maintenance: 'border-amber/40 bg-amber/10 text-amber',
+  coming_soon: 'border-border bg-muted text-muted-foreground',
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  available: 'Available',
+  maintenance: 'Maintenance',
+  coming_soon: 'Coming soon',
+}
+
+/** The trading platform the robot uses for a catalog broker. */
+function platformOf(broker: BrokerRow): BrokerPlatform {
+  if (broker.platform) return broker.platform
+  if (broker.slug === 'mt4') return 'mt4'
+  if (broker.slug === 'mt5') return 'mt5'
+  return 'oanda'
+}
+
+function connectionSummary(broker: BrokerRow): { kind: string; hint: string } {
+  if (!broker.requires_api_key) return { kind: 'MetaTrader account', hint: 'Account login · password · server' }
+  return { kind: 'REST API key', hint: 'API token · account ID' }
+}
+
+type MtStatus =
+  | { kind: 'checking' }
+  | { kind: 'ready' }
+  | { kind: 'not-provisioned' }
+  | { kind: 'deploying' }
+  | { kind: 'error'; message: string }
+
+/**
+ * Live-trading readiness for a connected MetaTrader account, surfaced on the
+ * broker card. AUTO-CONNECT & AUTO-FIX: on mount it verifies against the
+ * MetaApi bridge (broker-mt); if the account isn't in the MetaApi cloud yet it
+ * provisions + deploys it automatically (the bridge "create + deploy" step is
+ * the only way to reach an MT account — MetaTrader has no public REST API),
+ * then polls deployment state until the account is connected. If anything
+ * transient fails, a "Retry (auto-fix)" button re-runs the whole pipeline.
+ * `connectionId` pins the call to THIS connection so several MT4/5 brokers can
+ * sit side by side without their status checks colliding on one shared slot.
+ */
+function MtConnectionStatus({ connectionId }: { connectionId: string }) {
+  const [status, setStatus] = useState<MtStatus>({ kind: 'checking' })
+  const [busy, setBusy] = useState(false)
+  const pollRef = useRef<number | null>(null)
+
+  const clearPoll = useCallback(() => {
+    if (pollRef.current !== null) {
+      window.clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }, [])
+
+  /** Verify against the bridge. Returns the outcome so callers can chain. */
+  const check = useCallback(async (): Promise<{ provisioned: boolean; error: string | null }> => {
+    setStatus({ kind: 'checking' })
+    const { data, error } = await fn<{ ok?: boolean; provisioned?: boolean }>(
+      'broker-mt',
+      { body: { action: 'verify', connection_id: connectionId }, fallback: 'Could not reach the MetaTrader bridge.' },
+    )
+    if (!data?.ok) {
+      const message = error ?? 'Could not reach the MetaTrader bridge.'
+      setStatus({ kind: 'error', message })
+      return { provisioned: false, error: message }
+    }
+    if (data.provisioned) {
+      setStatus({ kind: 'ready' })
+      return { provisioned: true, error: null }
+    }
+    setStatus({ kind: 'not-provisioned' })
+    return { provisioned: false, error: null }
+  }, [connectionId])
+
+  /** Poll the MetaApi deployment state until the account connects (~3 min cap). */
+  const pollUntilConnected = useCallback(() => {
+    clearPoll()
+    let ticks = 0
+    pollRef.current = window.setInterval(async () => {
+      ticks += 1
+      const { data, error } = await fn<{ ok?: boolean; connectedToBroker?: boolean }>(
+        'broker-mt',
+        { body: { action: 'state', connection_id: connectionId } },
+      )
+      if (error) {
+        setStatus({ kind: 'error', message: error })
+        clearPoll()
+        return
+      }
+      if (data?.ok && data.connectedToBroker) {
+        setStatus({ kind: 'ready' })
+        clearPoll()
+        return
+      }
+      if (ticks >= 18) {
+        setStatus({ kind: 'error', message: 'Your account is still deploying after a few minutes — try again shortly.' })
+        clearPoll()
+        return
+      }
+      setStatus({ kind: 'deploying' })
+    }, 10_000)
+  }, [connectionId, clearPoll])
+
+  /** Provision (create + deploy) the account in MetaApi, then poll until live. */
+  const connect = useCallback(async () => {
+    clearPoll()
+    setBusy(true)
+    setStatus({ kind: 'deploying' })
+    const { data, error } = await fn<{ ok?: boolean }>(
+      'broker-mt',
+      { body: { action: 'provision', connection_id: connectionId }, fallback: 'Could not connect this account.' },
+    )
+    setBusy(false)
+    if (!data?.ok) {
+      setStatus({ kind: 'error', message: error ?? 'Could not connect this account.' })
+      return
+    }
+    setStatus({ kind: 'deploying' })
+    pollUntilConnected()
+  }, [connectionId, clearPoll, pollUntilConnected])
+
+  // AUTO-CONNECT: verify on mount; when the account isn't in the MetaApi cloud
+  // and the bridge is reachable, provision + deploy right away instead of
+  // leaving the user stuck on a "not activated" card.
+  const bootRef = useRef(false)
+  useEffect(() => {
+    if (bootRef.current) return
+    bootRef.current = true
+    void (async () => {
+      const res = await check()
+      if (!res.error && !res.provisioned) await connect()
+    })()
+    return () => clearPoll()
+  }, [check, connect, clearPoll])
+
+  if (status.kind === 'checking') {
+    return (
+      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+        Checking live-trading bridge…
+      </span>
+    )
+  }
+  if (status.kind === 'ready') {
+    return (
+      <span className="flex items-center gap-1.5 text-xs font-medium text-up">
+        <Check className="h-3.5 w-3.5" aria-hidden="true" />
+        Live trading ready
+      </span>
+    )
+  }
+  if (status.kind === 'deploying') {
+    return (
+      <span className="flex items-center gap-1.5 text-xs font-medium text-amber">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+        Connecting to MetaTrader — deploying on the cloud (takes about a minute)…
+      </span>
+    )
+  }
+  if (status.kind === 'not-provisioned') {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="flex items-center gap-1.5 text-xs font-medium text-amber">
+          <TriangleAlert className="h-3.5 w-3.5" aria-hidden="true" />
+          Live trading not activated
+        </span>
+        <Button variant="secondary" size="sm" onClick={() => void connect()} loading={busy}>
+          <CloudUpload className="h-3.5 w-3.5" aria-hidden="true" />
+          Connect now
+        </Button>
+      </div>
+    )
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="flex items-center gap-1.5 text-xs text-red-300">
+        <CircleDot className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        {status.message}
+      </span>
+      <Button variant="secondary" size="sm" onClick={() => void connect()} loading={busy}>
+        <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+        Retry (auto-fix)
+      </Button>
+    </div>
+  )
+}
+
+/* ----------------------------- MetaApi (MT bridge) ---------------------------- */
+
+const METAAPI_SECURITY_STYLES: Record<MetaApiStatus['security'], string> = {
+  none: 'border-border bg-muted text-muted-foreground',
+  checking: 'border-amber/40 bg-amber/10 text-amber',
+  passed: 'border-up/40 bg-up/10 text-up',
+  failed: 'border-destructive/40 bg-destructive/10 text-red-200',
+}
+
+const METAAPI_SECURITY_LABEL: Record<MetaApiStatus['security'], string> = {
+  none: 'Not checked',
+  checking: 'Checking\u2026',
+  passed: 'Security passed',
+  failed: 'Security failed',
+}
+
+/**
+ * Per-connection MetaApi management: add your own FREE MetaApi token
+ * (metaapi.cloud), which is validated live against MetaApi's provisioning API
+ * (the "security pass"), then activate live trading — the bridge auto-generates
+ * the MetaApi account and deploys it ("auto-generate & inject from the free
+ * provider"). When the admin sets the bridge to "general token" mode, all
+ * connections instead trade through the platform-wide METAAPI_TOKEN secret and
+ * the per-user token controls are hidden. Only a masked preview of any token
+ * ever reaches the browser.
+ */
+function MetaApiPanel({ connectionId }: { connectionId: string }) {
+  const [status, setStatus] = useState<MetaApiStatus | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState<'save' | 'check' | 'activate' | 'remove' | null>(null)
+  const [token, setToken] = useState('')
+  const [showForm, setShowForm] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    setStatus(await fetchMetaApiStatus(connectionId))
+    setLoading(false)
+  }, [connectionId])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!token.trim()) {
+      setError('Paste your MetaApi API token first — you get one free at metaapi.cloud.')
+      return
+    }
+    setBusy('save')
+    setError(null)
+    const { data, error: err } = await saveMetaApiToken(connectionId, token.trim())
+    setBusy(null)
+    if (err) {
+      setError(err)
+      return
+    }
+    if (data) setStatus(data)
+    setToken('')
+    setShowForm(false)
+  }
+
+  const check = async () => {
+    setBusy('check')
+    setError(null)
+    const { data, error: err } = await checkMetaApi(connectionId)
+    setBusy(null)
+    if (err) {
+      setError(err)
+      return
+    }
+    if (data) setStatus(data)
+  }
+
+  const activate = async () => {
+    setBusy('activate')
+    setError(null)
+    const { data, error: err } = await activateMetaApi(connectionId)
+    setBusy(null)
+    if (err) {
+      setError(err)
+      return
+    }
+    if (data) setStatus(data)
+  }
+
+  const remove = async () => {
+    setBusy('remove')
+    setError(null)
+    const { data, error: err } = await removeMetaApiToken(connectionId)
+    setBusy(null)
+    if (err) {
+      setError(err)
+      return
+    }
+    if (data) setStatus(data)
+  }
+
+  const s = status
+  const security = s?.security ?? 'none'
+
+  return (
+    <div className="mt-2 border-t border-up/20 pt-2">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <p className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+          <CloudUpload className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
+          MetaApi (MT cloud bridge)
+        </p>
+        {loading ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-hidden="true" />
+        ) : (
+          <div className="flex items-center gap-1.5">
+            {s?.active && (
+              <Badge className="border-up/40 bg-up/10 text-up">
+                <ShieldCheck className="h-3 w-3" aria-hidden="true" />
+                Live active
+              </Badge>
+            )}
+            <Badge className={METAAPI_SECURITY_STYLES[security]}>
+              {security === 'passed' ? (
+                <ShieldCheck className="h-3 w-3" aria-hidden="true" />
+              ) : security === 'failed' ? (
+                <ShieldAlert className="h-3 w-3" aria-hidden="true" />
+              ) : null}
+              {METAAPI_SECURITY_LABEL[security]}
+            </Badge>
+          </div>
+        )}
+      </div>
+
+      <p className="mt-1 text-[11px] text-muted-foreground">
+        MetaTrader has no public API, so ANA24 connects your MT account through MetaApi&apos;s cloud.{' '}
+        {s?.mode === 'general' ? (
+          <>
+            The platform is set to use its <span className="text-foreground">general MetaApi token</span> for live trading,
+            so there&apos;s no token to add here.
+          </>
+        ) : (
+          <>
+            Add your own <span className="text-foreground">free MetaApi token</span> to validate &amp; activate live
+            trading right away; otherwise the platform&apos;s shared bridge is used when available.
+          </>
+        )}
+      </p>
+
+      {s?.mode === 'general' && (
+        <p className="mt-1.5 flex items-start gap-1.5 rounded-md border border-amber/30 bg-amber/10 px-2.5 py-1.5 text-[11px] text-amber-200/90">
+          <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+          <span>
+            General token mode is active (admin setting) — all MT connections trade through the platform&apos;s token and
+            per-user tokens are disabled. The security pass below runs against the general token.
+            {s?.hasUserToken ? ' Your saved token is ignored while this mode is on.' : ''}
+          </span>
+        </p>
+      )}
+
+      {s?.hasUserToken && (
+        <p className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-muted-foreground">
+          <KeyRound className="h-3 w-3" aria-hidden="true" />
+          Your token: <code className="rounded bg-muted px-1 py-0.5 font-mono">{s.masked ?? '\u2026\u2026\u2026\u2026'}</code>
+          {s.checkedAt && <span>· checked {formatDateTime(s.checkedAt)}</span>}
+          {s.meta?.email && <span>· {s.meta.email}</span>}
+          {s.meta?.plan && <span>· {s.meta.plan}</span>}
+        </p>
+      )}
+
+      {s?.securityNote && security !== 'none' && (
+        <p className={cn('mt-1 text-[11px]', security === 'passed' ? 'text-emerald-200' : 'text-red-300')}>{s.securityNote}</p>
+      )}
+
+      {s?.mode !== 'general' && !s?.hasUserToken && !loading && (
+        <div className="mt-2">
+          {showForm ? (
+            <form onSubmit={save} className="grid gap-2">
+              <Input
+                type="password"
+                autoComplete="off"
+                placeholder="Paste your MetaApi API token (metaapi.cloud)"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button type="submit" variant="primary" size="sm" loading={busy === 'save'} disabled={busy !== null}>
+                  <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
+                  Save &amp; check
+                </Button>
+                <Button type="button" variant="secondary" size="sm" onClick={() => setShowForm(false)} disabled={busy !== null}>
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <Button variant="secondary" size="sm" onClick={() => setShowForm(true)} disabled={busy !== null}>
+              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+              Add your free MetaApi token
+            </Button>
+          )}
+        </div>
+      )}
+
+      {s?.hasUserToken && !loading && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Button variant="secondary" size="sm" loading={busy === 'check'} disabled={busy !== null} onClick={() => void check()}>
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+            Re-check security
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            loading={busy === 'activate'}
+            disabled={busy !== null || security !== 'passed'}
+            onClick={() => void activate()}
+            title={security !== 'passed' ? 'Run the security check first — it must pass before live trading can activate.' : undefined}
+          >
+            <CloudUpload className="h-3.5 w-3.5" aria-hidden="true" />
+            {s.active ? 'Re-activate live trading' : 'Activate live trading'}
+          </Button>
+          {s?.mode !== 'general' && (
+            <Button
+              variant="ghost"
+              size="sm"
+              loading={busy === 'remove'}
+              disabled={busy !== null}
+              onClick={() => void remove()}
+              className="text-red-300 hover:text-red-200"
+            >
+              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+              Remove token
+            </Button>
+          )}
+        </div>
+      )}
+
+      {error && <p className="mt-1 text-[11px] text-red-300">{error}</p>}
+    </div>
+  )
+}
+
+/* ------------------------------ Connect panel ------------------------------ */
+
+function ConnectPanel({
+  brokers,
+  connections,
+  selectedId,
+  onSelect,
+  onSaved,
+}: {
+  brokers: BrokerRow[]
+  connections: BrokerConnectionRow[]
+  selectedId: string
+  onSelect: (id: string) => void
+  onSaved: () => void
+}) {
+  const { user } = useAuth()
+  const broker = brokers.find((b) => b.id === selectedId) ?? null
+  const isApi = broker ? broker.requires_api_key : true
+
+  const [apiKey, setApiKey] = useState('')
+  const [accountId, setAccountId] = useState('')
+  const [login, setLogin] = useState('')
+  const [password, setPassword] = useState('')
+  const [server, setServer] = useState('')
+  const [accountType, setAccountType] = useState<'practice' | 'live'>('practice')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  const copyReferral = async () => {
+    try {
+      await navigator.clipboard.writeText(broker?.admin_referral_code ?? '')
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1200)
+    } catch {
+      /* noop */
+    }
+  }
+
+  /** Verify an MT account against the MetaApi bridge through broker-mt.
+   *  `brokerId` pins the call to the connection just saved for that broker, so
+   *  with several MT4/5 accounts connected, each card's flow verifies its own. */
+  const verifyMt = useCallback(async (brokerId?: string): Promise<{ provisioned: boolean; error: string | null }> => {
+    const { data, error } = await fn<{ ok?: boolean; provisioned?: boolean }>(
+      'broker-mt',
+      { body: { action: 'verify', broker_id: brokerId }, fallback: 'Could not reach the MetaTrader bridge.' },
+    )
+    if (!data?.ok) return { provisioned: false, error: error ?? 'Could not reach the MetaTrader bridge.' }
+    return { provisioned: !!data.provisioned, error: null }
+  }, [])
+
+  /** Provision a saved MT account in MetaApi (deploy to their cloud) via broker-mt. */
+  const provisionMt = useCallback(async (brokerId?: string): Promise<string | null> => {
+    const { error } = await fn<{ ok?: boolean }>(
+      'broker-mt',
+      { body: { action: 'provision', broker_id: brokerId }, fallback: 'MetaApi could not provision this account.' },
+    )
+    return error
+  }, [])
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!user || !broker) return
+    setBusy(true)
+    setError(null)
+    setSuccess(null)
+
+    const platform = platformOf(broker)
+
+    if (isApi) {
+      if (!apiKey.trim()) {
+        setError('Enter your broker API token.')
+        setBusy(false)
+        return
+      }
+      const { error: saveErr } = await saveConnection({
+        userId: user.id,
+        brokerId: broker.id,
+        apiKey,
+        accountId: accountId.trim() || undefined,
+        accountType,
+        platform,
+      })
+      if (saveErr) {
+        setError(saveErr)
+        setBusy(false)
+        return
+      }
+      if (platform === 'oanda') {
+        // Every REST-API broker in the catalog executes through the OANDA bridge.
+        const { data, error } = await fn<{ ok?: boolean; accounts?: unknown[] }>(
+          'broker-oanda',
+          { body: { action: 'verify' }, fallback: 'The broker could not verify this token. Double-check it and try again.' },
+        )
+        if (!data?.ok) {
+          setError(error ?? 'The broker could not verify this token. Double-check it and try again.')
+          setBusy(false)
+          return
+        }
+        setSuccess(`Connected & verified — ${data.accounts?.length ?? 0} account(s) reachable.`)
+      } else {
+        setSuccess('Connection saved — trading via this broker activates when its execution API comes online.')
+      }
+    } else {
+      if (!login.trim() || !password.trim()) {
+        setError('Enter your MT account login and password.')
+        setBusy(false)
+        return
+      }
+      if (!server.trim()) {
+        setError('Enter your MT server (e.g. Exness-Real1) — find it in your broker client.')
+        setBusy(false)
+        return
+      }
+      // Reject duplicates up-front: the same MT login can only be connected once.
+      // Allow re-saving the account on its existing slot (same broker) — that's an update.
+      const ownConnection = connections.find((c) => c.broker_id === broker.id)
+      const dup = connections.find(
+        (c) =>
+          (c.platform === 'mt4' || c.platform === 'mt5') &&
+          c.account_id === login.trim() &&
+          c.id !== ownConnection?.id,
+      )
+      if (dup) {
+        setError(
+          `This MetaTrader account (#${login.trim()}) is already connected${dup.brokers?.name ? ` to ${dup.brokers.name}` : ''}. Disconnect it from its current slot before adding it again.`,
+        )
+        setBusy(false)
+        return
+      }
+      const { error: saveErr } = await saveConnection({
+        userId: user.id,
+        brokerId: broker.id,
+        // Stored server-side as the account credential; never returned to the browser.
+        apiKey: password,
+        accountId: login.trim(),
+        accountType,
+        platform,
+        server: server.trim(),
+      })
+      if (saveErr) {
+        setError(saveErr)
+        setBusy(false)
+        return
+      }
+      // The credentials are saved. Now verify against the MetaApi bridge and, if
+      // the account isn't provisioned yet, provision it so live trading works.
+      const { provisioned, error: verifyErr } = await verifyMt(broker.id)
+      if (verifyErr) {
+        // The bridge itself isn't reachable (e.g. METAAPI_TOKEN not set yet).
+        // The connection is saved and will become tradeable once the bridge is configured.
+        setSuccess(
+          `MetaTrader account connected & saved. Live trading will activate as soon as the MT bridge is configured (${verifyErr})`,
+        )
+      } else if (provisioned) {
+        setSuccess('MetaTrader account connected & verified — ready to trade live.')
+      } else {
+        const provisionErr = await provisionMt(broker.id)
+        setSuccess(
+          provisionErr
+            ? `MetaTrader account connected & saved. One more step to activate live trading: ${provisionErr}`
+            : 'MetaTrader account connected & provisioned — deploying on MetaApi, ready to trade in about a minute.',
+        )
+      }
+    }
+
+    setBusy(false)
+    setApiKey('')
+    setAccountId('')
+    setLogin('')
+    setPassword('')
+    setServer('')
+    onSaved()
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Connect a broker account</CardTitle>
+        <Badge className="border-border bg-muted text-muted-foreground">
+          <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
+          {brokers.length} supported
+        </Badge>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={submit} className="grid gap-3">
+          <Select label="Broker" value={selectedId} onChange={(e) => onSelect(e.target.value)}>
+            {brokers.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name}
+              </option>
+            ))}
+          </Select>
+
+          {broker && (
+            <div key={broker.id} className="grid gap-3">
+              {isApi ? (
+                <>
+                  <Input
+                    type="password"
+                    label="API token / key"
+                    placeholder="Paste your broker API token"
+                    autoComplete="off"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    required
+                  />
+                  <Input
+                    label="Account ID (optional)"
+                    placeholder="e.g. 101-004-1234567-001"
+                    value={accountId}
+                    onChange={(e) => setAccountId(e.target.value)}
+                  />
+                </>
+              ) : (
+                <>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Input
+                      label="Account login"
+                      inputMode="numeric"
+                      placeholder="e.g. 51234567"
+                      value={login}
+                      onChange={(e) => setLogin(e.target.value)}
+                      required
+                    />
+                    <Input
+                      label="Server"
+                      placeholder="e.g. Exness-Real1"
+                      value={server}
+                      onChange={(e) => setServer(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <Input
+                    type="password"
+                    label="Password"
+                    placeholder="Investor or master password"
+                    autoComplete="off"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                  />
+                  <p className="flex items-start gap-2 text-xs text-muted-foreground">
+                    <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    Use the investor (read-only) password to let the robot read your account, or the master password
+                    for full trading access. Credentials are stored server-side and never shown in the browser.
+                  </p>
+                </>
+              )}
+
+              <Select
+                label="Account type"
+                value={accountType}
+                onChange={(e) => setAccountType(e.target.value as 'practice' | 'live')}
+              >
+                <option value="practice">Practice (demo)</option>
+                <option value="live">Live</option>
+              </Select>
+
+              {broker.admin_referral_code && (
+                <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Link2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  Referral: <span className="font-mono text-foreground">{broker.admin_referral_code}</span>
+                  <button
+                    type="button"
+                    onClick={() => void copyReferral()}
+                    className="cursor-pointer text-muted-foreground transition-colors duration-150 hover:text-foreground"
+                    aria-label="Copy admin referral code"
+                  >
+                    {copied ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
+                  </button>
+                </p>
+              )}
+
+              {error && (
+                <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-red-200">{error}</p>
+              )}
+              {success && (
+                <p className="rounded-lg border border-up/30 bg-up/10 px-3 py-2 text-sm text-emerald-200">
+                  <Check className="mr-1 inline h-4 w-4" aria-hidden="true" />
+                  {success}
+                </p>
+              )}
+
+              <Button type="submit" loading={busy} disabled={busy}>
+                <PlugZap className="h-4 w-4" aria-hidden="true" />
+                {isApi ? 'Verify & connect' : 'Save & connect'}
+              </Button>
+            </div>
+          )}
+        </form>
+      </CardContent>
+    </Card>
+  )
+}
+
+/* ------------------------------- REST API token ------------------------------ */
+
+/**
+ * Per-connection REST API token that the robot presents when trading (verified
+ * server-side by the bridges). Only ever shows a masked preview — the raw token
+ * is encrypted at rest and never leaves the server except over the authenticated
+ * `get` call used by the robot adapter.
+ */
+/**
+ * Admin: generate the platform's market-data source from the connected OANDA
+ * broker trader account (no API key needed — quotes are fetched through the
+ * broker). Shown on the OANDA card once an account is connected.
+ */
+function OandaMarketDataPanel() {
+  const [provisioning, setProvisioning] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  const provision = async () => {
+    setErr(null)
+    setMsg(null)
+    setProvisioning(true)
+    const e = await provisionMarketDataFromBroker('oanda')
+    setProvisioning(false)
+    if (e) {
+      setErr(e)
+    } else {
+      setMsg('OANDA is now the market data source — quotes & charts come from this account.')
+      setTimeout(() => setMsg(null), 5000)
+    }
+  }
+
+  return (
+    <div className="mt-2 border-t border-up/20 pt-2">
+      <p className="text-xs text-muted-foreground">
+        Use this OANDA account as the platform&apos;s market data source — no API key needed.
+      </p>
+      <Button
+        className="mt-2 w-full"
+        variant="secondary"
+        loading={provisioning}
+        onClick={() => void provision()}
+      >
+        <RefreshCw className="h-4 w-4" aria-hidden="true" />
+        Use OANDA for market data
+      </Button>
+      {err && <p className="mt-1 text-xs text-red-300">{err}</p>}
+      {msg && <p className="mt-1 text-xs text-emerald-200">{msg}</p>}
+    </div>
+  )
+}
+
+function RestApiTokenPanel({ connectionId }: { connectionId: string }) {
+  const [status, setStatus] = useState<BrokerTokenStatus | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState<'generate' | 'revoke' | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    const res = await fetchBrokerTokenStatus(connectionId)
+    setStatus(res)
+    setLoading(false)
+  }, [connectionId])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const generate = async () => {
+    setBusy('generate')
+    setError(null)
+    const { data, error: err } = await generateBrokerToken(connectionId)
+    if (data) setStatus(data)
+    if (err) setError(err)
+    setBusy(null)
+  }
+
+  const revoke = async () => {
+    setBusy('revoke')
+    setError(null)
+    const { error: err } = await revokeBrokerToken(connectionId)
+    if (err) {
+      setError(err)
+    } else if (status) {
+      setStatus({ ...status, hasToken: false, masked: null, created_at: null })
+    }
+    setBusy(null)
+  }
+
+  return (
+    <div className="mt-2 border-t border-up/20 pt-2">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <p className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+          <KeyRound className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
+          REST API token
+        </p>
+        {loading ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-hidden="true" />
+        ) : status?.hasToken ? (
+          <div className="flex items-center gap-2">
+            <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground">
+              {status.masked ?? '\u2026\u2026\u2026\u2026'}
+            </code>
+            <button
+              type="button"
+              onClick={() => void revoke()}
+              disabled={busy !== null}
+              className="flex cursor-pointer items-center gap-1 text-xs text-red-300 transition-colors duration-150 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {busy === 'revoke' ? (
+                <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+              ) : (
+                <Trash2 className="h-3 w-3" aria-hidden="true" />
+              )}
+              Revoke
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => void generate()}
+            disabled={busy !== null}
+            className="flex cursor-pointer items-center gap-1 text-xs font-medium text-accent transition-colors duration-150 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {busy === 'generate' ? (
+              <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+            ) : (
+              <KeyRound className="h-3 w-3" aria-hidden="true" />
+            )}
+            Generate token
+          </button>
+        )}
+      </div>
+      <p className="mt-1 text-[11px] text-muted-foreground">
+        {status?.hasToken
+          ? `The robot uses this token to trade this account${status.created_at ? ` (issued ${formatDateTime(status.created_at)})` : ''}.`
+          : 'Generate a token so the robot can trade this account securely. Only a masked preview is shown here.'}
+      </p>
+      {error && <p className="mt-1 text-[11px] text-red-300">{error}</p>}
+    </div>
+  )
+}
+
+/* ----------------------------------- Page ---------------------------------- */
+
+export function Brokers() {
+  const { user } = useAuth()
+  const { profile } = useProfile()
+  const { brokers, connections, loading, refresh } = useBrokers(user?.id)
+  const [connectId, setConnectId] = useState('')
+  const panelRef = useRef<HTMLDivElement | null>(null)
+
+  const available = brokers.filter((b) => b.status === 'available')
+
+  const openConnect = (id: string) => {
+    setConnectId(id)
+    requestAnimationFrame(() => {
+      panelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
+
+  const disconnect = async (id: string) => {
+    await removeConnection(id)
+    await refresh()
+  }
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Brokers"
+        description={
+          <>
+            Browse the broker catalog and live status. Connect{' '}
+            <span className="text-foreground">OANDA</span> with a REST API token, or a{' '}
+            <span className="text-foreground">MetaTrader 4 / 5</span> account with your login, password and
+            server for live trading through the MetaTrader bridge. Credentials are stored securely server-side and
+            never shown in the browser.
+          </>
+        }
+      />
+
+      {user && available.length > 0 && (
+        <div ref={panelRef} className="scroll-mt-24">
+          <ConnectPanel
+            brokers={available}
+            connections={connections}
+            selectedId={connectId}
+            onSelect={setConnectId}
+            onSaved={() => void refresh()}
+          />
+        </div>
+      )}
+
+      {loading ? (
+        <div className="grid gap-4 md:grid-cols-2">
+          {Array.from({ length: 2 }).map((_, i) => (
+            <Skeleton key={i} className="h-56 rounded-xl" />
+          ))}
+        </div>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2">
+          {brokers.map((broker) => {
+            const conn = connections.find((c) => c.broker_id === broker.id)
+            const isAvailable = broker.status === 'available'
+            const summary = connectionSummary(broker)
+            const isMt = !broker.requires_api_key
+            return (
+              <Card key={broker.id} className="flex flex-col">
+                <CardHeader>
+                  <CardTitle className="text-base">{broker.name}</CardTitle>
+                  <Badge className={STATUS_STYLES[broker.status]}>{STATUS_LABEL[broker.status]}</Badge>
+                </CardHeader>
+                <CardContent className="flex flex-1 flex-col gap-4">
+                  <p className="text-sm text-muted-foreground">{broker.description}</p>
+
+                  <div className="rounded-lg border border-border bg-secondary/60 px-3 py-2.5">
+                    <p className="flex items-center gap-2 text-xs font-medium text-foreground">
+                      {isMt ? (
+                        <UserRound className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
+                      ) : (
+                        <KeyRound className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
+                      )}
+                      {summary.kind}
+                    </p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{summary.hint}</p>
+                  </div>
+
+                  {user &&
+                    (conn ? (
+                      <div className="rounded-lg border border-up/30 bg-up/10 px-3 py-2.5 text-sm text-emerald-200">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="flex items-center gap-2 font-medium">
+                            <Check className="h-4 w-4" aria-hidden="true" />
+                            Connected
+                          </span>
+                          <span className="text-xs text-emerald-200/70">
+                            {conn.account_type} · {formatDateTime(conn.last_verified_at)}
+                          </span>
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
+                          <span className="truncate font-mono">
+                            {conn.platform === 'mt4' || conn.platform === 'mt5'
+                              ? `#${conn.account_id ?? '—'}${conn.server ? ` · ${conn.server}` : ''}`
+                              : (conn.account_id ?? 'no account id')}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => void disconnect(conn.id)}
+                            className="flex cursor-pointer items-center gap-1 text-red-300 transition-colors duration-150 hover:text-red-200"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                            Disconnect
+                          </button>
+                        </div>
+                        {(conn.platform === 'mt4' || conn.platform === 'mt5') && (
+                          <div className="mt-2 border-t border-up/20 pt-2">
+                            <MtConnectionStatus connectionId={conn.id} />
+                          </div>
+                        )}
+                        {(conn.platform === 'mt4' || conn.platform === 'mt5') && <MetaApiPanel connectionId={conn.id} />}
+                        <RestApiTokenPanel connectionId={conn.id} />
+                        {conn.platform === 'oanda' && <OandaMarketDataPanel />}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">Not connected.</p>
+                    ))}
+
+                  <div className="mt-auto">
+                    {isAvailable ? (
+                      user ? (
+                        <Button variant={conn ? 'secondary' : 'primary'} className="w-full" onClick={() => openConnect(broker.id)}>
+                          <PlugZap className="h-4 w-4" aria-hidden="true" />
+                          {conn ? 'Reconnect / edit' : 'Connect'}
+                        </Button>
+                      ) : (
+                        <Link to="/auth" className="block">
+                          <Button variant="primary" className="w-full">
+                            <PlugZap className="h-4 w-4" aria-hidden="true" />
+                            Sign in to connect
+                          </Button>
+                        </Link>
+                      )
+                    ) : (
+                      <Button variant="secondary" className="w-full" disabled>
+                        <TriangleAlert className="h-4 w-4" aria-hidden="true" />
+                        Integration pending
+                      </Button>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )
+          })}
+        </div>
+      )}
+
+      <p className={cn('text-xs text-muted-foreground')}>
+        Admin referral codes are shown on each broker's connect form so you can register with the platform's code and
+        get the best conditions.
+      </p>
+      {profile?.role === 'admin' && (
+        <p className="text-xs text-muted-foreground">
+          You're an admin — manage the broker catalog from the{' '}
+          <Link to="/admin" className="text-accent hover:underline">
+            Admin dashboard
+          </Link>
+          .
+        </p>
+      )}
+    </div>
+  )
+}

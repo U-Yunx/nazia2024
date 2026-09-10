@@ -1,0 +1,350 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useAuth } from '../../hooks/useAuth'
+import type {
+  AccountState,
+  ApplySignalInput,
+  BrokerMode,
+  CloseReason,
+  OpenPositionRequest,
+  RatesMap,
+  RiskConfig,
+  RobotConfig,
+  RobotCycleInput,
+  Side,
+} from './types'
+import { applySignal, canOpen, closeAllPositions, closeRobotPositions as engineCloseRobotPositions, createAccount, openPosition } from './engine'
+import { clearLocal, loadLocal, loadRemote, resetRemote, saveLocal, saveRemote } from './persistence'
+import { clearRobotRunning, loadRobotRunning, saveRobotRunning } from './robotState'
+import { createBroker, type BrokerAdapter } from './broker'
+
+const MODE_KEY = 'fx-toolkit.broker-mode'
+
+function initialMode(): BrokerMode {
+  try {
+    const saved = localStorage.getItem(MODE_KEY)
+    if (saved === 'oanda' || saved === 'mt' || saved === 'managed') return saved
+    return 'paper'
+  } catch {
+    return 'paper'
+  }
+}
+
+export const DEFAULT_PAPER_BALANCE = 10_000
+
+/**
+ * Owns the paper account lifecycle: loads (Supabase when signed in, otherwise
+ * localStorage), persists on every change, and exposes a `BrokerAdapter` so the
+ * UI never talks to the engine directly. `connectionIds` maps each live platform
+ * to the broker_connections row it should trade (one per connected broker) —
+ * when omitted the bridges fall back to the user's default robot slot.
+ */
+export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string }) {
+  const { user } = useAuth()
+  const [account, setAccount] = useState<AccountState | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [mode, setMode] = useState<BrokerMode>(initialMode)
+
+  const stateRef = useRef<AccountState | null>(null)
+  stateRef.current = account
+  const userRef = useRef(user)
+  userRef.current = user
+
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    void (async () => {
+      const u = userRef.current
+      let next: AccountState | null = null
+      if (u) next = await loadRemote(u)
+      if (!next) next = loadLocal()
+      if (!next) next = createAccount(DEFAULT_PAPER_BALANCE)
+      // Restore the robot's on/off state across refreshes / tab closes. Live
+      // OANDA / MetaTrader mirrors are never saved (the broker is the source of
+      // truth), so the flag written on every start/stop is the only record of
+      // whether the robot was running. Paper / managed already carry it on the
+      // account — the flag is applied uniformly so every mode behaves the same.
+      if (next && loadRobotRunning(u?.id)) {
+        next = { ...next, risk: { ...next.risk, autoTrade: true } }
+      }
+      if (active) {
+        setAccount(next)
+        setLoading(false)
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [user?.id])
+
+  useEffect(() => {
+    if (!account || loading) return
+    // Persist accounts that live on the platform's own ledger (paper and the
+    // "managed live" ledger). Live OANDA / MetaTrader mirrors are never saved —
+    // their authoritative state is always re-fetched from the broker.
+    if (account.broker === 'oanda' || account.broker === 'mt') return
+    saveLocal(account)
+    const u = userRef.current
+    if (!u) return
+    const id = setTimeout(() => {
+      void saveRemote(u, account)
+    }, 400)
+    return () => clearTimeout(id)
+  }, [account, loading])
+
+  const commit = useCallback((next: AccountState) => setAccount(next), [])
+
+  // Pick the connection matching the active mode (oanda ↔ oandaConn, mt ↔
+  // mtConn). Passing the id lets a user with several brokers trade the exact
+  // account shown in the UI instead of always the default robot slot.
+  const brokerConnectionId = mode === 'oanda' ? connectionIds?.oanda : mode === 'mt' ? connectionIds?.mt : undefined
+  const broker = useMemo<BrokerAdapter>(
+    () =>
+      createBroker(mode, {
+        getState: () => stateRef.current ?? createAccount(DEFAULT_PAPER_BALANCE),
+        commit,
+      }, brokerConnectionId),
+    [mode, commit, brokerConnectionId],
+  )
+
+  // In live mode, pull the authoritative account from the broker as soon as the
+  // broker adapter exists (before the first quote tick arrives). Only do this
+  // when signed in — the broker bridges require a user session JWT and would
+  // otherwise 401 for anonymous visitors (persisted live mode).
+  useEffect(() => {
+    if (mode === 'paper') return
+    if (!userRef.current) return
+    void broker.refresh()
+  }, [mode, broker])
+
+  const open = useCallback(
+    (req: OpenPositionRequest, rates: RatesMap) => broker.openPosition(req, rates),
+    [broker],
+  )
+  const close = useCallback(
+    (id: string, reason: CloseReason, price: number, rates: RatesMap) =>
+      broker.closePosition(id, reason, price, rates),
+    [broker],
+  )
+  const sync = useCallback((rates: RatesMap) => broker.markToMarket(rates), [broker])
+  const refresh = useCallback(() => broker.refresh(), [broker])
+  /** Submit one multi-pair robot cycle (caps + per-pair error isolation). */
+  const runCycle = useCallback(
+    (inputs: RobotCycleInput[], config: RobotConfig) => broker.runCycle(inputs, config),
+    [broker],
+  )
+
+  /**
+   * Act on a strategy signal. In paper mode this runs the pure engine reducer.
+   * In live (OANDA) mode it validates against the same risk rules, then routes
+   * the actual order through the broker so real money moves on the user's
+   * account. The authoritative mirror state is refreshed from the broker after
+   * every execution.
+   */
+  const runSignal = useCallback(
+    async (input: ApplySignalInput): Promise<{ events: string[] }> => {
+      const cur = stateRef.current
+      if (!cur) return { events: ['No account yet — create one first.'] }
+
+      if (broker.mode !== 'paper') {
+        const { symbol, signal, price, rates, strategy, stopPips, takeProfitPips, units } = input
+        if (signal === 'neutral') return { events: [] }
+        const events: string[] = []
+        const side: Side = signal === 'buy' ? 'long' : 'short'
+        const pos = cur.positions.find((p) => p.symbol === symbol)
+
+        if (pos) {
+          if (pos.side === side) return { events: [] } // already on the right side
+          const { error } = await broker.closePosition(pos.id, 'signal', price, rates)
+          if (error) return { events: [`${symbol}: couldn't flip — ${error}`] }
+          events.push(`Closed ${symbol} ${pos.side} on reversal (${price.toFixed(5)}).`)
+        }
+
+        const gate = canOpen(cur, rates)
+        if (!gate.ok) return { events: [gate.reason ?? 'Risk limit.'] }
+
+        const planned = openPosition(
+          cur,
+          { symbol, side, entryPrice: price, stopPips, takeProfitPips, units, strategy },
+          rates,
+        )
+        if (planned.error) return { events: [`${symbol}: ${planned.error}`] }
+
+        const { error } = await broker.openPosition(
+          { symbol, side, entryPrice: price, stopPips, takeProfitPips, units, strategy },
+          rates,
+        )
+        if (error) return { events: [`${symbol}: live order failed — ${error}`] }
+        events.push(`Opened ${symbol} ${side} at ${price.toFixed(5)} (${broker.label}).`)
+        return { events }
+      }
+
+      const { state, events } = applySignal(cur, input)
+      setAccount(state)
+      return { events }
+    },
+    [broker],
+  )
+
+  const setRisk = useCallback((patch: Partial<RiskConfig>) => {
+    const cur = stateRef.current
+    if (!cur) return
+    setAccount({ ...cur, risk: { ...cur.risk, ...patch } })
+    // Mirror the robot on/off flag so a refresh / tab close restores it in
+    // every mode — live broker mirrors are never persisted, so this flag is
+    // their only record of whether the robot was running.
+    if (typeof patch.autoTrade === 'boolean') {
+      saveRobotRunning(patch.autoTrade, userRef.current?.id)
+    }
+  }, [])
+
+  /** Emergency stop: disable auto-trading. */
+  const stopRobot = useCallback(() => {
+    const cur = stateRef.current
+    if (!cur) return
+    if (!cur.risk.autoTrade) return
+    setAccount({ ...cur, risk: { ...cur.risk, autoTrade: false } })
+    saveRobotRunning(false, userRef.current?.id)
+  }, [])
+
+  /** Close every open position at the current market price (stop-loss button). */
+  const closeAll = useCallback(
+    (rates: RatesMap): { closed: number } => {
+      const cur = stateRef.current
+      if (!cur || cur.positions.length === 0) return { closed: 0 }
+      const { state, closed } = closeAllPositions(cur, rates)
+      setAccount(state)
+      return { closed: closed.length }
+    },
+    [],
+  )
+
+  /** Close every position the robot opened (strategy-tagged, not 'manual') at
+   * market, leaving manual trades the user placed untouched. Paper/managed run
+   * the pure engine reducer (journal tagged 'robot_stop'); live OANDA/MT place
+   * a real close order through the broker for each robot position, throttled,
+   * then re-sync the authoritative mirror — a stopped robot never leaves its
+   * own trades open on the book, in paper or live. */
+  const closeRobotPositions = useCallback(
+    async (rates: RatesMap): Promise<{ closed: number; error: string | null }> => {
+      const cur = stateRef.current
+      if (!cur || cur.positions.length === 0) return { closed: 0, error: null }
+      const robotPositions = cur.positions.filter((p) => p.strategy && p.strategy !== 'manual')
+      if (robotPositions.length === 0) return { closed: 0, error: null }
+
+      // Ledger-backed modes: pure engine close on the local account state.
+      if (broker.mode === 'paper' || broker.mode === 'managed') {
+        const { state, closed } = engineCloseRobotPositions(cur, rates)
+        if (closed.length > 0) setAccount(state)
+        return { closed: closed.length, error: null }
+      }
+
+      // Live broker: one real close order per robot position (throttled so
+      // broker rate limits are respected), then refresh the mirror so the UI
+      // reflects what the broker actually did.
+      let closed = 0
+      let lastError: string | null = null
+      for (const p of robotPositions) {
+        const price = rates[p.symbol] ?? p.entryPrice
+        const { error } = await broker.closePosition(p.id, 'robot_stop', price, rates)
+        if (error) {
+          lastError = error
+        } else {
+          closed += 1
+        }
+        await new Promise((resolve) => setTimeout(resolve, 350))
+      }
+      await broker.refresh()
+      return { closed, error: lastError }
+    },
+    [broker],
+  )
+
+  /** Close EVERY open position — robot AND manual — at the current market
+   * price. Used by the "Stop robot & close all" button so a stopped robot
+   * leaves the open-positions panel empty, not just its own trades. Paper and
+   * managed run the pure engine reducer (journal tagged 'risk'); live
+   * OANDA/MT place a real close order through the broker for each position,
+   * throttled, then re-sync the authoritative mirror. */
+  const flattenAll = useCallback(
+    async (rates: RatesMap): Promise<{ closed: number; error: string | null }> => {
+      const cur = stateRef.current
+      if (!cur || cur.positions.length === 0) return { closed: 0, error: null }
+
+      // Ledger-backed modes: pure engine close on the local account state.
+      if (broker.mode === 'paper' || broker.mode === 'managed') {
+        const { state, closed } = closeAllPositions(cur, rates)
+        if (closed.length > 0) setAccount(state)
+        return { closed: closed.length, error: null }
+      }
+
+      // Live broker: one real close order per open position (throttled so
+      // broker rate limits are respected), then refresh the mirror so the UI
+      // reflects what the broker actually did.
+      let closed = 0
+      let lastError: string | null = null
+      for (const p of cur.positions) {
+        const price = rates[p.symbol] ?? p.entryPrice
+        const { error } = await broker.closePosition(p.id, 'robot_stop', price, rates)
+        if (error) {
+          lastError = error
+        } else {
+          closed += 1
+        }
+        await new Promise((resolve) => setTimeout(resolve, 350))
+      }
+      await broker.refresh()
+      return { closed, error: lastError }
+    },
+    [broker],
+  )
+
+  const reset = useCallback(
+    (initialBalance: number) => {
+      clearLocal()
+      setAccount(createAccount(initialBalance))
+      // A fresh account starts with the robot off — forget any saved running
+      // flag so a reload doesn't bring it back on.
+      clearRobotRunning(userRef.current?.id)
+      // Wipe the Supabase mirror too, otherwise a signed-in user's reload loads
+      // the old account + trades back from the server (see resetRemote).
+      const u = userRef.current
+      if (u) void resetRemote(u, initialBalance)
+    },
+    [],
+  )
+
+  const setBrokerMode = useCallback((m: BrokerMode) => {
+    setMode(m)
+    try {
+      localStorage.setItem(MODE_KEY, m)
+    } catch {
+      /* noop */
+    }
+    // Keep the account's `broker` label in sync for the ledger-backed modes
+    // (paper and managed live). OANDA / MT are overwritten by the live mirror
+    // when it next refreshes from the broker.
+    if (m === 'paper' || m === 'managed') {
+      setAccount((cur) => (cur ? { ...cur, broker: m } : cur))
+    }
+  }, [])
+
+  return {
+    account,
+    loading,
+    mode,
+    setBrokerMode,
+    broker,
+    open,
+    close,
+    sync,
+    refresh,
+    runCycle,
+    runSignal,
+    setRisk,
+    stopRobot,
+    closeAll,
+    closeRobotPositions,
+    flattenAll,
+    reset,
+  }
+}
