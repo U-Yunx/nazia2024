@@ -1,86 +1,44 @@
 /**
  * broker-mt — cloud bridge to the user's MetaTrader 4/5 account via MetaApi.
  *
- * MT4/MT5 are desktop terminals with no public REST API, so a serverless
- * function cannot dial into an account with login/password/server directly.
- * This function proxies every request through MetaApi's cloud gateway
- * (https://metaapi.cloud) — the MetaApi API token is resolved per connection:
+ * MT4/MT5 are desktop terminals with no public REST API, so this serverless
+ * function proxies every request through MetaApi's cloud gateway
+ * (https://metaapi.cloud). The MetaApi API token is resolved per connection:
  *
- *   1. the user's OWN free MetaApi token (saved from the Brokers page,
- *      encrypted at rest on broker_connections.metaapi_token), or
- *   2. the platform-wide `METAAPI_TOKEN` Edge Function secret (general token).
+ *   1. the user's OWN token (saved on the Brokers page, stored encrypted at
+ *      rest on broker_connections.metaapi_token), or
+ *   2. the platform-wide `METAAPI_TOKEN` secret (general token).
  *
- * Which one is used is an ADMIN SETTING, `settings.metaapi_token_mode`:
- *   - 'user'    (default) — the user's own token first, then the general
- *                           token as fallback;
- *   - 'general'            — ONLY the general `METAAPI_TOKEN` secret; per-user
- *                           tokens are ignored (never decrypted/used).
- * Admins switch the mode, read the bridge config, and set/clear the general
- * token through the admin-only actions `metaapi-mode-set` / `metaapi-config` /
- * `metaapi-token-set` / `metaapi-token-clear`. The general token is stored in
- * the app's secure token store (`app_secrets` — RLS deny-all, service-role
- * only) using the caller's signed-in admin session as the credential; no
- * Personal Access Token is required. When a PAT (SUPABASE_ACCESS_TOKEN) is
- * configured, the token is ALSO mirrored to the project's Edge Function
- * secrets via the Supabase Management API so env-var readers keep working
- * (best-effort, never blocking). The raw token never reaches the browser.
+ * The mode is an ADMIN SETTING, `settings.metaapi_token_mode`:
+ *   - 'user'    (default) — the user's token first, then the general token;
+ *   - 'general'            — ONLY the general `METAAPI_TOKEN` secret.
+ * The general token lives in `app_secrets` (RLS deny-all / service-role only)
+ * and is optionally mirrored to Edge Function secrets via the Management API
+ * when a PAT (SUPABASE_ACCESS_TOKEN) is configured. It never reaches the
+ * browser.
  *
- * The MT account credentials (login / password / server) come from the user's
- * saved `broker_connections` row (platform = 'mt4' | 'mt5'), so neither the
- * password nor any token ever reaches the browser.
+ * MT credentials (login / password / server) come from the user's saved
+ * `broker_connections` row (platform = 'mt4' | 'mt5').
  *
  * The "add your MetaApi token" flow runs a SECURITY PASS before activation:
  * the token is validated live against MetaApi's provisioning API
- * (`GET /users/current`) and the connected MT account is looked up under that
- * token. Only after the pass does `metaapi-activate` provision (auto-generate)
- * + deploy the account — "auto-generate & inject from the free provider".
+ * (`GET /users/current`) and the connected MT account is looked up. Only after
+ * the pass does `metaapi-activate` / `provision` create + deploy the account.
  *
- * Actions (`action`, passed in the JSON body):
- *   verify          -> validate the resolved token and report whether the saved
- *                      MT account is provisioned + deployed in MetaApi.
- *   provision       -> create the MT account in MetaApi and deploy it
- *                      (optional body: provisioningProfileId).
- *   metaapi-status  -> per-connection MetaApi state (masked token, security
- *                      pass result, activation state) without any MetaApi call.
- *   metaapi-save    -> store the user's own MetaApi token (encrypted at rest),
- *                      validate it live and run the security pass.
- *   metaapi-check   -> re-run the security pass with the resolved token.
- *   metaapi-activate-> security-pass gate, then provision + deploy the account
- *                      and mark the connection live-trading active.
- *   metaapi-remove  -> clear the user's saved MetaApi token + activation state.
- *   metaapi-config    -> ADMIN ONLY: read the token mode + whether the general
- *                        METAAPI_TOKEN secret is set (masked only).
- *   metaapi-mode-set  -> ADMIN ONLY: switch between per-user tokens and the
- *                        general platform token.
- *   metaapi-token-set -> ADMIN ONLY: replace the general METAAPI_TOKEN secret
- *                        (via the Management API) and validate it live.
- *   metaapi-token-clear-> ADMIN ONLY: remove the general METAAPI_TOKEN secret.
- *   state           -> deployment + connection status of the MetaApi account.
- *   summary         -> account-information (balance, equity, currency).
- *   open-trades     -> open positions (the robot's live positions).
- *   closed-trades   -> recently filled history orders (the live journal).
- *   open-position   -> market order with SL/TP (needs symbol/side/units).
- *   close-position  -> close one open position by MetaApi position id.
+ * Actions (`action`, in the JSON body or `?action=`):
+ *   verify | metaapi-status | metaapi-save | metaapi-check | metaapi-activate |
+ *   metaapi-remove | metaapi-config (admin) | metaapi-mode-set (admin) |
+ *   metaapi-token-set (admin) | metaapi-token-clear (admin) | state |
+ *   summary | open-trades | closed-trades | open-position | close-position
  */
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import { resolveTokenWithFallback } from "./tokenFallback.ts";
-import type { MetaTokenSource } from "./tokenFallback.ts";
 
-/**
- * MetaApi serves its REST API from two separate hosts:
- *  - PROVISIONING (mt-provisioning-api-v1…): account lifecycle — list accounts,
- *    create account, deploy/undeploy. This is the host the SDK's account API
- *    (`/users/current/accounts`, `/deploy`) is served from.
- *  - CLIENT (mt-client-api-v1…): trading data + operations — account
- *    information, positions, trade history, placing/closing orders.
- * They can have different TLS states, so each action must target the host that
- * actually serves it (the provisioning host is the one that makes "connect +
- * auto-provision an MT4/5 account" work).
- */
 const METAAPI_PROVISIONING_BASE = "https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai";
 const METAAPI_BASE = "https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai";
 /** 1 standard lot = 100,000 base units (the engine's "units" semantics). */
 const UNITS_PER_LOT = 100_000;
+/** Hard server-side cap on any single order, in standard lots. */
+const MAX_LOTS_PER_ORDER = 100;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -95,13 +53,7 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-/**
- * fetch with a hard timeout. MetaApi has been observed to hang (TLS
- * negotiation, deployment races), and an Edge Function that never answers
- * makes the browser client abort and show a generic "could not load your
- * account" message with no real reason. Every MetaApi call goes through here
- * so the function always returns a specific, actionable error promptly.
- */
+/** fetch with a hard timeout so a hung MetaApi call can never hang a user. */
 async function fetchWithTimeout(
   url: string,
   init: RequestInit = {},
@@ -121,19 +73,17 @@ async function fetchWithTimeout(
   }
 }
 
-/** App symbol "EUR/USD" -> MetaTrader symbol "EURUSD" (no slash, uppercase). */
+/** App symbol "EUR/USD" -> MetaTrader symbol "EURUSD". */
 function mtSymbol(symbol: string): string {
   return symbol.replace("/", "").toUpperCase();
 }
 
-/** MetaTrader symbol "EURUSD" -> app symbol "EUR/USD" (best-effort split). */
 function appSymbol(symbol: string): string {
   const s = symbol.toUpperCase();
   if (s.length === 6) return `${s.slice(0, 3)}/${s.slice(3)}`;
   return s;
 }
 
-/** MetaApi unix-ms epoch -> ISO string (or empty). */
 function iso(ms: unknown): string {
   const n = Number(ms);
   return Number.isFinite(n) && n > 0 ? new Date(n).toISOString() : "";
@@ -143,9 +93,6 @@ function toNumber(v: unknown): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 }
-
-/** Hard server-side cap on any single order, in standard lots. */
-const MAX_LOTS_PER_ORDER = 100;
 
 /** Read the platform's risk defaults from the DB — the client cannot override. */
 async function loadRiskLimits(supabase: any) {
@@ -164,26 +111,18 @@ async function loadBrokerBridge(supabase: any) {
   return { liveExecutionEnabled: v.liveExecutionEnabled !== false };
 }
 
-/**
- * Admin setting that decides which MetaApi token the bridge trades through:
- *   - 'user'    (default) — the user's own token first, general token fallback;
- *   - 'general'            — only the platform-wide METAAPI_TOKEN secret.
- * The raw setting value is validated here so a malformed row can never escape
- * the two allowed modes.
- */
+/** Admin setting: which token role the bridge trades through. */
 async function loadMetaApiTokenMode(supabase: any): Promise<"user" | "general"> {
   const { data } = await supabase.from("settings").select("value").eq("key", "metaapi_token_mode").maybeSingle();
   const v = (data?.value ?? {}) as Record<string, unknown>;
   return v.mode === "general" ? "general" : "user";
 }
 
-/** Whether the signed-in user has the admin role (server-authoritative). */
 async function isAdmin(supabase: any, userId: string): Promise<boolean> {
   const { data } = await supabase.from("profiles").select("role").eq("id", userId).maybeSingle();
   return data?.role === "admin";
 }
 
-/** Start of today (UTC) as unix-ms — used for the daily-loss window. */
 function startOfTodayMs(): number {
   const n = new Date();
   return Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate());
@@ -196,12 +135,7 @@ function mask(token: string): string | null {
   return `${token.slice(0, 6)}…${token.slice(-4)}`;
 }
 
-/**
- * Secure token store access — `app_secrets` is RLS-locked (no anon/
- * authenticated policy), so only the service-role client used here can read
- * or write the general MetaApi token. The caller's admin session authorizes
- * the write; no Personal Access Token is involved.
- */
+/** Secure token store access — `app_secrets` is RLS-locked (service-role only). */
 async function storeGet(supabase: any, key: string): Promise<string | null> {
   const { data } = await supabase.from("app_secrets").select("value").eq("key", key).maybeSingle();
   const v = data?.value;
@@ -213,20 +147,12 @@ async function storeSet(supabase: any, key: string, value: string): Promise<stri
   return error?.message ?? null;
 }
 
-/** Resolve the platform-wide MetaApi token: secure store first, env fallback. */
 async function loadPlatformSecret(supabase: any): Promise<string> {
   const stored = await storeGet(supabase, "METAAPI_TOKEN");
   if (stored) return stored;
   return Deno.env.get("METAAPI_TOKEN")?.trim() ?? "";
 }
 
-/**
- * Optional mirror to the project's Edge Function secrets via the Supabase
- * Management API. Only runs when a real PAT (SUPABASE_ACCESS_TOKEN) is set as
- * an env secret; otherwise it is skipped silently — the DB store above is
- * authoritative, so live trading works with no PAT at all.
- * The project ref is derived from SUPABASE_URL, which the runtime injects.
- */
 const MANAGEMENT_API = "https://api.supabase.com/v1/projects";
 
 function projectRefFromEnv(): string | null {
@@ -239,21 +165,15 @@ function projectRefFromEnv(): string | null {
   }
 }
 
+/** Optional mirror to the project's Edge Function secrets (best-effort). */
 async function managementApiSecretWrite(
   method: "POST" | "DELETE",
   payload: unknown,
 ): Promise<{ ok: boolean; error: string | null }> {
   const pat = Deno.env.get("SUPABASE_ACCESS_TOKEN")?.trim() ?? "";
-  if (!pat) {
-    return {
-      ok: true,
-      error: null,
-    };
-  }
+  if (!pat) return { ok: true, error: null };
   const ref = projectRefFromEnv();
-  if (!ref) {
-    return { ok: false, error: "Could not determine the project ref from SUPABASE_URL." };
-  }
+  if (!ref) return { ok: false, error: "Could not determine the project ref from SUPABASE_URL." };
   let res: Response;
   try {
     res = await fetchWithTimeout(`${MANAGEMENT_API}/${ref}/secrets`, {
@@ -275,7 +195,6 @@ async function managementApiSecretWrite(
   return { ok: true, error: null };
 }
 
-/** Minimal user shape we expose from `GET /users/current` (never the token). */
 interface MetaApiUser {
   email?: string;
   name?: string;
@@ -284,11 +203,7 @@ interface MetaApiUser {
   region?: string;
 }
 
-/**
- * Validate a MetaApi API token against the provisioning API. Returns
- * `ok:false` with a human-readable reason on rejection/network failure so the
- * security pass always surfaces the real cause instead of a generic error.
- */
+/** Validate a MetaApi token against the provisioning API. */
 async function validateMetaApiToken(token: string): Promise<{
   ok: boolean;
   status: number;
@@ -332,11 +247,7 @@ async function validateMetaApiToken(token: string): Promise<{
   };
 }
 
-/**
- * Fetch the MetaApi account list for a token and decode a human-readable
- * reason from the response. Never throws: a broken gateway, a rejected token,
- * or a non-JSON body all come back as `ok: false` with a specific `error`.
- */
+/** Fetch the account list under a token; never throws, decodes failures. */
 async function fetchAccountsFor(token: string): Promise<{
   ok: boolean;
   status: number;
@@ -366,7 +277,7 @@ async function fetchAccountsFor(token: string): Promise<{
   return { ok: true, status: res.status, list, error: null };
 }
 
-/** The MetaApi account object that matches this MT login + server + platform. */
+/** The MetaApi account matching this MT login + server + platform. */
 function findMetaApiAccount(
   list: Array<Record<string, unknown>>,
   login: string,
@@ -392,22 +303,9 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 
 // ---------------------------------------------------------------------------
 // Connection pacing — read cache + token check cache.
-//
-// Every live-refresh tick fires `summary`, `open-trades` and `closed-trades`
-// in parallel, robot cycles repeat that every few seconds, and (in per-user
-// token mode) every trading action live-validates the saved MetaApi token
-// against MetaApi. Left unpaced, that is many MetaApi round-trips per minute
-// per connection — the exact pattern that trips MetaApi's throttle AND makes
-// brokers see a constantly-logged-in cloud session (the kind of behaviour
-// that gets MT4/5 accounts flagged or restricted). So:
-//
-//   1. readCache serves `summary` / `open-trades` / `closed-trades` / `state`
-//      from a short-lived in-memory cache per connection (TTLs below), so the
-//      bridge makes ONE physical MetaApi fetch per kind per TTL regardless of
-//      how many parallel refreshes or cycles arrive. Writes invalidate it.
-//   2. token checks are cached per token (5 min on success, 90 s on failure)
-//      so the hot trading path costs no extra MetaApi round-trip. Security
-//      passes (activate/save/check) still validate fresh.
+// Refresh ticks + robot cycles would otherwise fire many MetaApi requests per
+// minute per connection (throttling, broker-side flags). TTLs below mean ONE
+// physical request per kind per TTL; writes invalidate readCache.
 // ---------------------------------------------------------------------------
 const READ_TTL_MS: Record<string, number> = {
   state: 8_000,
@@ -434,21 +332,16 @@ function readCachePut(connId: string, kind: string, data: unknown): void {
   readCache.set(`${connId}|${kind}`, { at: Date.now(), data });
 }
 
-/** Forget every cached MetaApi payload for a connection (called after a
- *  successful write so the mirror reflects the trade immediately). */
 function readCacheInvalidate(connId: string): void {
   const prefix = `${connId}|`;
   for (const key of [...readCache.keys()]) if (key.startsWith(prefix)) readCache.delete(key);
 }
 
 const tokenCheckCache = new Map<string, { ok: boolean; at: number }>();
-/** Successful token verifications are reusable for 5 min; failures only 90 s
- *  so a token the owner just fixed is picked up quickly. */
+/** Successful token verifications are reusable for 5 min; failures 90 s. */
 const TOKEN_CHECK_OK_TTL_MS = 5 * 60 * 1000;
 const TOKEN_CHECK_BAD_TTL_MS = 90 * 1000;
 
-/** validateMetaApiToken, paced: hot-path token checks hit MetaApi at most
- *  once per TTL per token instead of on every trading request. */
 async function validateMetaApiTokenCached(token: string): Promise<{ ok: boolean; error: string | null }> {
   const hit = tokenCheckCache.get(token);
   if (hit) {
@@ -461,37 +354,16 @@ async function validateMetaApiTokenCached(token: string): Promise<{ ok: boolean;
   return { ok: validation.ok, error: validation.error };
 }
 
-/**
- * In-flight provisioning lock. The Trading page fires `summary`, `open-trades`
- * and `closed-trades` in the same refresh tick, and several robot cycles can
- * overlap; without a lock a first-time account would be created in MetaApi
- * once per parallel call (five creates for one account). The lock makes every
- * waiter share the SAME provisioning promise, so exactly one MetaApi
- * create/deploy happens per connection; the others just await the result.
- */
+/** In-flight provisioning lock: one create/deploy per connection at a time. */
 const provisionLocks = new Map<
   string,
   Promise<{ ok: boolean; state: string | null; accountId: string | null; error: string | null }>
 >();
 
 /**
- * AUTO-CONNECT / AUTO-FIX engine: make sure `login@server` exists in MetaApi
- * and is deployed, creating it first if needed (same payload the old explicit
- * "provision" action used — cloud account + deploy on the provisioning host).
- *
- * Returns:
- *   { ok: true,  state: "DEPLOYED" }                    -> ready to trade
- *   { ok: true,  state: "DEPLOYING" | "UNDEPLOYED" ...} -> give it a moment,
- *                                                          callers return the
- *                                                          "deploying" code so
- *                                                          clients auto-poll.
- *   { ok: false, error }                                -> MetaApi's own reason
- *                                                          (server unsupported,
- *                                                          quota, …) surfaced
- *                                                          verbatim.
- *
- * Runs once per connection at a time (in-flight dedupe), and polls a freshly
- * deployed account briefly so the first trading attempt usually lands.
+ * AUTO-CONNECT engine: make sure `login@server` exists in MetaApi and deploy
+ * it, creating it if missing. Returns DEPLOYED when ready, or the MetaApi
+ * reason on failure. Polls a fresh deployment briefly (~20-60s typical).
  */
 async function ensureMetaAccountDeployed(args: {
   metaHeaders: Record<string, string>;
@@ -517,9 +389,6 @@ async function ensureMetaAccountDeployed(args: {
     let meta = findMetaApiAccount(list.list, login, server, platform);
 
     if (!meta) {
-      // Not in the cloud yet -> create it ("auto-generate & inject from the free
-      // provider"). Only real account credentials are sent; the inputs mirror the
-      // explicit `provision` / `metaapi-activate` payloads exactly.
       const accountPayload: Record<string, unknown> = {
         name: `Forex Toolkit ${platform.toUpperCase()} ${login}`,
         type: conn.account_type === "live" ? "live" : "demo",
@@ -555,18 +424,14 @@ async function ensureMetaAccountDeployed(args: {
       const deploy = await deployRes.json().catch(() => ({})) as { error?: string; message?: string };
       if (!deployRes.ok) {
         const msg = deploy.error ?? deploy.message ?? `MetaApi could not deploy this account (HTTP ${deployRes.status}).`;
-        // "already deploying / already deployed" race is not a failure.
         if (/already deployed|in the process of deployment|deploying/i.test(msg)) {
-          return { ok: true, state: meta.state === "DEPLOYING" ? meta.state : "DEPLOYING", accountId: meta.id, error: null };
+          return { ok: true, state: "DEPLOYING", accountId: meta.id, error: null };
         }
         return { ok: false, state: null, accountId: meta.id, error: msg };
       }
       meta = { ...meta, state: "DEPLOYING" };
     }
 
-    // A fresh deployment takes ~20-60s to be reachable. Poll briefly (bounded,
-    // best-effort) so the calling action usually succeeds on the first attempt
-    // instead of bouncing through the "deploying" code a few times.
     let state = meta.state ?? "";
     const HEAD = /^DEPLOYED$/;
     if (!HEAD.test(state)) {
@@ -596,7 +461,6 @@ async function ensureMetaAccountDeployed(args: {
   }
 }
 
-/** Shape of the loaded broker_connections row (credentials + MetaApi state). */
 interface MtConnection {
   id: string;
   api_key: string | null;
@@ -615,14 +479,7 @@ interface MtConnection {
   metaapi_active_at: string | null;
 }
 
-/**
- * Notify the admins that a user's own MetaApi token failed and the bridge
- * automatically switched to the platform-wide METAAPI_TOKEN secret so the
- * robot kept trading without a user-visible error. Broadcasts are
- * `user_id = null`, which the notifications policy shows to admins only.
- * Deduplicated: one row per user per 24h, so a broken token never spams the
- * admin feed. Best-effort — a notification hiccup must never fail a trade.
- */
+/** Notify admins (once per user per 24h) of an automatic token fallback. */
 async function notifyMetaFallback(
   supabase: any,
   userId: string,
@@ -639,7 +496,7 @@ async function notifyMetaFallback(
       .eq("title", "MetaApi token fallback")
       .ilike("body", `%${userId}%`)
       .gte("created_at", since);
-    if (count && count > 0) return; // already reported this window
+    if (count && count > 0) return;
     await supabase.from("notifications").insert({
       user_id: null,
       type: "warning",
@@ -648,7 +505,7 @@ async function notifyMetaFallback(
       link: "/admin",
     });
   } catch {
-    /* notification is best-effort — never break a trade over it */
+    /* best-effort */
   }
 }
 
@@ -665,7 +522,7 @@ Deno.serve(async (req: Request) => {
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? Deno.env.get("SUPABASE_ANON_KEY") ?? "";
   const supabase = createClient(supabaseUrl, serviceKey);
 
-  // Verify the caller's JWT so only signed-in users can reach their own account.
+  // Verify the caller's JWT so only signed-in users can reach their account.
   const { data: { user }, error: authError } = await supabase.auth.getUser(token);
   if (authError || !user) return json({ ok: false, error: "Invalid session." }, 401);
 
@@ -677,19 +534,11 @@ Deno.serve(async (req: Request) => {
       body = (await req.json()) as Record<string, unknown>;
       if (body?.action) action = String(body.action);
     } catch {
-      /* body is optional for GET-style actions */
+      /* body optional for GET-style actions */
     }
   }
 
   // ---- Admin-only bridge configuration (no broker connection required) ----
-  //   metaapi-config     -> read the current token mode + whether the general
-  //                         METAAPI_TOKEN secret is set (masked only).
-  //   metaapi-mode-set   -> switch between per-user tokens and the general token.
-  //   metaapi-token-set  -> replace the general METAAPI_TOKEN secret (Management
-  //                         API) and validate it live against MetaApi.
-  //   metaapi-token-clear-> remove the general METAAPI_TOKEN secret.
-  // All four are server-authoritative: the caller must be an admin in `profiles`,
-  // and the raw token is only ever masked in responses — never stored in the DB.
   if (action === "metaapi-config" || action === "metaapi-mode-set" ||
       action === "metaapi-token-set" || action === "metaapi-token-clear") {
     const admin = await isAdmin(supabase, user.id);
@@ -697,28 +546,18 @@ Deno.serve(async (req: Request) => {
     const tokenMode = await loadMetaApiTokenMode(supabase);
     const platformSecret = await loadPlatformSecret(supabase);
     if (action === "metaapi-config") {
-      return json({
-        ok: true,
-        mode: tokenMode,
-        generalTokenConfigured: !!platformSecret,
-        generalTokenMasked: mask(platformSecret) ?? null,
-      });
+      return json({ ok: true, mode: tokenMode, generalTokenConfigured: !!platformSecret, generalTokenMasked: mask(platformSecret) ?? null });
     }
     if (action === "metaapi-token-set") {
       const newToken = String(body.token ?? "").trim();
       if (newToken.length < 20) {
-        return json({ ok: false, error: "That doesn't look like a MetaApi API token (it should be at least 20 characters, from metaapi.cloud)." }, 400);
+        return json({ ok: false, error: "That doesn't look like a MetaApi token (should be at least 20 characters)." }, 400);
       }
-      // Primary: secure app store — always works, authorized by the admin's
-      // signed-in session (no Personal Access Token required).
       const dbErr = await storeSet(supabase, "METAAPI_TOKEN", newToken);
       if (dbErr) return json({ ok: false, error: `Could not store the MetaApi token: ${dbErr}` }, 500);
-      // Optional mirror to Edge Function secrets when a PAT is configured.
       let mirrorNote = "";
       const mirror = await managementApiSecretWrite("POST", [{ name: "METAAPI_TOKEN", value: newToken }]);
       if (!mirror.ok) mirrorNote = ` (platform-secret mirror skipped: ${mirror.error})`;
-      // Validate the saved token live so a typo'd or revoked token is caught
-      // the moment the admin saves it (it is the live secret either way).
       const validation = await validateMetaApiToken(newToken);
       return json({
         ok: true,
@@ -727,20 +566,14 @@ Deno.serve(async (req: Request) => {
         generalTokenMasked: mask(newToken) ?? null,
         valid: validation.ok,
         note: validation.ok
-          ? `General MetaApi token saved ✓ — MetaApi accepted it${validation.user?.email ? ` (${validation.user.email})` : ""}. The bridge now trades through this token in general mode.${mirrorNote}`
+          ? `General MetaApi token saved — MetaApi accepted it${validation.user?.email ? ` (${validation.user.email})` : ""}. The bridge now trades through this token in general mode.${mirrorNote}`
           : `Token saved, but MetaApi rejected it: ${validation.error} — live trading with it will fail the security pass. Save the correct token or clear this one.${mirrorNote}`,
       });
     }
     if (action === "metaapi-token-clear") {
       await supabase.from("app_secrets").delete().eq("key", "METAAPI_TOKEN");
-      await managementApiSecretWrite("DELETE", ["METAAPI_TOKEN"]); // best-effort mirror
-      return json({
-        ok: true,
-        mode: tokenMode,
-        generalTokenConfigured: false,
-        generalTokenMasked: null,
-        note: "General MetaApi token removed — the platform token is cleared. Live trading via the general token is disabled until a new one is saved.",
-      });
+      await managementApiSecretWrite("DELETE", ["METAAPI_TOKEN"]);
+      return json({ ok: true, mode: tokenMode, generalTokenConfigured: false, generalTokenMasked: null, note: "General MetaApi token removed — the platform token is cleared." });
     }
     const nextMode = String(body.mode ?? "").trim();
     if (nextMode !== "user" && nextMode !== "general") {
@@ -752,22 +585,12 @@ Deno.serve(async (req: Request) => {
         { key: "metaapi_token_mode", value: { mode: nextMode }, updated_at: new Date().toISOString() },
         { onConflict: "key" },
       );
-    if (upsertErr) {
-      return json({ ok: false, error: `Could not save the MetaApi token mode: ${upsertErr.message}` }, 500);
-    }
+    if (upsertErr) return json({ ok: false, error: `Could not save the MetaApi token mode: ${upsertErr.message}` }, 500);
     return json({ ok: true, mode: nextMode, generalTokenConfigured: !!platformSecret, generalTokenMasked: mask(platformSecret) ?? null });
   }
 
-  // Load the user's MetaTrader connection (platform = mt4 | mt5). A connection
-  // is addressed by, in priority order:
-  //   connection_id  -> the exact broker_connections row (uuid)
-  //   broker_id      -> the broker row (uuid) this connection belongs to
-  //   robot_number   -> the robot slot (default 1)
-  // Addressing by id lets a user connect SEVERAL MT4/5 brokers side by side
-  // (FBS MT4, FXGT MT5, …) without them colliding on a shared robot slot: each
-  // broker card / live mode sends the id of its own connection. The robot-slot
-  // fallback keeps the historical "first by slot" behaviour, ordered by
-  // created_at so a duplicate slot never 500s.
+  // Load the user's MetaTrader connection (platform = mt4 | mt5), addressed by
+  // connection_id → broker_id → robot_number (in priority order).
   const connectionId = String(body.connection_id ?? url.searchParams.get("connection_id") ?? "").trim();
   const brokerId = String(body.broker_id ?? url.searchParams.get("broker_id") ?? "").trim();
   const robotNumber = Number(body.robot_number ?? url.searchParams.get("robot_number") ?? 1);
@@ -787,42 +610,25 @@ Deno.serve(async (req: Request) => {
   const { data: conn, error: connErr } = await connQuery;
   if (connErr) return json({ ok: false, error: "Could not load your broker connection." }, 500);
   if (!conn?.api_key || !conn.account_id || !conn.server) {
-    return json({
-      ok: false,
-      error: "No MetaTrader connection saved. Add your MT4/MT5 account login, password and server on the Brokers page first.",
-    }, 400);
+    return json({ ok: false, error: "No MetaTrader connection saved. Add your MT4/MT5 account login, password and server on the Brokers page first." }, 400);
   }
 
   const platform = conn.platform as "mt4" | "mt5";
   const login = String(conn.account_id);
   const server = String(conn.server);
-  // api_key holds the MT account password, stored encrypted at rest
-  // (guard_broker_cred_encrypt trigger). Decrypt server-side with the
-  // service-role-only RPC before provisioning.
+  // api_key holds the MT password, encrypted at rest; decrypt server-side.
   const { data: password, error: decryptErr } = await supabase.rpc("decrypt_broker_cred", { p_enc: conn.api_key });
   if (decryptErr || !password) {
     return json({ ok: false, error: "Could not read your saved MetaTrader credentials." }, 500);
   }
 
   /**
-   * Resolve which MetaApi token this connection trades through, honoring the
-   * admin setting `settings.metaapi_token_mode`:
-   *   - 'user'    (default) — the user's own saved token first, then the
-   *                           platform-wide METAAPI_TOKEN secret;
-   *   - 'general'           — ONLY the platform-wide METAAPI_TOKEN secret; the
-   *                           user's saved token (if any) is ignored.
-   * The user's token is decrypted server-side; neither token ever reaches the
-   * browser.
-   *
-   * AUTOMATIC RUNTIME FALLBACK: for robot/trading actions the user's own token
-   * is live-validated and used when MetaApi accepts it. When MetaApi rejects
-   * it (revoked / invalid / throttled / unreachable) the bridge silently
-   * switches to the platform-wide METAAPI_TOKEN secret so the robot keeps
-   * running — the user is never shown an error, and the admins get ONE
-   * notification per user per day instead. Diagnostic actions (metaapi-status,
-   * metaapi-check) resolve honestly so the Brokers page shows the true state
-   * of the USER's token; metaapi-save / metaapi-remove never hard-fail on a
-   * broken saved token (the user must always be able to replace or remove it).
+   * Token resolution. The user's saved token is decrypted server-side here.
+   * AUTOMATIC RUNTIME FALLBACK: trading/robot actions live-validate the user's
+   * token and silently fall back to the platform token when MetaApi rejects
+   * it (revoked/invalid/throttled/unreachable) so the robot keeps running —
+   * admins get ONE notification per user per day instead. Diagnostics report
+   * honestly; metaapi-save/remove never hard-fail on a broken saved token.
    */
   const tokenMode = await loadMetaApiTokenMode(supabase);
   const platformSecret = await loadPlatformSecret(supabase);
@@ -835,44 +641,40 @@ Deno.serve(async (req: Request) => {
     userToken = dec ? String(dec).trim() : null;
   }
 
-  /** Actions that must report the truth about the USER's own token (no silent
-   *  switch) and actions that never need the resolved token at all. */
   const tokenDiagnosticAction = action === "metaapi-status" || action === "metaapi-check";
   const tokenFreeAction = action === "metaapi-save" || action === "metaapi-remove";
 
   let metaApiToken: string | null;
-  let tokenSource: MetaTokenSource | null;
-  /** Set when the user's own token failed live validation and the bridge moved
-   *  to the platform token (or found nothing) — drives the admin notification. */
+  let tokenSource: "user" | "general" | null;
   let tokenFallbackReason: string | null = null;
 
   if (tokenMode === "general") {
     metaApiToken = platformSecret || null;
     tokenSource = platformSecret ? "general" : null;
   } else if (tokenDiagnosticAction || !userToken || tokenFreeAction) {
-    // Classic resolution: the user's own token first, platform token as the
-    // pre-set fallback. No live probing — token-free actions must never be
-    // blocked by a broken saved token, and diagnostics must show the truth.
     metaApiToken = userToken ?? (platformSecret || null);
     tokenSource = userToken ? "user" : platformSecret ? "general" : null;
   } else {
-    // Robot/trading action with a user's own token: try it FIRST, and when
-    // MetaApi rejects it switch automatically to the platform token so the
-    // robot keeps working — the user sees no error, admins get notified.
-    const resolved = await resolveTokenWithFallback({
-      mode: "user",
-      userToken,
-      platformToken: platformSecret,
-      check: async (candidate) => {
-        // Paced check (5 min success / 90 s failure TTL) — the hot robot path
-        // must not pay a MetaApi round-trip for every single trading action.
-        const verdict = await validateMetaApiTokenCached(candidate);
-        return { ok: verdict.ok, reason: verdict.error ?? undefined };
-      },
-    });
-    metaApiToken = resolved.token;
-    tokenSource = resolved.source;
-    tokenFallbackReason = resolved.fallbackReason;
+    // Robot/trading path with a user's own token: try it first, fall back.
+    const candidates: Array<{ token: string; source: "user" | "general" }> =
+      [{ token: userToken, source: "user" }, ...(platformSecret ? [{ token: platformSecret, source: "general" } as const] : [])];
+    let firstFailure: string | null = null;
+    for (const candidate of candidates) {
+      const verdict = await validateMetaApiTokenCached(candidate.token);
+      if (verdict.ok) {
+        metaApiToken = candidate.token;
+        tokenSource = candidate.source;
+        tokenFallbackReason = firstFailure;
+        break;
+      }
+      if (!firstFailure) firstFailure = `your saved MetaApi token: ${verdict.error ?? "rejected by MetaApi"}`;
+      metaApiToken = null;
+    }
+    if (!metaApiToken && platformSecret) {
+      metaApiToken = platformSecret;
+      tokenSource = "general";
+      tokenFallbackReason = firstFailure;
+    }
   }
 
   if (!metaApiToken && !tokenFreeAction) {
@@ -886,21 +688,13 @@ Deno.serve(async (req: Request) => {
   }
   const metaHeaders = { "auth-token": metaApiToken as string, "Content-Type": "application/json" };
 
-  // The user HAS a saved token but the bridge silently moved to the platform
-  // token so the robot could keep trading: notify the admins (one per day),
-  // never surface an error to the user.
   if (tokenFallbackReason && userToken && !tokenFreeAction) {
     await notifyMetaFallback(supabase, user.id, (user as { email?: string }).email, tokenFallbackReason);
   }
 
   /**
-   * Run the SECURITY PASS for a token against this connection's MT account:
-   *  1. token validity — `GET /users/current` must accept it;
-   *  2. account control — is the connected MT account (login/server/platform)
-   *     present under that token's MetaApi user?
-   * A valid token always passes; `accountFound` tells activation whether it can
-   * skip provisioning. A token that cannot even be validated fails with the
-   * exact MetaApi reason.
+   * SECURITY PASS: validate the token; report whether it controls the MT
+   * account (and its deployment state).
    */
   async function securityPass(apiToken: string): Promise<{
     verdict: "passed" | "failed";
@@ -912,30 +706,16 @@ Deno.serve(async (req: Request) => {
   }> {
     const validation = await validateMetaApiToken(apiToken);
     if (!validation.ok) {
-      return {
-        verdict: "failed",
-        accountFound: false,
-        state: null,
-        connectionStatus: null,
-        user: null,
-        note: validation.error ?? "MetaApi could not validate this token.",
-      };
+      return { verdict: "failed", accountFound: false, state: null, connectionStatus: null, user: null, note: validation.error ?? "MetaApi could not validate this token." };
     }
     const accounts = await fetchAccountsFor(apiToken);
     if (!accounts.ok) {
-      return {
-        verdict: "failed",
-        accountFound: false,
-        state: null,
-        connectionStatus: null,
-        user: validation.user,
-        note: accounts.error ?? "MetaApi could not list your accounts.",
-      };
+      return { verdict: "failed", accountFound: false, state: null, connectionStatus: null, user: validation.user, note: accounts.error ?? "MetaApi could not list your accounts." };
     }
     const match = findMetaApiAccount(accounts.list, login, server, platform);
     const account = match
       ? `It controls MT account #${login} on ${server}.`
-      : `MT account #${login} isn't in this MetaApi user's cloud yet — activating will auto-provision it there (free MetaApi provider).`;
+      : `MT account #${login} isn't in this MetaApi user's cloud yet — activating will auto-provision it there.`;
     return {
       verdict: "passed",
       accountFound: !!match,
@@ -946,7 +726,7 @@ Deno.serve(async (req: Request) => {
     };
   }
 
-  /** Persist the security-pass result + optional new token onto the connection. */
+  /** Persist the security-pass result (and optional new token) on the row. */
   async function persistMetaApiState(fields: Record<string, unknown>): Promise<{ error: string | null }> {
     const { error } = await supabase
       .from("broker_connections")
@@ -956,7 +736,6 @@ Deno.serve(async (req: Request) => {
     return { error: error?.message ?? null };
   }
 
-  /** `metaapi-status` / `metaapi-save` / `metaapi-check` shared response shape. */
   function statusPayload(extra: Record<string, unknown> = {}) {
     return {
       ok: true,
@@ -977,28 +756,15 @@ Deno.serve(async (req: Request) => {
 
   try {
     if (action === "verify") {
-      // One request to MetaApi: the account list is fetched once and matched
-      // locally. On failure, MetaApi's own reason is surfaced to the user
-      // instead of a generic "check the network" message.
       const accounts = await fetchAccountsFor(metaApiToken);
       if (!accounts.ok) {
         return json({ ok: false, error: accounts.error ?? "Could not reach MetaApi. Check the network and try again." }, 502);
       }
       const meta = findMetaApiAccount(accounts.list, login, server, platform);
-      return json({
-        ok: true,
-        provisioned: !!meta,
-        state: meta?.state ?? null,
-        connectionStatus: meta?.connectionStatus ?? null,
-        platform,
-        login,
-        server,
-      });
+      return json({ ok: true, provisioned: !!meta, state: meta?.state ?? null, connectionStatus: meta?.connectionStatus ?? null, platform, login, server });
     }
 
     if (action === "metaapi-status") {
-      // Lightweight local read — no MetaApi call. `accountFound` is best-effort
-      // when a token is configured (a MetaApi hiccup must not block the panel).
       let accountFound: boolean | null = null;
       let state: string | null = null;
       let connectionStatus: string | null = null;
@@ -1011,23 +777,19 @@ Deno.serve(async (req: Request) => {
           connectionStatus = meta?.connectionStatus ?? null;
         }
       } catch {
-        /* keep the panel usable when MetaApi is down */
+        /* keep the panel usable */
       }
       return json(statusPayload({ accountFound, state, connectionStatus }));
     }
 
     if (action === "metaapi-save") {
       if (tokenMode === "general") {
-        return json({
-          ok: false,
-          error: "The platform is set to use the general MetaApi token (admin setting) — per-user tokens are disabled. Ask an admin to switch the setting back to per-user tokens if you want to add your own.",
-        }, 400);
+        return json({ ok: false, error: "The platform is set to use the general MetaApi token (admin setting) — per-user tokens are disabled. Ask an admin to switch back to per-user if you want to add your own." }, 400);
       }
       const newToken = String(body.token ?? "").trim();
       if (newToken.length < 20) {
-        return json({ ok: false, error: "That doesn't look like a MetaApi API token (it should be at least 20 characters, from metaapi.cloud)." }, 400);
+        return json({ ok: false, error: "That doesn't look like a MetaApi API token (should be at least 20 characters)." }, 400);
       }
-      // Momentarily mark the check as in-flight, then run the security pass.
       await persistMetaApiState({ metaapi_security: "checking" });
       conn.metaapi_security = "checking";
       const pass = await securityPass(newToken);
@@ -1042,25 +804,8 @@ Deno.serve(async (req: Request) => {
         metaapi_active: false,
         metaapi_active_at: null,
       });
-      if (saveErr.error) return json({ ok: false, error: `Could not save your MetaApi token: ${saveErr.error}` }, 500);
-      Object.assign(conn, {
-        metaapi_token: newToken,
-        metaapi_token_masked: mask(newToken),
-        metaapi_security: pass.verdict,
-        metaapi_security_note: pass.note,
-        metaapi_token_checked_at: checkedAt,
-        metaapi_meta: pass.user,
-        metaapi_active: false,
-        metaapi_active_at: null,
-      });
-      return json(statusPayload({
-        security: pass.verdict,
-        securityNote: pass.note,
-        checkedAt,
-        accountFound: pass.accountFound,
-        state: pass.state,
-        connectionStatus: pass.connectionStatus,
-      }));
+      if (saveErr.error) return json({ ok: false, error: `Could not save the MetaApi token: ${saveErr.error}` }, 500);
+      return json(statusPayload({ security: pass.verdict, securityNote: pass.note, checkedAt, accountFound: pass.accountFound, state: pass.state, connectionStatus: pass.connectionStatus }));
     }
 
     if (action === "metaapi-check") {
@@ -1075,31 +820,14 @@ Deno.serve(async (req: Request) => {
         metaapi_meta: pass.user as unknown as Record<string, unknown> | null,
       });
       if (saveErr.error) return json({ ok: false, error: `Could not save the check result: ${saveErr.error}` }, 500);
-      Object.assign(conn, {
-        metaapi_security: pass.verdict,
-        metaapi_security_note: pass.note,
-        metaapi_token_checked_at: checkedAt,
-        metaapi_meta: pass.user,
-      });
-      return json(statusPayload({
-        security: pass.verdict,
-        securityNote: pass.note,
-        checkedAt,
-        accountFound: pass.accountFound,
-        state: pass.state,
-        connectionStatus: pass.connectionStatus,
-      }));
+      return json(statusPayload({ security: pass.verdict, securityNote: pass.note, checkedAt, accountFound: pass.accountFound, state: pass.state, connectionStatus: pass.connectionStatus }));
     }
 
     if (action === "metaapi-activate") {
-      // The security pass gates activation: re-run it now rather than trusting
-      // a stored verdict, so a revoked token can never keep a connection active.
       const pass = await securityPass(metaApiToken);
       if (pass.verdict !== "passed") {
         return json({ ok: false, error: pass.note, security: "failed", securityNote: pass.note }, 400);
       }
-
-      // Already provisioned + deployed → just flip the connection active.
       if (pass.accountFound && pass.state === "DEPLOYED") {
         const saveErr = await persistMetaApiState({
           metaapi_security: "passed",
@@ -1112,10 +840,6 @@ Deno.serve(async (req: Request) => {
         if (saveErr.error) return json({ ok: false, error: `Could not activate the connection: ${saveErr.error}` }, 500);
         return json({ ok: true, note: "MetaApi security pass complete — account already deployed and live trading is active." });
       }
-
-      // Provision through the AUTO-CONNECT engine (same code path the first
-      // live-trading attempt uses, with in-flight dedupe so parallel clicks
-      // create the account exactly once).
       const provisioned = await ensureMetaAccountDeployed({
         metaHeaders,
         apiToken: metaApiToken,
@@ -1130,7 +854,6 @@ Deno.serve(async (req: Request) => {
       if (!provisioned.ok) {
         return json({ ok: false, code: "provision_failed", error: provisioned.error ?? "MetaApi could not provision this account." }, 400);
       }
-
       const now = new Date().toISOString();
       const saveErr = await persistMetaApiState({
         metaapi_security: "passed",
@@ -1147,16 +870,13 @@ Deno.serve(async (req: Request) => {
         state: provisioned.state,
         note: provisioned.state === "DEPLOYED"
           ? "MetaApi security pass complete — account deployed and live trading is active."
-          : "MetaApi security pass complete — account provisioned and deploying on the free MetaApi cloud. Live trading activates in about a minute.",
+          : "MetaApi security pass complete — account provisioned and deploying. Live trading activates in about a minute.",
       });
     }
 
     if (action === "metaapi-remove") {
       if (tokenMode === "general") {
-        return json({
-          ok: false,
-          error: "The platform is set to use the general MetaApi token — per-user tokens are disabled, so there is nothing to remove.",
-        }, 400);
+        return json({ ok: false, error: "The platform is set to use the general MetaApi token — per-user tokens are disabled, so there is nothing to remove." }, 400);
       }
       const saveErr = await persistMetaApiState({
         metaapi_token: null,
@@ -1173,9 +893,6 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "provision") {
-      // Create the MT account in MetaApi, then deploy it to their cloud
-      // (same AUTO-CONNECT engine the first live-trading attempt uses, so
-      // manual and automatic provisioning always agree).
       const provisioned = await ensureMetaAccountDeployed({
         metaHeaders,
         apiToken: metaApiToken,
@@ -1208,13 +925,9 @@ Deno.serve(async (req: Request) => {
     }
     let meta = findMetaApiAccount(accountsFor.list, login, server, platform);
     if (!meta) {
-      // AUTO-CONNECT / AUTO-FIX: the account isn't in the MetaApi cloud yet.
-      // MetaTrader has no public REST API, so this bridge "create + deploy"
-      // step is the ONLY way to reach the account — running it on demand means
-      // "save your MT credentials and the app connects" with no manual
-      // activation step. In-flight dedupe keeps concurrent refresh calls from
-      // racing multiple creates for the same connection.
-      console.info(`broker-mt: auto-connecting ${platform} account #${login} on ${server} for user ${user.id.slice(0, 8)}`);
+      // AUTO-CONNECT / AUTO-FIX: create + deploy on the fly so "save your MT
+      // credentials and the app connects" works with no manual activation.
+      console.info(`broker-mt: auto-connecting ${platform} account #${login} on ${server}`);
       const provisioned = await ensureMetaAccountDeployed({
         metaHeaders,
         apiToken: metaApiToken,
@@ -1228,12 +941,7 @@ Deno.serve(async (req: Request) => {
         return json({ ok: false, code: "provision_failed", error: provisioned.error ?? "MetaApi could not provision this account." }, 400);
       }
       if (provisioned.state !== "DEPLOYED") {
-        return json({
-          ok: false,
-          code: "account_deploying",
-          state: provisioned.state,
-          error: "MetaTrader account is connecting for the first time (deploying on the MetaApi cloud). The app reconnects automatically in a few seconds.",
-        }, 503);
+        return json({ ok: false, code: "account_deploying", state: provisioned.state, error: "MetaTrader account is connecting for the first time (deploying on the MetaApi cloud). The app reconnects automatically in a few seconds." }, 503);
       }
       accountsFor = await fetchAccountsFor(metaApiToken);
       if (!accountsFor.ok) {
@@ -1257,17 +965,11 @@ Deno.serve(async (req: Request) => {
       if (!res.ok) return json({ ok: false, error: data.error ?? data.message ?? "Could not read MetaApi account state." }, 502);
       const payload = { status: data.status ?? "unknown", connectedToBroker: !!data.connectedToBroker };
       readCachePut(conn.id, "state", payload);
-      return json({
-        ok: true,
-        ...payload,
-        connectionStatus: meta.connectionStatus ?? null,
-      });
+      return json({ ok: true, ...payload, connectionStatus: meta.connectionStatus ?? null });
     }
 
     if (action === "summary") {
-      const cachedSummary = readCacheHit<{
-        account: Record<string, unknown>;
-      }>(conn.id, "summary");
+      const cachedSummary = readCacheHit<{ account: Record<string, unknown> }>(conn.id, "summary");
       if (cachedSummary) return json({ ok: true, account: cachedSummary.account, cached: true });
       const res = await fetchWithTimeout(`${accountUrl}/account-information`, { headers: metaHeaders });
       const data = (await res.json().catch(() => ({}))) as {
@@ -1307,8 +1009,6 @@ Deno.serve(async (req: Request) => {
     if (action === "closed-trades") {
       const cachedHistory = readCacheHit<{ trades: Array<Record<string, unknown>> }>(conn.id, "closed-trades");
       if (cachedHistory) return json({ ok: true, trades: cachedHistory.trades, cached: true });
-      // 14 days by default — plenty for the journal and the daily-loss guard,
-      // and a fraction of the payload of a full quarter, so refreshes stay snappy.
       const days = Math.min(90, Math.max(1, Number(body.days ?? 14)));
       const end = Date.now();
       const start = end - days * 24 * 60 * 60 * 1000;
@@ -1320,7 +1020,6 @@ Deno.serve(async (req: Request) => {
       if (!res.ok || !data.historyOrders) {
         return json({ ok: false, error: data.error ?? data.message ?? "MetaApi could not load trade history." }, 502);
       }
-      // Only fully filled orders represent real closed trades.
       const filled = data.historyOrders.filter((o) => String(o.state) === "ORDER_STATE_FILLED");
       const payload = { ok: true, trades: filled };
       readCachePut(conn.id, "closed-trades", payload);
@@ -1349,9 +1048,6 @@ Deno.serve(async (req: Request) => {
         return json({ ok: false, error: "A stop loss is required on every order." }, 400);
       }
       if (takeProfit > 0) {
-        // Side-consistency guard: a long's target must sit above its stop and a
-        // short's below it. An inverted pair would otherwise put real money at
-        // risk on a live MT account.
         const consistent = side === "long" ? takeProfit > stopLoss : takeProfit < stopLoss;
         if (!consistent) {
           return json({ ok: false, error: "Take-profit is on the wrong side of the stop loss." }, 400);
@@ -1367,12 +1063,10 @@ Deno.serve(async (req: Request) => {
       if (conn.account_type === "live" && liveGate.liveExecutionEnabled === false) {
         return json({ ok: false, error: "Live execution is currently disabled by the platform. Switch to a demo account." }, 400);
       }
-      // Current per-symbol exposure — served from the paced read cache when
-      // possible so the cap is enforced without an extra broker round-trip.
       let openForSymbol: number;
-      const cachedPositions = readCacheHit<{ positions: Array<{ symbol?: string }> }>(conn.id, "open-trades");
+      const cachedPositions = readCacheHit<{ positions: Array<{ symbol?: string }> }>(conn.id, "positions");
       if (cachedPositions) {
-        openForSymbol = (cachedPositions.positions ?? []).filter((p) => String(p.symbol).toUpperCase() === symbol).length;
+        openForSymbol = cachedPositions.filter((p) => String(p.symbol).toUpperCase() === symbol).length;
       } else {
         const posRes = await fetchWithTimeout(`${accountUrl}/positions`, { headers: metaHeaders });
         const posData = (await posRes.json().catch(() => ({}))) as { positions?: Array<{ symbol?: string }> };
@@ -1383,10 +1077,9 @@ Deno.serve(async (req: Request) => {
         return json({ ok: false, error: `Maximum ${risk.maxOpenPositions} open position(s) reached for ${symbol}. Close one first.` }, 400);
       }
 
-      // Daily-loss backstop: block NEW orders once the broker's own filled
-      // history shows today's realized loss has hit `maxDailyLossPct` of the
-      // current equity. Computed server-side from the venue (never from the
-      // client's mirror) and paced through the read cache.
+      // Daily-loss backstop: block new orders once today's realized loss on the
+      // broker's OWN filled history has hit `maxDailyLossPct` of current
+      // equity (computed server-side, never from the client mirror).
       if (risk.maxDailyLossPct > 0) {
         const cachedDay = readCacheHit<{ realizedToday: number; equity: number }>(conn.id, "daypnl");
         let realizedToday: number;
@@ -1410,11 +1103,7 @@ Deno.serve(async (req: Request) => {
         }
         const lossCap = equityNow > 0 ? (equityNow * risk.maxDailyLossPct) / 100 : 0;
         if (realizedToday <= -lossCap && lossCap > 0) {
-          return json({
-            ok: false,
-            code: "daily_loss_cap",
-            error: `Daily loss cap reached — the platform blocks new live orders after losing ${risk.maxDailyLossPct}% of the account in a day. The robot will resume tomorrow or when you adjust the setting.`,
-          }, 400);
+          return json({ ok: false, code: "daily_loss_cap", error: `Daily loss cap reached — the platform blocks new live orders after losing ${risk.maxDailyLossPct}% of the account in a day. The robot will resume tomorrow or when you adjust the setting.` }, 400);
         }
       }
 
@@ -1428,8 +1117,6 @@ Deno.serve(async (req: Request) => {
         const reason = data.error ?? data.message ?? `MetaApi rejected the order (code ${data.numericCode ?? "?"}).`;
         return json({ ok: false, error: reason }, 400);
       }
-      // The position just changed — drop every cached read so the next refresh
-      // reflects the new position without waiting out a TTL.
       readCacheInvalidate(conn.id);
       return json({ ok: true, orderId: data.id ?? null });
     }
@@ -1447,27 +1134,16 @@ Deno.serve(async (req: Request) => {
         const reason = data.error ?? data.message ?? `MetaApi could not close the position (code ${data.numericCode ?? "?"}).`;
         return json({ ok: false, error: reason }, 400);
       }
-      // The position just changed — drop every cached read so the next refresh
-      // reflects the close without waiting out a TTL.
       readCacheInvalidate(conn.id);
       return json({ ok: true, profit: toNumber(data.profit) || null });
     }
 
     return json({ ok: false, error: `Unknown action '${action}'.` }, 400);
   } catch (err) {
-    // Surface whatever actually went wrong when we know it — a failed fetch, a
-    // bad response body, or a bug in a handler — and only fall back to the
-    // generic "check the network" copy when there is no more specific reason.
     const detail = err instanceof Error ? err.message.trim() : "";
     if (/invalid peer certificate|UnknownIssuer|certificate has expired|self[- ]signed/i.test(detail)) {
-      return json({
-        ok: false,
-        error: "MetaApi's trading API is temporarily unreachable from the server (its certificate could not be verified). Your account and settings are safe — please try again in a few minutes.",
-      }, 502);
+      return json({ ok: false, error: "MetaApi's trading API is temporarily unreachable from the server (its certificate could not be verified). Your account and settings are safe — please try again in a few minutes." }, 502);
     }
-    return json({
-      ok: false,
-      error: detail ? `MetaApi request failed: ${detail}` : "Could not reach MetaApi. Check the network and try again.",
-    }, 502);
+    return json({ ok: false, error: detail ? `MetaApi request failed: ${detail}` : "Could not reach MetaApi. Check the network and try again." }, 502);
   }
 });
