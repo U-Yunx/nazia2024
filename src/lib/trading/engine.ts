@@ -155,12 +155,21 @@ export function markToMarket(
     const cur = rates[p.symbol]
     if (cur == null) continue
     let reason: CloseReason | null = null
-    if (p.side === 'long') {
-      if (cur <= p.stopPrice) reason = 'stop_loss'
-      else if (cur >= p.takeProfitPrice) reason = 'take_profit'
-    } else {
-      if (cur >= p.stopPrice) reason = 'stop_loss'
-      else if (cur <= p.takeProfitPrice) reason = 'take_profit'
+    // A stop hit always wins — nothing is allowed to hold a dying trade.
+    if (p.side === 'long' && cur <= p.stopPrice) reason = 'stop_loss'
+    else if (p.side === 'short' && cur >= p.stopPrice) reason = 'stop_loss'
+
+    // Per-trade money target: once this trade is worth $targetPerTradeUsd
+    // (0 = off) close it and bank the win. Checked before the price-based
+    // take-profit, so the $ rule can fire on a smaller favourable move.
+    if (!reason && state.risk.targetPerTradeUsd > 0) {
+      const pnl = pnlUsd(p.side, p.entryPrice, cur, p.units, p.symbol, rates)
+      if (pnl >= state.risk.targetPerTradeUsd) reason = 'target'
+    }
+
+    if (!reason) {
+      if (p.side === 'long' && cur >= p.takeProfitPrice) reason = 'take_profit'
+      else if (p.side === 'short' && cur <= p.takeProfitPrice) reason = 'take_profit'
     }
     if (reason) {
       const res = closePosition(next, p.id, { price: cur, reason, rates })

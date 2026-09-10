@@ -141,6 +141,51 @@ describe('markToMarket', () => {
     expect(closed).toHaveLength(1)
     expect(closed[0].closeReason).toBe('take_profit')
   })
+
+  it('does not close a trade below the per-trade money target', () => {
+    const acc = createAccount(10_000)
+    acc.risk.targetPerTradeUsd = 100
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
+    }, rates)
+    const { closed } = markToMarket(opened, { ...rates, 'EUR/USD': 1.102 })
+    expect(closed).toHaveLength(0)
+  })
+
+  it('closes a long when the per-trade money target is reached', () => {
+    const acc = createAccount(10_000)
+    acc.risk.targetPerTradeUsd = 2
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
+    }, rates)
+    const { closed } = markToMarket(opened, { ...rates, 'EUR/USD': 1.102 })
+    expect(closed).toHaveLength(1)
+    expect(closed[0].closeReason).toBe('target')
+    expect(closed[0].pnl).toBeCloseTo(2, 5)
+  })
+
+  it('closes a short when the per-trade money target is reached', () => {
+    const acc = createAccount(10_000)
+    acc.risk.targetPerTradeUsd = 2
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'short', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 5000,
+    }, rates)
+    const { closed } = markToMarket(opened, { ...rates, 'EUR/USD': 1.098 })
+    expect(closed).toHaveLength(1)
+    expect(closed[0].closeReason).toBe('target')
+  })
+
+  it('fires the money target before the price take-profit is reached', () => {
+    // Price TP is at 1.104 (40 pips); a $20 target is reached earlier at 1.102.
+    const acc = createAccount(10_000)
+    acc.risk.targetPerTradeUsd = 20
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 10_000,
+    }, rates)
+    const { closed } = markToMarket(opened, { ...rates, 'EUR/USD': 1.102 })
+    expect(closed).toHaveLength(1)
+    expect(closed[0].closeReason).toBe('target')
+  })
 })
 
 describe('applySignal', () => {

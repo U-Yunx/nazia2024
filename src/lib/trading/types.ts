@@ -10,7 +10,7 @@ export type Side = 'long' | 'short'
 
 export type PositionStatus = 'open' | 'closed'
 
-export type CloseReason = 'signal' | 'stop_loss' | 'take_profit' | 'manual' | 'risk' | 'robot_stop'
+export type CloseReason = 'signal' | 'stop_loss' | 'take_profit' | 'target' | 'manual' | 'risk' | 'robot_stop'
 
 export type BrokerMode = 'paper' | 'managed' | 'oanda' | 'mt'
 
@@ -67,7 +67,13 @@ export interface RiskConfig {
   defaultStopPips: number
   /** Take-profit distance as a multiple of the stop (risk:reward). */
   takeProfitRatio: number
-  /** Daily loss limit as % of starting balance — blocks new entries when hit. */
+  /**
+   * Per-trade profit target in USD: when an open trade's unrealized PnL reaches
+   * this amount the robot closes it and banks the win. 0 = off (only the
+   * price-based take-profit applies).
+   */
+  targetPerTradeUsd: number
+  /** Daily loss limit as % of starting equity — blocks new entries when hit. */
   maxDailyLossPct: number
   /** When true, the robot acts on strategy signals automatically. */
   autoTrade: boolean
@@ -96,6 +102,7 @@ export const DEFAULT_RISK: RiskConfig = {
   maxOpenPositions: 5,
   defaultStopPips: 20,
   takeProfitRatio: 2,
+  targetPerTradeUsd: 0,
   maxDailyLossPct: 5,
   autoTrade: false,
   trailingStop: true,
