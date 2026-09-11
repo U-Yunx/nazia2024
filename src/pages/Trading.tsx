@@ -118,7 +118,7 @@ function LiveSummary({ fn, label, connectionId }: { fn: 'broker-oanda' | 'broker
 
   useEffect(() => {
     let active = true
-    void (async () => {
+    const load = async () => {
       const { data, error } = await invokeEdge<{
         ok?: boolean
         account?: {
@@ -146,9 +146,16 @@ function LiveSummary({ fn, label, connectionId }: { fn: 'broker-oanda' | 'broker
         nav: Number(acc.NAV ?? acc.equity ?? acc.balance ?? 0),
         openTrades: Number(acc.openTradeCount ?? acc.openPositions ?? 0),
       })
-    })()
+    }
+    void load()
+    // Keep polling the broker while the page is open — balance / equity / open
+    // positions keep moving after the robot stops (SL/TP and broker-side
+    // closes settle), so the summary must keep up instead of freezing at the
+    // first fetch.
+    const id = setInterval(() => void load(), 10_000)
     return () => {
       active = false
+      clearInterval(id)
     }
   }, [fn, label, connectionId])
 
@@ -381,6 +388,14 @@ export function Trading() {
   // session P&L (a plain ref wouldn't trigger re-renders).
   const sessionStartRef = useRef<number | null>(null)
   const [sessionStart, setSessionStart] = useState<number | null>(null)
+  // The last finished session's P&L, crystallized when the robot stops so the
+  // trading-progress panel keeps showing the result (instead of wiping it) and
+  // keeps accruing while remaining SL/TP closes settle after the stop.
+  const [lastSessionPnl, setLastSessionPnl] = useState<number | null>(null)
+  // The equity baseline kept while trading is stopped so the crystallized
+  // session P&L keeps settling to the final figure as remaining SL/TP closes
+  // land after the robot stops (cleared when the account is fully flat).
+  const settledBaselineRef = useRef<number | null>(null)
   // Latest rates mirrored for the auto-run timer, which lives in an interval
   // closure and must not re-create itself on every quote tick.
   const ratesRef = useRef<RatesMap>({})
@@ -440,6 +455,8 @@ export function Trading() {
       clearActivity(user?.id)
       setRobotLog([])
       setLastRun(null)
+      setLastSessionPnl(null)
+      settledBaselineRef.current = null
       reset(initialBalance)
     },
     [reset, user?.id],
@@ -478,21 +495,26 @@ export function Trading() {
   const autoTrade = (account?.risk.autoTrade ?? false) && canRunRobot
 
   // Values backing the "Trading progress" panel: auto-run countdown and
-  // session P&L vs the max-profit / max-loss limits.
+  // session P&L vs the max-profit / max-loss limits. While the robot runs the
+  // panel shows the live session P&L; after it stops it keeps showing the last
+  // run's P&L (crystallized on stop, then settled to the final figure as any
+  // remaining SL/TP closes land) instead of wiping it — so profit/loss keeps
+  // accumulating into the panel even when trading is stopped.
   const sessionPnl =
     account && autoTrade && sessionStart != null ? equity(account, rates) - sessionStart : null
+  const displayedPnl = autoTrade ? sessionPnl : lastSessionPnl
   const runTotalSecs = prefs.durationMinutes != null ? prefs.durationMinutes * 60 : 0
   const runPct =
     runTotalSecs > 0 && remaining != null
       ? Math.min(100, Math.max(0, ((runTotalSecs - remaining) / runTotalSecs) * 100))
       : 0
   const profitPct =
-    sessionPnl != null && prefs.overallMaxProfitUsd > 0
-      ? Math.min(100, Math.max(0, (Math.max(0, sessionPnl) / prefs.overallMaxProfitUsd) * 100))
+    displayedPnl != null && prefs.overallMaxProfitUsd > 0
+      ? Math.min(100, Math.max(0, (Math.max(0, displayedPnl) / prefs.overallMaxProfitUsd) * 100))
       : 0
   const lossPct =
-    sessionPnl != null && prefs.overallMaxLossUsd > 0
-      ? Math.min(100, Math.max(0, (Math.max(0, -sessionPnl) / prefs.overallMaxLossUsd) * 100))
+    displayedPnl != null && prefs.overallMaxLossUsd > 0
+      ? Math.min(100, Math.max(0, (Math.max(0, -displayedPnl) / prefs.overallMaxLossUsd) * 100))
       : 0
 
   // Record robot runs as sessions + equity history while the robot trades.
@@ -606,7 +628,16 @@ export function Trading() {
    * overall max profit or max loss (USD) is reached. Limits of 0 are disabled.
    */
   useEffect(() => {
-    if (!account || !autoTrade) {
+    if (!account) return
+    if (!autoTrade) {
+      // Crystallize the finished run's session P&L before wiping the baseline
+      // so the trading-progress panel keeps showing it after the robot stops
+      // (it used to vanish the instant trading paused). The settle effect below
+      // keeps it moving to the final figure as remaining SL/TP closes land.
+      if (sessionStartRef.current != null) {
+        settledBaselineRef.current = sessionStartRef.current
+        setLastSessionPnl(equity(account, rates) - sessionStartRef.current)
+      }
       if (sessionStartRef.current != null) clearSessionStart(user?.id)
       sessionStartRef.current = null
       setSessionStart(null)
@@ -617,6 +648,8 @@ export function Trading() {
       sessionStartRef.current = currentEquity
       setSessionStart(currentEquity)
       saveSessionStart(currentEquity, user?.id)
+      settledBaselineRef.current = null
+      setLastSessionPnl(null)
       return
     }
     const pnl = currentEquity - sessionStartRef.current
@@ -635,6 +668,16 @@ export function Trading() {
       ])
     })
   }, [account, autoTrade, rates, prefs.overallMaxLossUsd, prefs.overallMaxProfitUsd, closeRobotPositions, setRisk])
+
+  // While trading stays stopped, keep the crystallized session P&L moving as
+  // any remaining positions close at market or their SL/TP — the panel's
+  // figure settles to the final realized value instead of freezing at the stop
+  // instant. Cleared once the account is fully flat.
+  useEffect(() => {
+    if (autoTrade || !account || settledBaselineRef.current == null) return
+    setLastSessionPnl(equity(account, rates) - settledBaselineRef.current)
+    if (account.positions.length === 0) settledBaselineRef.current = null
+  }, [account, autoTrade, rates])
 
   // ---------------------------------------------------------------------------
   // Background continuation (ledger-backed accounts only — paper + managed live).
@@ -1143,9 +1186,9 @@ export function Trading() {
                 <Activity className="h-4 w-4 text-accent" aria-hidden="true" />
                 Trading progress
               </p>
-              {autoTrade ? (
+              {autoTrade || displayedPnl != null ? (
                 <div className="space-y-3">
-                  {runTotalSecs > 0 && (
+                  {autoTrade && runTotalSecs > 0 && (
                     <div>
                       <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
                         <span>Auto-run</span>
@@ -1168,12 +1211,12 @@ export function Trading() {
                       </div>
                     </div>
                   )}
-                  {sessionPnl != null && (
+                  {displayedPnl != null && (
                     <div className="space-y-2">
                       <div className="flex items-center justify-between text-xs">
-                        <span className="text-muted-foreground">Session P&amp;L</span>
-                        <span className={cn('font-mono tnum font-semibold', sessionPnl >= 0 ? 'text-up' : 'text-down')}>
-                          {formatUsd(sessionPnl)}
+                        <span className="text-muted-foreground">{autoTrade ? 'Session P&amp;L' : 'Last session P&amp;L'}</span>
+                        <span className={cn('font-mono tnum font-semibold', displayedPnl >= 0 ? 'text-up' : 'text-down')}>
+                          {formatUsd(displayedPnl)}
                         </span>
                       </div>
                       {prefs.overallMaxProfitUsd > 0 && (
@@ -1181,7 +1224,7 @@ export function Trading() {
                           <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
                             <span>Profit target</span>
                             <span className="font-mono tnum">
-                              {formatUsd(Math.max(0, sessionPnl))} / {formatUsd(prefs.overallMaxProfitUsd)}
+                              {formatUsd(Math.max(0, displayedPnl))} / {formatUsd(prefs.overallMaxProfitUsd)}
                             </span>
                           </div>
                           <div className="h-1.5 overflow-hidden rounded-full bg-muted/60">
@@ -1197,7 +1240,7 @@ export function Trading() {
                           <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
                             <span>Loss limit</span>
                             <span className="font-mono tnum">
-                              {formatUsd(Math.max(0, -sessionPnl))} / {formatUsd(prefs.overallMaxLossUsd)}
+                              {formatUsd(Math.max(0, -displayedPnl))} / {formatUsd(prefs.overallMaxLossUsd)}
                             </span>
                           </div>
                           <div className="h-1.5 overflow-hidden rounded-full bg-muted/60">
@@ -1210,9 +1253,15 @@ export function Trading() {
                       )}
                     </div>
                   )}
-                  {runTotalSecs <= 0 && sessionPnl == null && (
+                  {autoTrade && runTotalSecs <= 0 && sessionPnl == null && (
                     <p className="text-sm text-muted-foreground">
                       Robot is trading — its run countdown and session P&amp;L show here as prices update.
+                    </p>
+                  )}
+                  {!autoTrade && (
+                    <p className="text-xs text-muted-foreground">
+                      Robot paused — this session's P&amp;L stays visible (and keeps settling) as any remaining
+                      positions close at their stops.
                     </p>
                   )}
                 </div>

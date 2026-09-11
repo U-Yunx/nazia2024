@@ -3,9 +3,16 @@
  * performance (Performance page) and admins can see robot usage. Defensive:
  * silently no-ops for anonymous visitors and when Supabase is unavailable.
  *
- * Sessions are closed when the robot stops AND when the component unmounts
- * (navigation away / refresh) — without the unmount close, every page load
- * with auto-trading persisted would leak a phantom 'running' session.
+ * A session opens as soon as the account shows any activity — the robot is
+ * running, a position is open, or a trade is on the books — and stays open for
+ * the life of the page, INCLUDING while the robot is paused or stopped. This
+ * is deliberate: positions keep closing at market / SL / TP after the robot
+ * stops, so the equity curve must keep accruing those settled results instead
+ * of freezing the moment trading pauses.
+ *
+ * Sessions close when the account changes (reset) and on unmount (navigation
+ * away / refresh / sign out) — without the unmount close, every page load with
+ * persisted auto-trading would leak a phantom 'running' session.
  */
 import { useEffect, useRef } from 'react'
 import type { User } from '@supabase/supabase-js'
@@ -36,9 +43,18 @@ export function useRobotRecorder(opts: UseRobotRecorderOptions) {
   const ratesRef = useRef(rates)
   ratesRef.current = rates
 
-  // Open a session when the robot starts.
+  // The account has something worth recording: the robot is running, or there
+  // are open positions, or trades already closed — the session stays open
+  // across pauses so history keeps accruing while the account settles.
+  const hasActivity = Boolean(
+    user && account && (running || account.positions.length > 0 || account.trades.length > 0),
+  )
+
+  // Open a session when the account first shows activity. Keyed on
+  // `account?.id` so switching accounts always opens a session for the right
+  // ledger (the previous one is closed by the close-on-account-change effect).
   useEffect(() => {
-    if (!user || !running || !account) return
+    if (!hasActivity || !account) return
     if (sessionIdRef.current) return
     let cancelled = false
     void (async () => {
@@ -46,7 +62,7 @@ export function useRobotRecorder(opts: UseRobotRecorderOptions) {
       const { data } = await supabase
         .from('robot_sessions')
         .insert({
-          user_id: user.id,
+          user_id: user?.id,
           account_id: account.id,
           method,
           strategy: strategyLabel,
@@ -64,15 +80,18 @@ export function useRobotRecorder(opts: UseRobotRecorderOptions) {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running])
+  }, [hasActivity, account?.id])
 
-  // Record equity history points while running (throttled to ~1/sec).
+  // Record equity history points for as long as the account is open on this
+  // page. Throttled: ~1/sec while the robot runs, ~1/5s while paused/stopped —
+  // enough to keep the curve accruing settled P&L without flooding the table.
   useEffect(() => {
-    if (!user || !running || !account) return
+    if (!user || !account) return
     const sessionId = sessionIdRef.current
     if (!sessionId || !isSupabaseConfigured) return
     const now = Date.now()
-    if (now - lastWriteRef.current < 1000) return
+    const minGap = running ? 1000 : 5000
+    if (now - lastWriteRef.current < minGap) return
     lastWriteRef.current = now
     const unrealized = equity(account, rates) - account.balance
     void supabase.from('robot_history').insert({
@@ -87,7 +106,7 @@ export function useRobotRecorder(opts: UseRobotRecorderOptions) {
   }, [account, running, rates])
 
   // Close the current session with final figures. Idempotent — a null
-  // session id means it already ran (stop, account change, unmount).
+  // session id means it already ran (account change, unmount, reset).
   const closeSession = () => {
     const sessionId = sessionIdRef.current
     if (!sessionId) return
@@ -121,18 +140,18 @@ export function useRobotRecorder(opts: UseRobotRecorderOptions) {
   const closeSessionRef = useRef(closeSession)
   closeSessionRef.current = closeSession
 
-  // Close the session when the robot stops. `account` is in the deps so a
-  // late-resolving session insert (robot stopped before the insert landed)
-  // still gets closed on the next account change.
+  // Close the session when the account changes (reset / switch) so the run is
+  // never recorded against the wrong account.
   useEffect(() => {
-    if (running) return
-    closeSessionRef.current()
+    return () => {
+      closeSessionRef.current()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, account])
+  }, [account?.id])
 
   // Close on unmount (navigate away / refresh / sign out) so a reload can
-  // never leak a phantom 'running' session for a robot the page is no longer
-  // running. The server-side runner opens its own session when it takes over.
+  // never leak a phantom 'running' session. The server-side runner opens its
+  // own session when it takes over.
   useEffect(() => {
     return () => {
       closeSessionRef.current()
