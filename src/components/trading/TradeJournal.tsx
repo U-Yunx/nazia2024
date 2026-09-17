@@ -62,6 +62,7 @@ export function TradeJournal({ trades }: { trades: ClosedTrade[] }) {
                 <tr className="border-b border-border text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                   <th className="pb-2 pr-4 font-medium">Pair</th>
                   <th className="pb-2 pr-4 font-medium">Side</th>
+                  <th className="pb-2 pr-4 text-right font-medium">Prob.</th>
                   <th className="pb-2 pr-4 text-right font-medium">Entry → Exit</th>
                   <th className="pb-2 pr-4 text-right font-medium">P&amp;L</th>
                   <th className="pb-2 pr-4 text-right font-medium">P&amp;L %</th>
@@ -82,6 +83,21 @@ export function TradeJournal({ trades }: { trades: ClosedTrade[] }) {
                         />
                         {t.side}
                       </span>
+                    </td>
+                    <td className="tnum py-2.5 pr-4 text-right text-xs">
+                      {t.entryProbability != null ? (
+                        <span
+                          className={cn(
+                            'font-mono font-semibold',
+                            t.entryProbability >= 0.5 ? 'text-up' : 'text-amber',
+                          )}
+                          title={`Estimated probability of profit at entry: ${Math.round(t.entryProbability * 100)}%`}
+                        >
+                          {Math.round(t.entryProbability * 100)}%
+                        </span>
+                      ) : (
+                        <span className="font-mono text-muted-foreground/60">—</span>
+                      )}
                     </td>
                     <td className="tnum py-2.5 pr-4 text-right font-mono text-xs text-muted-foreground">
                       {formatPrice(t.entryPrice)} → {formatPrice(t.exitPrice)}

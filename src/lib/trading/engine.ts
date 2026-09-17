@@ -14,8 +14,107 @@ import type {
   RobotCycleInput,
   Side,
 } from './types'
-import { DEFAULT_RISK } from './types'
-import { consecutiveLosses, pnlUsd, pipSize, stopTakePrices } from './risk'
+import { DEFAULT_RISK, PROFIT_PROBABILITY_THRESHOLD } from './types'
+import { consecutiveLosses, perTradeTargetUsd, pnlUsd, pipSize, stopTakePrices } from './risk'
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
+
+/** Ingredients describing how strong a setup is — the robot uses these to
+ * estimate the probability of profit before opening a trade. */
+export interface ProbabilityIngredients {
+  /** 0–100 setup score from pair ranking / best-strategy (signal strength). */
+  score?: number
+  /** 0–1 momentum of the latest bar vs the recent range (direction-free). */
+  momentum?: number
+  /** 0–100 RSI — used for reversion conviction (room to mean-revert). */
+  rsi?: number
+  /** -1 against trend, 0 flat, +1 with trend (SMA-20 alignment). */
+  trend?: number
+  /** Recent volatility (ATR14 as a % of price). */
+  volatilityPct?: number
+  /** Stop-loss distance in pips (part of the risk:reward geometry). */
+  stopPips?: number
+  /** Take-profit distance in pips (part of the risk:reward geometry). */
+  takeProfitPips?: number
+}
+
+/**
+ * Estimate the probability of profit (0–1) for a setup from its signal
+ * strength and risk:reward geometry. Centered at 0.5 (a coin flip); strong
+ * momentum, trend alignment, reversion room and a favourable reward window
+ * push it up, wild volatility pulls it down. Returns null when no ingredients
+ * are given — the caller then falls back to the old behaviour (no gate).
+ */
+export function estimateProfitProbability(i: ProbabilityIngredients): number | null {
+  const hasData =
+    i.score != null || i.momentum != null || i.rsi != null || i.trend != null ||
+    i.volatilityPct != null || i.stopPips != null || i.takeProfitPips != null
+  if (!hasData) return null
+
+  let p = 0.5
+
+  // Score: the pair-ranking / best-strategy estimate (5–99) already encodes
+  // how strong the setup is — map it onto the [0.5 ± 0.45] band.
+  if (i.score != null) p += ((clamp(i.score, 5, 99) - 50) / 50) * 0.45
+
+  // Trend alignment: trading WITH the trend adds conviction; fading it drains.
+  if (i.trend != null) p += clamp(i.trend, -1, 1) * 0.06
+
+  // Momentum: a big move on the latest bar confirms the signal.
+  if (i.momentum != null) p += clamp(i.momentum - 0.5, -0.5, 0.5) * 0.1
+
+  // RSI reversion room: deep oversold/overbought leaves more room to run —
+  // which side is implied by the pair rather than the value itself, so use
+  // the absolute distance from neutral.
+  if (i.rsi != null) p += clamp(0.5 - Math.abs(i.rsi - 50) / 100, -0.5, 0.5) * 0.1
+
+  // Volatility penalty: whipsaw-prone markets shrink the edge, however strong.
+  if (i.volatilityPct != null) {
+    const vol = Math.max(0, i.volatilityPct)
+    if (vol > 2) p -= Math.min(0.08, (vol - 2) * 0.01)
+    else if (vol < 1) p += Math.min(0.04, (1 - vol) * 0.02) // calm markets help
+  }
+
+  // Risk:reward geometry — a wider target than the stop makes reaching profit
+  // harder in price terms but pays more when hit; weight it lightly.
+  if (i.stopPips != null && i.takeProfitPips != null && i.stopPips > 0 && i.takeProfitPips > 0) {
+    p += ((i.takeProfitPips - i.stopPips) / (i.takeProfitPips + i.stopPips)) * 0.04
+  }
+
+  return clamp(p, 0.05, 0.95)
+}
+
+/** Probability of profit (0–1) driving a robot entry — explicit override wins,
+ * otherwise the engine estimates it from the setup's signal strength. */
+export function entryProfitProbability(input: ApplySignalInput): number | null {
+  if (input.profitProbability != null) return clamp(input.profitProbability, 0, 1)
+  return estimateProfitProbability({
+    score: input.score,
+    momentum: input.momentum,
+    rsi: input.rsi,
+    trend: input.trend,
+    volatilityPct: input.volatilityPct,
+    stopPips: input.stopPips,
+    takeProfitPips: input.takeProfitPips,
+  })
+}
+
+/** The 50%+ profit-probability gate — the robot only opens when it expects to
+ *  win more than half the time. */
+export function probabilityGate(
+  input: ApplySignalInput,
+): { ok: boolean; probability?: number; reason?: string } {
+  const prob = entryProfitProbability(input)
+  if (prob == null) return { ok: true } // no strength data — legacy behaviour
+  if (prob <= PROFIT_PROBABILITY_THRESHOLD) {
+    return {
+      ok: false,
+      probability: prob,
+      reason: `${Math.round(prob * 100)}% chance of profit — below the ${Math.round(PROFIT_PROBABILITY_THRESHOLD * 100)}% entry bar. Standing aside.`,
+    }
+  }
+  return { ok: true, probability: prob }
+}
 
 export function createAccount(initialBalance: number, id: string | null = null): AccountState {
   return {
@@ -96,6 +195,7 @@ export function openPosition(
     strategy: input.strategy,
     targetProfitUsd: input.targetProfitUsd ?? undefined,
     targetLossUsd: input.targetLossUsd ?? undefined,
+    entryProbability: input.profitProbability,
     status: 'open' as const,
   }
 
@@ -128,6 +228,7 @@ export function closePosition(
     pnlPct,
     closeReason: opts.reason,
     strategy: pos.strategy,
+    entryProbability: pos.entryProbability,
     status: 'closed',
   }
   return {
@@ -161,14 +262,16 @@ export function markToMarket(
     if (p.side === 'long' && cur <= p.stopPrice) reason = 'stop_loss'
     else if (p.side === 'short' && cur >= p.stopPrice) reason = 'stop_loss'
 
-    // Per-trade USD targets, checked before the price take-profit so a $ rule
-    // can fire on a smaller favourable move: the position's own stamp wins
-    // (manual form), otherwise the robot's per-trade knobs (0 = off). The loss
-    // cap is enforced like a stop — a trade bleeding money is cut at -$limit.
+    // Per-trade targets, checked before the price take-profit so a $ or pip
+    // rule can fire on a smaller favourable move: the position's own stamp wins
+    // (manual form), otherwise the robot's per-trade knobs (honouring its
+    // pips/USD denomination, 0 = off). The loss cap is enforced like a stop —
+    // a trade bleeding money is cut at -$limit.
     if (!reason) {
       const pnl = pnlUsd(p.side, p.entryPrice, cur, p.units, p.symbol, rates)
-      const profitTarget = p.targetProfitUsd ?? state.risk.targetPerTradeUsd
-      const lossTarget = p.targetLossUsd ?? state.risk.maxLossPerTradeUsd
+      const { targetProfitUsd, targetLossUsd } = perTradeTargetUsd(state.risk, p.symbol, p.units, rates)
+      const profitTarget = p.targetProfitUsd ?? targetProfitUsd
+      const lossTarget = p.targetLossUsd ?? targetLossUsd
       if (lossTarget > 0 && pnl <= -lossTarget) reason = 'stop_loss'
       else if (profitTarget > 0 && pnl >= profitTarget) reason = 'target'
     }
@@ -331,9 +434,16 @@ export function applySignal(
   const gate = canOpen(next, rates)
   if (!gate.ok) return { state: next, events: [...events, gate.reason ?? 'Risk limit.'] }
 
+  // The 50%+ profit-probability gate — the enhancement robot only acts on
+  // setups it expects to win more than half the time.
+  const probGate = probabilityGate(input)
+  if (!probGate.ok) {
+    return { state: next, events: [...events, `${symbol}: ${probGate.reason ?? 'Not enough edge right now.'}`] }
+  }
+
   const res = openPosition(
     next,
-    { symbol, side, entryPrice: price, stopPips, takeProfitPips, units, strategy },
+    { symbol, side, entryPrice: price, stopPips, takeProfitPips, units, strategy, profitProbability: probGate.probability },
     rates,
   )
   if (res.error) return { state: next, events: [...events, `${symbol}: ${res.error}`] }
@@ -346,10 +456,11 @@ export function applySignal(
 /**
  * Run one multi-pair robot cycle: evaluate every pair on the watchlist and
  * open a trade on each qualifying pair, subject to the per-pair cap
- * (sequential = 1, concurrent = maxPerPair) and the global maxOpenTrades cap.
- * A pair at either cap is skipped — never over-filled. Per-pair failures
- * (risk gate, position sizing, open error) are isolated: the cycle keeps going
- * for the other pairs. Pure reducer — no I/O — so paper and live share it.
+ * (config.maxPerPair — 1 by default, raise it to hold several positions per
+ * pair) and the global maxOpenTrades cap. A pair at either cap is skipped —
+ * never over-filled. Per-pair failures (risk gate, position sizing, open
+ * error) are isolated: the cycle keeps going for the other pairs. Pure
+ * reducer — no I/O — so paper and live share it.
  */
 export function runRobotCycle(
   state: AccountState,
@@ -358,6 +469,7 @@ export function runRobotCycle(
 ): { state: AccountState; events: string[] } {
   let next = state
   const events: string[] = []
+  const perPairCap = Math.max(1, config.maxPerPair)
 
   for (const input of inputs) {
     const { symbol, signal, price, rates, strategy, stopPips, takeProfitPips, units } = input
@@ -365,7 +477,6 @@ export function runRobotCycle(
 
     const side: Side = signal === 'buy' ? 'long' : 'short'
     const openOnSymbol = next.positions.filter((p) => p.symbol === symbol).length
-    const perPairCap = config.tradeMode === 'concurrent' ? config.maxPerPair : 1
 
     // Per-pair cap — a pair at its cap is skipped, never over-filled.
     if (openOnSymbol >= perPairCap) {
@@ -384,9 +495,18 @@ export function runRobotCycle(
       continue
     }
 
+    // The 50%+ profit-probability gate — the robot only opens a trade when
+    // its estimated chance of profit is strictly above the threshold. Pairs
+    // below it are skipped (and logged) so capital isn't parked on coin flips.
+    const probGate = probabilityGate(input)
+    if (!probGate.ok) {
+      events.push(`Skipped ${symbol}: ${probGate.reason ?? 'not enough edge right now.'}`)
+      continue
+    }
+
     const res = openPosition(
       next,
-      { symbol, side, entryPrice: price, stopPips, takeProfitPips, units, strategy },
+      { symbol, side, entryPrice: price, stopPips, takeProfitPips, units, strategy, profitProbability: probGate.probability },
       rates,
       { maxPerPair: perPairCap },
     )

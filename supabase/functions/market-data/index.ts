@@ -1839,21 +1839,23 @@ async function handleQuotes(providerId: string, apiKey: string, priority: string
     const fxStale = toRefresh.filter(({ symbol }) => !isCryptoSymbol(symbol));
     let fxRefreshed = 0;
 
-    // Priority FX pairs (the ones the caller is actively watching) go FIRST:
-    // the crypto fallback below can drain the shared credit budget, and the
-    // user shouldn't be left staring at a frozen quote for the pair they have
-    // open while less relevant symbols refresh.
-    for (const { symbol } of fxStale) {
-      if (fxRefreshed >= FREE_FX_BUDGET || !prioritySet.has(symbol)) continue;
-      if (!canUseCredit()) break;
-      try {
-        const q = await provider.fetchQuote("", symbol);
-        if (await applyQuote(symbol, q)) {
+    // Priority FX pairs (the ones the caller is actively watching) go FIRST —
+    // and they're fetched in PARALLEL so the watchlist isn't blocked on a chain
+    // of 2s Yahoo round-trips. The crypto fallback below can drain the shared
+    // credit budget, and the user shouldn't be left staring at a frozen quote
+    // for the pair they have open while less relevant symbols refresh.
+    const priorityFx = fxStale.filter(({ symbol }) => prioritySet.has(symbol)).slice(0, FREE_FX_BUDGET);
+    if (priorityFx.length > 0) {
+      const credits = priorityFx.filter(() => canUseCredit());
+      const settled = await Promise.allSettled(
+        credits.map(({ symbol }) => provider.fetchQuote("", symbol)),
+      );
+      for (let i = 0; i < credits.length; i++) {
+        const q = settled[i]?.status === "fulfilled" ? settled[i].value : null;
+        if (q && (await applyQuote(credits[i].symbol, q))) {
           refreshed++;
           fxRefreshed++;
         }
-      } catch {
-        // keep whatever we had
       }
     }
 
@@ -1874,17 +1876,21 @@ async function handleQuotes(providerId: string, apiKey: string, priority: string
       }
     }
 
-    for (const { symbol } of fxStale) {
-      if (fxRefreshed >= FREE_FX_BUDGET) break;
-      if (!canUseCredit()) break;
-      try {
-        const q = await provider.fetchQuote("", symbol);
-        if (await applyQuote(symbol, q)) {
+    // Remaining FX budget (non-priority symbols) — one batched round, only as
+    // fast as the slowest pair instead of a serial chain.
+    const remainingFx = fxStale.filter(({ symbol }) => !prioritySet.has(symbol) && fxRefreshed + 1 <= FREE_FX_BUDGET);
+    if (remainingFx.length > 0) {
+      const budget = remainingFx.slice(0, Math.max(0, FREE_FX_BUDGET - fxRefreshed));
+      const credits = budget.filter(() => canUseCredit());
+      const settled = await Promise.allSettled(
+        credits.map(({ symbol }) => provider.fetchQuote("", symbol)),
+      );
+      for (let i = 0; i < credits.length; i++) {
+        const q = settled[i]?.status === "fulfilled" ? settled[i].value : null;
+        if (q && await applyQuote(credits[i].symbol, q)) {
           refreshed++;
           fxRefreshed++;
         }
-      } catch {
-        // keep whatever we had
       }
     }
   } else {

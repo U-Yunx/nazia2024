@@ -202,18 +202,24 @@ function fromRows(row: PaperAccountRow, trades: PaperTradeRow[]): AccountState {
 /** Load the signed-in user's account from Supabase (null when none exists). */
 export async function loadRemote(user: User): Promise<AccountState | null> {
   try {
-    const { data: acct } = await supabase
-      .from('paper_accounts')
-      .select('*')
-      .eq('user_id', user.id)
-      .maybeSingle()
+    // Fetch the account row and its trade ledger in parallel — the trades query
+    // previously waited on the account query, adding ~150-250ms of latency to
+    // every Trading page mount.
+    const [acctRes, tradesRes] = await Promise.all([
+      supabase
+        .from('paper_accounts')
+        .select('*')
+        .eq('user_id', user.id)
+        .maybeSingle(),
+      supabase
+        .from('paper_trades')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: true }),
+    ])
+    const acct = acctRes.data
     if (!acct) return null
-    const { data: trades } = await supabase
-      .from('paper_trades')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: true })
-    return fromRows(acct as unknown as PaperAccountRow, (trades as unknown as PaperTradeRow[]) ?? [])
+    return fromRows(acct as unknown as PaperAccountRow, (tradesRes.data as unknown as PaperTradeRow[]) ?? [])
   } catch {
     return null
   }

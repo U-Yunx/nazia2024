@@ -45,6 +45,13 @@ export interface Position {
   /** Account equity at the moment the position was opened (for PnL %). */
   entryEquity: number
   strategy?: string
+  /**
+   * Estimated probability of profit (0–1) when this position was opened —
+   * derived by the engine from the setup's signal strength (score, trend,
+   * RSI, momentum, volatility) and the stop/target geometry. Only robot
+   * entries carry it; manual orders are unrated.
+   */
+  entryProbability?: number
   status: 'open'
 }
 
@@ -67,6 +74,8 @@ export interface ClosedTrade {
   pnlPct: number
   closeReason: CloseReason
   strategy?: string
+  /** Probability of profit (0–1) estimated when the position was opened. */
+  entryProbability?: number
   status: 'closed'
 }
 
@@ -81,6 +90,13 @@ export interface RiskConfig {
   /** Take-profit distance as a multiple of the stop (risk:reward). */
   takeProfitRatio: number
   /**
+   * Denomination the per-trade profit target / loss cap are entered in.
+   * 'usd' → the fields below; 'pips' → the pips fields below, converted to
+   * USD per position at mark-to-market using that position's size and the
+   * pair's live pip value.
+   */
+  profitUnit: 'pips' | 'usd'
+  /**
    * Per-trade profit target in USD: when an open trade's unrealized PnL reaches
    * this amount the robot closes it and banks the win. 0 = off (only the
    * price-based take-profit applies).
@@ -92,6 +108,17 @@ export interface RiskConfig {
    * price-based stop applies).
    */
   maxLossPerTradeUsd: number
+  /**
+   * Per-trade profit target in pips (used when profitUnit = 'pips'): the
+   * target is re-computed per position as `pips × pip value × units` so it
+   * scales with the pair and size actually traded. 0 = off.
+   */
+  targetPerTradePips: number
+  /**
+   * Per-trade loss cap in pips (used when profitUnit = 'pips'): the cap is
+   * `pips × pip value × units` for each position. 0 = off.
+   */
+  maxLossPerTradePips: number
   /** Daily loss limit as % of starting equity — blocks new entries when hit. */
   maxDailyLossPct: number
   /** When true, the robot acts on strategy signals automatically. */
@@ -121,8 +148,11 @@ export const DEFAULT_RISK: RiskConfig = {
   maxOpenPositions: 5,
   defaultStopPips: 20,
   takeProfitRatio: 2,
+  profitUnit: 'usd',
   targetPerTradeUsd: 0,
   maxLossPerTradeUsd: 0,
+  targetPerTradePips: 0,
+  maxLossPerTradePips: 0,
   maxDailyLossPct: 5,
   autoTrade: false,
   trailingStop: true,
@@ -160,6 +190,8 @@ export interface OpenPositionRequest {
   targetProfitUsd?: number
   /** Optional per-order $ loss cap (0 / undefined = off). */
   targetLossUsd?: number
+  /** Probability of profit (0–1) driving a robot entry — stamped on the trade. */
+  profitProbability?: number
   time?: string
 }
 
@@ -172,6 +204,19 @@ export interface ApplySignalInput {
   stopPips: number
   takeProfitPips: number
   units: number
+  /**
+   * Ingredients the engine uses to estimate this setup's probability of
+   * profit. When present and the estimate is ≤ PROFIT_PROBABILITY_THRESHOLD
+   * the robot stands aside — it only opens trades it expects to win more
+   * than half the time.
+   */
+  score?: number
+  momentum?: number
+  rsi?: number
+  trend?: number
+  volatilityPct?: number
+  /** Optional explicit probability override (0–1). Estimate wins unless set. */
+  profitProbability?: number
 }
 
 /** Per-strategy trade mode: one open position per pair vs. N concurrent. */
@@ -198,6 +243,13 @@ export const DEFAULT_ROBOT_CONFIG: RobotConfig = {
   maxPerPair: 1,
   maxOpenTrades: 0,
 }
+
+/**
+ * The robot only OPENS a trade when its estimated probability of profit is
+ * strictly greater than this threshold (0.5 = 50%). At or below this the
+ * setup has no edge — the cycle skips the pair and parks the capital.
+ */
+export const PROFIT_PROBABILITY_THRESHOLD = 0.5
 
 /** Input for a single pair inside a multi-pair robot cycle. */
 export interface RobotCycleInput extends ApplySignalInput {}

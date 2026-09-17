@@ -48,6 +48,8 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string })
   stateRef.current = account
   const userRef = useRef(user)
   userRef.current = user
+  /** Serialized signature of the last remotely-saved state, per user. */
+  const lastSavedRef = useRef<string | null>(null)
 
   useEffect(() => {
     let active = true
@@ -85,10 +87,21 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string })
     saveLocal(account)
     const u = userRef.current
     if (!u) return
+    // Skip the remote rewrite when nothing changed since the last save — e.g.
+    // the mount-time echo of an account that's already on the server. Without
+    // this, every page load deleted and re-inserted the whole trade ledger.
+    const signature = u.id + ':' + JSON.stringify({ b: account.balance, r: account.risk, p: account.positions, t: account.trades })
+    if (lastSavedRef.current === signature) return
+    lastSavedRef.current = signature
     const id = setTimeout(() => {
       void saveRemote(u, account)
     }, 400)
-    return () => clearTimeout(id)
+    return () => {
+      clearTimeout(id)
+      // Forget the signature on teardown (StrictMode double-mount) so a
+      // freshly created account is still written on the next effect run.
+      if (lastSavedRef.current === signature) lastSavedRef.current = null
+    }
   }, [account, loading])
 
   const commit = useCallback((next: AccountState) => setAccount(next), [])

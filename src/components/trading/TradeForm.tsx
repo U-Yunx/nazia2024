@@ -1,7 +1,10 @@
 /**
  * TradeForm — manual order entry. Picks a pair + side, computes a risk-based
  * position size (or lets the user override units), and shows the implied stop
- * and target levels before submitting through the active broker.
+ * and target levels before submitting through the active broker. The optional
+ * per-trade profit target / loss cap can be entered in dollars or pips — pip
+ * entries are converted to the $ stamp the engine enforces (pips × pip value
+ * × units) at submit.
  */
 import { useMemo, useState } from 'react'
 import { ArrowDown, ArrowUp } from 'lucide-react'
@@ -30,8 +33,10 @@ export function TradeForm({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [ok, setOk] = useState(false)
-  const [profitTargetUsd, setProfitTargetUsd] = useState(0)
-  const [lossCapUsd, setLossCapUsd] = useState(0)
+  const [targetUnit, setTargetUnit] = useState<'usd' | 'pips'>('usd')
+  // The per-trade profit target & loss cap in the chosen unit (0 = off).
+  const [profitTarget, setProfitTarget] = useState(0)
+  const [lossCap, setLossCap] = useState(0)
 
   const price = rates[symbol]
   const pipValue = pipValueUsd(symbol, rates)
@@ -60,6 +65,13 @@ export function TradeForm({
       setError('Position size is zero — lower the stop or raise the risk per trade.')
       return
     }
+    // Convert pip-denominated targets to the $ stamp the engine enforces.
+    let targetProfitUsd = profitTarget || undefined
+    let targetLossUsd = lossCap || undefined
+    if (targetUnit === 'pips' && pipValue != null) {
+      targetProfitUsd = profitTarget > 0 ? profitTarget * pipValue * effectiveUnits : undefined
+      targetLossUsd = lossCap > 0 ? lossCap * pipValue * effectiveUnits : undefined
+    }
     setBusy(true)
     setError(null)
     setOk(false)
@@ -72,8 +84,8 @@ export function TradeForm({
         takeProfitPips: takePips,
         units: effectiveUnits,
         strategy: 'manual',
-        targetProfitUsd: profitTargetUsd || undefined,
-        targetLossUsd: lossCapUsd || undefined,
+        targetProfitUsd,
+        targetLossUsd,
       },
       rates,
     )
@@ -144,21 +156,47 @@ export function TradeForm({
             value={takePips}
             onChange={(e) => setTakePips(Number(e.target.value))}
           />
+          <div className="col-span-2">
+            <span className="mb-1.5 block text-xs font-medium text-muted-foreground">Per-trade target unit</span>
+            <div
+              className="inline-flex items-center gap-1 rounded-lg border border-border bg-secondary/40 p-1"
+              role="group"
+              aria-label="Per-trade profit unit"
+            >
+              {(['usd', 'pips'] as const).map((u) => (
+                <button
+                  key={u}
+                  type="button"
+                  onClick={() => setTargetUnit(u)}
+                  aria-pressed={targetUnit === u}
+                  className={cn(
+                    'h-8 cursor-pointer rounded-md px-3 text-sm font-medium transition-colors duration-150',
+                    targetUnit === u ? 'bg-accent text-black' : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {u === 'usd' ? 'USD' : 'Pips'}
+                </button>
+              ))}
+              <span className="pl-1 pr-2 text-xs text-muted-foreground">
+                {targetUnit === 'pips' ? 'Entries below are in pips' : 'Entries below are in US dollars'}
+              </span>
+            </div>
+          </div>
           <Input
-            label="Profit target ($)"
+            label={`Profit target (${targetUnit === 'pips' ? 'pips' : '$'})`}
             type="number"
             min={0}
-            step={5}
-            value={profitTargetUsd}
-            onChange={(e) => setProfitTargetUsd(Math.max(0, Number(e.target.value)))}
+            step={targetUnit === 'pips' ? 1 : 5}
+            value={profitTarget}
+            onChange={(e) => setProfitTarget(Math.max(0, Number(e.target.value)))}
           />
           <Input
-            label="Loss cap ($)"
+            label={`Loss cap (${targetUnit === 'pips' ? 'pips' : '$'})`}
             type="number"
             min={0}
-            step={5}
-            value={lossCapUsd}
-            onChange={(e) => setLossCapUsd(Math.max(0, Number(e.target.value)))}
+            step={targetUnit === 'pips' ? 1 : 5}
+            value={lossCap}
+            onChange={(e) => setLossCap(Math.max(0, Number(e.target.value)))}
           />
           <Input
             label={`Units (suggested ${suggested})`}
@@ -182,13 +220,20 @@ export function TradeForm({
         </div>
 
         <p className="mt-3 text-xs text-muted-foreground">
-          $ targets auto-close the trade at that profit or that loss; 0 = off.
+          Targets auto-close the trade at that profit or that loss — entered in{' '}
+          {targetUnit === 'pips' ? 'pips and converted to $ at your size' : 'dollars'}; 0 = off.
         </p>
 
         {pipValue != null && (
           <p className="mt-3 text-xs text-muted-foreground">
             Pip value ≈ <span className="tnum font-mono">{formatUsd(pipValue)}</span>/unit · risk at stop ≈{' '}
             <span className="tnum font-mono">{formatUsd(pipValue * stopPips * effectiveUnits)}</span>
+            {targetUnit === 'pips' && profitTarget > 0 && (
+              <>
+                {' '}· profit at {profitTarget} pips ≈{' '}
+                <span className="tnum font-mono">{formatUsd(profitTarget * pipValue * effectiveUnits)}</span>
+              </>
+            )}
           </p>
         )}
 

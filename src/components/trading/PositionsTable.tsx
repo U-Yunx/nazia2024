@@ -20,7 +20,7 @@ export interface RobotCaps {
 
 function perPairCap(caps?: RobotCaps): number {
   if (!caps) return 1
-  return caps.tradeMode === 'concurrent' ? caps.maxPerPair : 1
+  return Math.max(1, caps.maxPerPair)
 }
 
 export function PositionsTable({

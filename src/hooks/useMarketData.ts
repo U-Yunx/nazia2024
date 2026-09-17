@@ -16,8 +16,43 @@ interface MarketError {
   message?: string
 }
 
-function parseMarketError(res: unknown): InvokeResult<never> {
-  const e = (res ?? {}) as MarketError
+/* ----------------- single-flight + short-TTL request cache ----------------- */
+
+/**
+ * Coalesces concurrent identical requests (same key) into ONE network call and
+ * reuses a fresh result for `ttlMs`, so consumers that mount at the same time
+ * (and StrictMode's dev double-mount) never multiply provider fetches. When
+ * `ttlMs <= 0` only the in-flight coalescing applies — no result is kept for
+ * later reuse (used for explicitly user-triggered actions).
+ */
+const flights = new Map<string, Promise<unknown>>()
+const memo = new Map<string, { at: number; value: unknown }>()
+
+/** How long a freshly-fetched result is reused before the next poll refetches. */
+const QUOTES_TTL_MS = 10_000
+const TIMESERIES_TTL_MS = 30_000
+const CONFIG_TTL_MS = 60_000
+
+async function dedupe<T>(
+  key: string,
+  ttlMs: number,
+  fetch: () => Promise<InvokeResult<T>>,
+): Promise<InvokeResult<T>> {
+  const hit = memo.get(key)
+  if (hit && Date.now() - hit.at < ttlMs) return hit.value as InvokeResult<T>
+  const inFlight = flights.get(key)
+  if (inFlight) return inFlight as Promise<InvokeResult<T>>
+  const run = fetch().finally(() => {
+    flights.delete(key)
+  })
+  flights.set(key, run)
+  const res = await run
+  if (ttlMs > 0) memo.set(key, { at: Date.now(), value: res })
+  return res
+}
+
+function parseMarketError(inner: unknown): InvokeResult<never> {
+  const e = (inner ?? {}) as MarketError
   if (e.error === 'no_api_key') {
     return {
       data: null,
@@ -83,18 +118,24 @@ export async function fetchQuotes(priority?: string[]): Promise<InvokeResult<Quo
   }
   const body: Record<string, unknown> = { action: 'quotes' }
   if (priority && priority.length > 0) body.priority = priority
-  const res = await invokeMarketData<QuotesResponse>(body)
-  if (res.kind !== 'ok') {
-    // Edge function unreachable (e.g. function not deployed) → direct fallback.
-    try {
-      const quotes = await localQuotes()
-      if (quotes.length > 0) return { data: quotes, error: null, kind: 'ok' }
-    } catch {
-      /* keep the original error */
+  // One network call per distinct priority set: co-mounted consumers (quotes
+  // table + robot panel + StrictMode's dev double-mount) share the request,
+  // and a fresh result is reused for a few seconds instead of refetched.
+  const key = 'quotes:' + JSON.stringify(body)
+  return dedupe<Quote[]>(key, QUOTES_TTL_MS, async () => {
+    const res = await invokeMarketData<QuotesResponse>(body)
+    if (res.kind !== 'ok') {
+      // Edge function unreachable (e.g. function not deployed) → direct fallback.
+      try {
+        const quotes = await localQuotes()
+        if (quotes.length > 0) return { data: quotes, error: null, kind: 'ok' }
+      } catch {
+        /* keep the original error */
+      }
+      return { data: null, error: res.error, kind: res.kind }
     }
-    return { data: null, error: res.error, kind: res.kind }
-  }
-  return { data: res.data?.quotes ?? null, error: null, kind: 'ok' }
+    return { data: res.data?.quotes ?? null, error: null, kind: 'ok' }
+  })
 }
 
 export interface TimeSeriesRequest {
@@ -119,25 +160,38 @@ export async function fetchTimeSeries(req: TimeSeriesRequest): Promise<InvokeRes
       return { data: null, kind: 'error', error: 'Could not fetch price history from the free feeds right now.' }
     }
   }
-  const res = await invokeMarketData<TimeSeriesResponse>({
-    action: 'time_series',
-    symbol: req.symbol,
-    interval: req.interval,
-    outputsize: req.outputsize,
-    start_date: req.startDate,
-    end_date: req.endDate,
-  })
-  if (res.kind !== 'ok') {
-    // Edge function unreachable → direct keyless fallback.
-    try {
-      const bars = await localTimeSeries(req.symbol, req.interval, req.outputsize)
-      if (bars && bars.length > 0) return { data: bars, error: null, kind: 'ok' }
-    } catch {
-      /* keep the original error */
+  // Single-flight per (symbol, interval, size): the chart panel and the page
+  // chart request the same pair together; StrictMode doubles them in dev —
+  // one provider call serves both instead of four.
+  const key = [
+    'ts',
+    req.symbol,
+    req.interval,
+    req.outputsize,
+    req.startDate ?? '',
+    req.endDate ?? '',
+  ].join(':')
+  return dedupe<Bar[]>(key, TIMESERIES_TTL_MS, async () => {
+    const res = await invokeMarketData<TimeSeriesResponse>({
+      action: 'time_series',
+      symbol: req.symbol,
+      interval: req.interval,
+      outputsize: req.outputsize,
+      start_date: req.startDate,
+      end_date: req.endDate,
+    })
+    if (res.kind !== 'ok') {
+      // Edge function unreachable → direct keyless fallback.
+      try {
+        const bars = await localTimeSeries(req.symbol, req.interval, req.outputsize)
+        if (bars && bars.length > 0) return { data: bars, error: null, kind: 'ok' }
+      } catch {
+        /* keep the original error */
+      }
+      return { data: null, error: res.error, kind: res.kind }
     }
-    return { data: null, error: res.error, kind: res.kind }
-  }
-  return { data: res.data?.bars ?? null, error: null, kind: 'ok' }
+    return { data: res.data?.bars ?? null, error: null, kind: 'ok' }
+  })
 }
 
 /* ------------------------------ Platform config ---------------------------- */
@@ -179,7 +233,9 @@ export async function fetchMarketConfig(): Promise<InvokeResult<MarketDataConfig
       error: null,
     }
   }
-  return invokeMarketData<MarketDataConfig>({ action: 'market_config' })
+  return dedupe<MarketDataConfig>(`market_config`, CONFIG_TTL_MS, () =>
+    invokeMarketData<MarketDataConfig>({ action: 'market_config' }),
+  )
 }
 
 /**
@@ -215,9 +271,14 @@ export async function reconfigureMarketData(): Promise<
       return { data: null, kind: 'error', error: 'Could not reach the free market data feeds from this environment.' }
     }
   }
-  return invokeMarketData<MarketDataConfig & { message?: string; fetched?: number; provider?: string }>({
-    action: 'reconfigure',
-  })
+  return dedupe<MarketDataConfig & { message?: string; fetched?: number; provider?: string }>(
+    'reconfigure',
+    0,
+    () =>
+      invokeMarketData<MarketDataConfig & { message?: string; fetched?: number; provider?: string }>({
+        action: 'reconfigure',
+      }),
+  )
 }
 
 export interface UseQuotesState {

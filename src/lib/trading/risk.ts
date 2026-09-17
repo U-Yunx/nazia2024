@@ -4,7 +4,7 @@
  * Everything is denominated in USD; non-USD quote currencies are converted
  * through the live watchlist rates.
  */
-import type { AccountState, ClosedTrade, RatesMap, Side } from './types'
+import type { AccountState, ClosedTrade, RatesMap, RiskConfig, Side } from './types'
 import type { Bar } from '../types'
 
 const CRYPTO_RE = /BTC|ETH|BNB|SOL|XRP|ADA|DOGE|LTC/
@@ -46,6 +46,33 @@ export function pipValueUsd(symbol: string, rates: RatesMap): number | null {
   const per = usdPerUnit(symbol, rates)
   if (per == null) return null
   return pipSize(symbol) * per
+}
+
+/**
+ * The per-trade profit target / loss cap (USD) for a specific position,
+ * honouring the risk config's `profitUnit`:
+ *   - 'usd' → the configured dollar amounts, straight through.
+ *   - 'pips' → converted per position as `pips × pip value × units`, so the
+ *     target scales with the pair and size actually traded. When the pip value
+ *     can't be resolved (missing rate) the target is 0 — a position never has
+ *     an invalid half-converted cap; it simply falls back to price-based
+ *     stops/targets until quotes are available.
+ */
+export function perTradeTargetUsd(
+  risk: Pick<RiskConfig, 'profitUnit' | 'targetPerTradeUsd' | 'maxLossPerTradeUsd' | 'targetPerTradePips' | 'maxLossPerTradePips'>,
+  symbol: string,
+  units: number,
+  rates: RatesMap,
+): { targetProfitUsd: number; targetLossUsd: number } {
+  if (risk.profitUnit === 'pips') {
+    const pipValue = pipValueUsd(symbol, rates)
+    if (pipValue == null) return { targetProfitUsd: 0, targetLossUsd: 0 }
+    return {
+      targetProfitUsd: (risk.targetPerTradePips ?? 0) * pipValue * units,
+      targetLossUsd: (risk.maxLossPerTradePips ?? 0) * pipValue * units,
+    }
+  }
+  return { targetProfitUsd: risk.targetPerTradeUsd, targetLossUsd: risk.maxLossPerTradeUsd }
 }
 
 /** Realized/unrealized PnL in USD for a position at a given price. */

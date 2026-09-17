@@ -9,9 +9,12 @@ import {
   closeAllPositions,
   closePosition,
   createAccount,
+  entryProfitProbability,
   equity,
+  estimateProfitProbability,
   markToMarket,
   openPosition,
+  probabilityGate,
   runRobotCycle,
   todayPnlUsd,
   unrealizedPnl,
@@ -200,6 +203,55 @@ describe('markToMarket', () => {
     expect(closed[0].pnl).toBeCloseTo(-5, 5)
   })
 
+  it('closes a long at the pip profit target when profitUnit is pips', () => {
+    // 10 pips on 1000 units of EUR/USD = 10 × 0.0001 × 1000 × 1 = $1.
+    const acc = createAccount(10_000)
+    acc.risk.profitUnit = 'pips'
+    acc.risk.targetPerTradePips = 10
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 500, takeProfitPips: 40, units: 1000,
+    }, rates)
+    // pnl = $2 at 1.102 — the 10-pip target ($1) is reached first.
+    const { closed } = markToMarket(opened, { ...rates, 'EUR/USD': 1.102 })
+    expect(closed).toHaveLength(1)
+    expect(closed[0].closeReason).toBe('target')
+    expect(closed[0].pnl).toBeCloseTo(2, 5)
+  })
+
+  it('scales the pip target with position size', () => {
+    // Same 10-pip target on 5000 units = 10 × 0.0001 × 5000 × 1 = $5 — so a
+    // small favourable move (+$1.5 at 1.1003) does not close, but +$10 at
+    // 1.102 ($5 target) does. The price take-profit sits at 1.104, so the
+    // $ target fires first.
+    const acc = createAccount(10_000)
+    acc.risk.profitUnit = 'pips'
+    acc.risk.targetPerTradePips = 10
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 500, takeProfitPips: 40, units: 5000,
+    }, rates)
+    const { closed } = markToMarket(opened, { ...rates, 'EUR/USD': 1.1003 })
+    expect(closed).toHaveLength(0)
+    const { closed: hit } = markToMarket(opened, { ...rates, 'EUR/USD': 1.102 })
+    expect(hit).toHaveLength(1)
+    expect(hit[0].closeReason).toBe('target')
+    expect(hit[0].pnl).toBeCloseTo(10, 5)
+  })
+
+  it('closes a short at the pip loss cap when profitUnit is pips', () => {
+    // 20 pips loss on 500 units = 20 × 0.0001 × 500 × 1 = $1 cap.
+    const acc = createAccount(10_000)
+    acc.risk.profitUnit = 'pips'
+    acc.risk.maxLossPerTradePips = 20
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'short', entryPrice: 1.1, stopPips: 500, takeProfitPips: 40, units: 500,
+    }, rates)
+    // pnl = -$1.25 at 1.1025 — the $1 pip loss cap is breached first.
+    const { closed } = markToMarket(opened, { ...rates, 'EUR/USD': 1.1025 })
+    expect(closed).toHaveLength(1)
+    expect(closed[0].closeReason).toBe('stop_loss')
+    expect(closed[0].pnl).toBeCloseTo(-1.25, 5)
+  })
+
   it('honours a per-order $ profit target (robot risk stays off)', () => {
     const acc = createAccount(10_000)
     const { state: opened } = openPosition(acc, {
@@ -340,5 +392,97 @@ describe('runRobotCycle', () => {
     ], { pairs: ['EUR/USD', 'GBP/USD'], tradeMode: 'sequential', maxPerPair: 1, maxOpenTrades: 1 })
     expect(state.positions).toHaveLength(1)
     expect(events.some((e) => e.includes('Deferred GBP/USD'))).toBe(true)
+  })
+})
+
+describe('profit probability gate', () => {
+  it('estimates >50% for a strong setup with trend + momentum', () => {
+    const prob = estimateProfitProbability({
+      score: 78,
+      momentum: 0.8,
+      rsi: 35,
+      trend: 1,
+      volatilityPct: 0.8,
+      stopPips: 20,
+      takeProfitPips: 40,
+    })
+    expect(prob).not.toBeNull()
+    expect(prob as number).toBeGreaterThan(0.5)
+  })
+
+  it('estimates <50% for a weak signal', () => {
+    const prob = estimateProfitProbability({
+      score: 30,
+      momentum: 0.2,
+      rsi: 55,
+      trend: -1,
+      volatilityPct: 4.2,
+      stopPips: 40,
+      takeProfitPips: 10,
+    })
+    expect(prob).not.toBeNull()
+    expect(prob as number).toBeLessThan(0.5)
+  })
+
+  it('returns null when no ingredients are supplied (legacy behaviour)', () => {
+    expect(estimateProfitProbability({})).toBeNull()
+  })
+
+  it('opens a trade on a >50% probability and stamps the trade', () => {
+    const acc = createAccount(10_000)
+    const { state, events } = runRobotCycle(acc, [
+      {
+        symbol: 'EUR/USD', signal: 'buy', price: 1.1, rates,
+        strategy: 'MA', stopPips: 20, takeProfitPips: 40, units: 1000,
+        score: 80,
+      },
+    ], { pairs: ['EUR/USD'], tradeMode: 'sequential', maxPerPair: 1, maxOpenTrades: 0 })
+    expect(state.positions).toHaveLength(1)
+    expect(state.positions[0].entryProbability).toBeGreaterThan(0.5)
+    expect(events.some((e) => e.includes('Opened EUR/USD'))).toBe(true)
+  })
+
+  it('skips a trade at exactly 50% probability', () => {
+    const acc = createAccount(10_000)
+    const { state, events } = runRobotCycle(acc, [
+      {
+        symbol: 'EUR/USD', signal: 'buy', price: 1.1, rates,
+        strategy: 'MA', stopPips: 20, takeProfitPips: 40, units: 1000,
+        profitProbability: 0.5,
+      },
+    ], { pairs: ['EUR/USD'], tradeMode: 'sequential', maxPerPair: 1, maxOpenTrades: 0 })
+    expect(state.positions).toHaveLength(0)
+    expect(events.some((e) => e.includes('Skipped EUR/USD'))).toBe(true)
+  })
+
+  it('skips a trade below 50% probability and logs the reason', () => {
+    const acc = createAccount(10_000)
+    const { state, events } = runRobotCycle(acc, [
+      {
+        symbol: 'EUR/USD', signal: 'buy', price: 1.1, rates,
+        strategy: 'MA', stopPips: 20, takeProfitPips: 40, units: 1000,
+        score: 25,
+      },
+    ], { pairs: ['EUR/USD'], tradeMode: 'sequential', maxPerPair: 1, maxOpenTrades: 0 })
+    expect(state.positions).toHaveLength(0)
+    expect(events.some((e) => e.includes('Skipped EUR/USD'))).toBe(true)
+  })
+
+  it('probabilityGate mirrors the threshold check', () => {
+    expect(probabilityGate({ symbol: 'EUR/USD', signal: 'buy', price: 1.1, rates, stopPips: 20, takeProfitPips: 40, units: 1000, profitProbability: 0.5 }).ok).toBe(false)
+    expect(probabilityGate({ symbol: 'EUR/USD', signal: 'buy', price: 1.1, rates, stopPips: 20, takeProfitPips: 40, units: 1000, profitProbability: 0.51 }).ok).toBe(true)
+    expect(entryProfitProbability({ symbol: 'EUR/USD', signal: 'buy', price: 1.1, rates, stopPips: 20, takeProfitPips: 40, units: 1000, profitProbability: 0.62 })).toBeCloseTo(0.62, 3)
+  })
+
+  it('carries the entry probability onto the closed trade', () => {
+    const acc = createAccount(10_000)
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
+      profitProbability: 0.61,
+    }, rates)
+    const pos = opened.positions[0]
+    expect(pos.entryProbability).toBeCloseTo(0.61, 3)
+    const { trade } = closePosition(opened, pos.id, { price: 1.104, reason: 'take_profit', rates })
+    expect(trade?.entryProbability).toBeCloseTo(0.61, 3)
   })
 })

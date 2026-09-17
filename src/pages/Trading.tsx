@@ -27,7 +27,7 @@ import { acceptRisk } from '../lib/platform'
 import { effectiveRiskPct, pipValueUsd, stopDistanceFromAtr, suggestPositionUnits } from '../lib/trading/risk'
 import { equity } from '../lib/trading/engine'
 import { INTERVALS, STRATEGY_META, STRATEGY_TYPES, intervalLabel } from '../lib/strategies'
-import { atr } from '../lib/strategies/indicators'
+import { atr, rsi, sma } from '../lib/strategies/indicators'
 import { WATCHLIST } from '../lib/watchlist'
 import { fn as invokeEdge } from '../lib/functions'
 import type { Bar, BrokerConnectionRow, Interval, StrategyConfig, StrategyType, TradingMethod, TunedResult } from '../lib/types'
@@ -271,12 +271,12 @@ function ManagedBanner() {
 }
 
 const DURATION_OPTIONS: { label: string; value: number | null }[] = [
-  { label: 'Off (run until stopped)', value: null },
+  { label: 'Until stopped', value: null },
   { label: '30 minutes', value: 30 },
   { label: '1 hour', value: 60 },
-  { label: '2 hours', value: 120 },
-  { label: '4 hours', value: 240 },
-  { label: '8 hours', value: 480 },
+  { label: '3 hours', value: 180 },
+  { label: '6 hours', value: 360 },
+  { label: '12 hours', value: 720 },
   { label: '24 hours', value: 1440 },
 ]
 
@@ -338,7 +338,36 @@ export function Trading() {
     setPerTradeStopLossPips,
     setOverallMaxProfitUsd,
     setOverallMaxLossUsd,
+    setMaxPerPair,
   } = useRobotPrefs()
+  // Draft copies of the per-trade stops (pips) and session limits (USD) — the
+  // robot keeps trading on the committed prefs until "Apply limits" is pressed.
+  const [draftTradeLimits, setDraftTradeLimits] = useState(() => ({
+    tp: prefs.perTradeTakeProfitPips,
+    sl: prefs.perTradeStopLossPips,
+    profit: prefs.overallMaxProfitUsd,
+    loss: prefs.overallMaxLossUsd,
+  }))
+  const [limitsDirty, setLimitsDirty] = useState(false)
+  const [limitsApplied, setLimitsApplied] = useState(false)
+  const applyTradeLimits = () => {
+    setPerTradeTakeProfitPips(draftTradeLimits.tp)
+    setPerTradeStopLossPips(draftTradeLimits.sl)
+    setOverallMaxProfitUsd(draftTradeLimits.profit)
+    setOverallMaxLossUsd(draftTradeLimits.loss)
+    setLimitsDirty(false)
+    setLimitsApplied(true)
+  }
+  const revertTradeLimits = () => {
+    setDraftTradeLimits({
+      tp: prefs.perTradeTakeProfitPips,
+      sl: prefs.perTradeStopLossPips,
+      profit: prefs.overallMaxProfitUsd,
+      loss: prefs.overallMaxLossUsd,
+    })
+    setLimitsDirty(false)
+    setLimitsApplied(false)
+  }
   // The robot trades every pair the user has ticked; default to the first two
   // so a brand-new user sees the robot working out of the box.
   const robotPairs = useMemo(
@@ -789,7 +818,8 @@ export function Trading() {
    * bars for the pairs in scope, evaluates ALL strategies on each pair, and
    * ranks every actionable setup by probability-of-profit (live signal strength
    * + the backtested edge of that same strategy). It opens the strongest setups
-   * first — up to the account's max-open-positions limit, one position per pair.
+   * first — up to the account's max-open-positions limit, and up to the chosen
+   * per-pair cap of positions on the same pair.
    *
    * In "best analysis method" (auto-pick) mode it scans the whole watchlist and
    * trades only the top `pairCount` ranked pairs; otherwise it only considers
@@ -909,6 +939,19 @@ export function Trading() {
           }
 
           const label = `${STRATEGY_META[target.best.type].shortLabel} · ${intervalLabel(interval)}`
+          // Probability-of-profit ingredients: the pair's setup score plus the
+          // live signal-strength reads from its bars. The engine only opens
+          // when the blended estimate is above the 50% threshold.
+          const closes = bars.map((b) => b.close)
+          const barLast = bars.length - 1
+          const sma20 = sma(closes, 20)[barLast]
+          const rsiVal = rsi(closes, 14)[barLast]
+          const atrVal = atr(bars, 14)[barLast] ?? 0
+          const closeLast = closes[barLast] ?? 0
+          const window = bars.slice(-20)
+          const range = Math.max(...window.map((b) => b.high)) - Math.min(...window.map((b) => b.low))
+          const momentum = range > 0 && bars.length >= 2 ? Math.abs(closes[barLast] - closes[barLast - 1]) / range : 0
+          const trendAlign = sma20 != null ? (closeLast > sma20 ? 1 : -1) : 0
           cycleInputs.push({
             symbol: target.symbol,
             signal: target.best.signal,
@@ -918,6 +961,11 @@ export function Trading() {
             stopPips,
             takeProfitPips,
             units: scaledUnits,
+            score: target.best.score,
+            momentum: Math.min(1, momentum),
+            rsi: rsiVal ?? undefined,
+            trend: trendAlign,
+            volatilityPct: closeLast > 0 ? (atrVal / closeLast) * 100 : undefined,
           })
         }
         if (!cancelled && cycleInputs.length > 0) {
@@ -1120,7 +1168,7 @@ export function Trading() {
                 {autoTrade
                   ? prefs.strategyMode === 'manual'
                     ? `Scanning ${robotPairs.length} pair${robotPairs.length === 1 ? '' : 's'} · ${STRATEGY_META[prefs.manualStrategy].shortLabel} method only, strongest signals first.`
-                    : `Scanning ${robotPairs.length} pair${robotPairs.length === 1 ? '' : 's'} · every strategy evaluated on each · one position per pair, strongest setup first.`
+                    : `Scanning ${robotPairs.length} pair${robotPairs.length === 1 ? '' : 's'} · every strategy evaluated on each · up to ${prefs.maxPerPair} position${prefs.maxPerPair === 1 ? '' : 's'} per pair, strongest setups first.`
                   : 'Start the robot to auto-trade the strongest signal across your selected pairs — always risk-sized with a stop-loss.'}
               </p>
             </div>
@@ -1137,7 +1185,31 @@ export function Trading() {
             </Button>
           </div>
 
-          {/* Watchlist, trade mode and per-pair open/cap status */}
+          {/* Run window — choose how long the robot trades BEFORE starting it. */}
+          <div className="flex flex-col gap-2 rounded-xl border border-border bg-secondary/30 p-4 sm:flex-row sm:items-end sm:justify-between">
+            <div className="pb-1">
+              <p className="text-sm font-semibold text-foreground">Auto-run duration</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {prefs.durationMinutes == null
+                  ? 'The robot runs until you press Stop robot.'
+                  : `The robot stops and closes every position after ${prefs.durationMinutes} minute${prefs.durationMinutes === 1 ? '' : 's'}.`}
+              </p>
+            </div>
+            <Select
+              value={String(prefs.durationMinutes ?? 0)}
+              onChange={(e) => setDuration(e.target.value === '0' ? null : Number(e.target.value))}
+              className="w-full sm:w-56"
+              aria-label="Auto-run duration"
+            >
+              {DURATION_OPTIONS.map((o) => (
+                <option key={String(o.value)} value={String(o.value ?? 0)}>
+                  {o.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+
+          {/* Watchlist, per-pair cap and open/cap status */}
           <div className="rounded-xl border border-border bg-secondary/30 p-4">
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <p className="text-sm font-semibold text-foreground">
@@ -1146,17 +1218,50 @@ export function Trading() {
               <Badge className="border-border bg-muted text-muted-foreground">
                 {scanPairs.length} pair{scanPairs.length === 1 ? '' : 's'} · {prefs.autoPickPairs ? 'auto-picked' : 'manual'}
               </Badge>
-              {prefs.tradeMode === 'concurrent' && (
-                <Badge className="border-accent/40 bg-accent/10 text-accent">Max {prefs.maxPerPair}/pair</Badge>
-              )}
+              <Badge className="border-accent/40 bg-accent/10 text-accent">
+                Max {prefs.maxPerPair}/pair
+              </Badge>
               <Badge className="border-border bg-muted text-muted-foreground">
                 Max {prefs.maxOpenTrades > 0 ? prefs.maxOpenTrades : 'unlimited'} total
               </Badge>
             </div>
+
+            {/* How many positions the robot may hold on one pair at the same time. */}
+            <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-secondary/40 px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-foreground">Positions per pair</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  The robot may open up to {prefs.maxPerPair} position{prefs.maxPerPair === 1 ? '' : 's'} on the same
+                  pair at once — raise it to trade each new signal instead of waiting for the previous one to close.
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  aria-label="Fewer positions per pair"
+                  onClick={() => setMaxPerPair(Math.max(1, prefs.maxPerPair - 1))}
+                  disabled={prefs.maxPerPair <= 1}
+                >
+                  −
+                </Button>
+                <span className="w-8 text-center text-sm font-semibold tnum">{prefs.maxPerPair}</span>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  aria-label="More positions per pair"
+                  onClick={() => setMaxPerPair(Math.min(10, prefs.maxPerPair + 1))}
+                  disabled={prefs.maxPerPair >= 10}
+                >
+                  +
+                </Button>
+              </div>
+            </div>
+
             <div className="flex flex-wrap gap-1.5">
               {scanPairs.map((sym) => {
                 const openCount = account?.positions.filter((p) => p.symbol === sym).length ?? 0
-                const cap = prefs.tradeMode === 'concurrent' ? prefs.maxPerPair : 1
+                const cap = prefs.maxPerPair
                 const atCap = openCount >= cap
                 return (
                   <Badge
@@ -1173,9 +1278,8 @@ export function Trading() {
               })}
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
-              {prefs.tradeMode === 'concurrent'
-                ? 'Concurrent mode can hold multiple positions per pair up to the per-pair cap.'
-                : 'Sequential mode holds at most one position per pair until it closes.'}
+              The per-pair cap applies in both modes — a pair at its cap is skipped until a position closes. The global
+              cap (above) still limits how many positions the whole robot holds at once.
             </p>
           </div>
 
@@ -1321,9 +1425,9 @@ export function Trading() {
               })}
             </div>
             <p className="mt-1.5 text-xs text-muted-foreground">
-              The robot trades one position per pair. In Auto method it picks the best strategy for each pair
-              automatically; in Manual method it uses only the strategy you choose below. Add pairs to spread its
-              attention, or remove them to focus it.
+              The robot trades up to {prefs.maxPerPair} position{prefs.maxPerPair === 1 ? '' : 's'} per pair. In Auto
+              method it picks the best strategy for each pair automatically; in Manual method it uses only the strategy
+              you choose below. Add pairs to spread its attention, or remove them to focus it.
             </p>
           </div>
 
@@ -1452,83 +1556,119 @@ export function Trading() {
           </div>
 
           {/* Per-trade TP/SL overrides + session profit/loss limits */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="rounded-xl border border-border bg-secondary/30 p-4">
-              <p className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-foreground">
-                <Target className="h-4 w-4 text-accent" aria-hidden="true" />
-                Per-trade stops (pips)
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="mb-1 block text-[11px] uppercase tracking-wide text-muted-foreground" htmlFor="per-trade-tp">
-                    Take profit
-                  </label>
-                  <Input
-                    id="per-trade-tp"
-                    type="number"
-                    min={0}
-                    value={prefs.perTradeTakeProfitPips > 0 ? prefs.perTradeTakeProfitPips : ''}
-                    placeholder="Auto"
-                    onChange={(e) => setPerTradeTakeProfitPips(Math.max(0, Number(e.target.value)))}
-                  />
+          <div className="rounded-xl border border-border bg-secondary/30 p-4">
+            <p className="mb-2 text-sm font-semibold text-foreground">
+              Per-trade stops (pips) &amp; session limits (USD)
+            </p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                  <Target className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
+                  Per-trade stops (pips)
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="mb-1 block text-[11px] uppercase tracking-wide text-muted-foreground" htmlFor="per-trade-tp">
+                      Take profit
+                    </label>
+                    <Input
+                      id="per-trade-tp"
+                      type="number"
+                      min={0}
+                      value={draftTradeLimits.tp > 0 ? draftTradeLimits.tp : ''}
+                      placeholder="Auto"
+                      onChange={(e) => {
+                        setDraftTradeLimits((d) => ({ ...d, tp: Math.max(0, Number(e.target.value)) }))
+                        setLimitsDirty(true)
+                        setLimitsApplied(false)
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] uppercase tracking-wide text-muted-foreground" htmlFor="per-trade-sl">
+                      Stop loss
+                    </label>
+                    <Input
+                      id="per-trade-sl"
+                      type="number"
+                      min={0}
+                      value={draftTradeLimits.sl > 0 ? draftTradeLimits.sl : ''}
+                      placeholder="Auto"
+                      onChange={(e) => {
+                        setDraftTradeLimits((d) => ({ ...d, sl: Math.max(0, Number(e.target.value)) }))
+                        setLimitsDirty(true)
+                        setLimitsApplied(false)
+                      }}
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="mb-1 block text-[11px] uppercase tracking-wide text-muted-foreground" htmlFor="per-trade-sl">
-                    Stop loss
-                  </label>
-                  <Input
-                    id="per-trade-sl"
-                    type="number"
-                    min={0}
-                    value={prefs.perTradeStopLossPips > 0 ? prefs.perTradeStopLossPips : ''}
-                    placeholder="Auto"
-                    onChange={(e) => setPerTradeStopLossPips(Math.max(0, Number(e.target.value)))}
-                  />
-                </div>
+                <p className="mt-1.5 text-xs text-muted-foreground">Leave 0 to keep the strategy's risk-based stops.</p>
               </div>
-              <p className="mt-1.5 text-xs text-muted-foreground">Leave 0 to keep the strategy's risk-based stops.</p>
+              <div>
+                <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                  <ShieldAlert className="h-3.5 w-3.5 text-amber" aria-hidden="true" />
+                  Session limits (USD)
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="mb-1 block text-[11px] uppercase tracking-wide text-muted-foreground" htmlFor="session-profit">
+                      Max profit
+                    </label>
+                    <Input
+                      id="session-profit"
+                      type="number"
+                      min={0}
+                      value={draftTradeLimits.profit > 0 ? draftTradeLimits.profit : ''}
+                      placeholder="Off"
+                      onChange={(e) => {
+                        setDraftTradeLimits((d) => ({ ...d, profit: Math.max(0, Number(e.target.value)) }))
+                        setLimitsDirty(true)
+                        setLimitsApplied(false)
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] uppercase tracking-wide text-muted-foreground" htmlFor="session-loss">
+                      Max loss
+                    </label>
+                    <Input
+                      id="session-loss"
+                      type="number"
+                      min={0}
+                      value={draftTradeLimits.loss > 0 ? draftTradeLimits.loss : ''}
+                      placeholder="Off"
+                      onChange={(e) => {
+                        setDraftTradeLimits((d) => ({ ...d, loss: Math.max(0, Number(e.target.value)) }))
+                        setLimitsDirty(true)
+                        setLimitsApplied(false)
+                      }}
+                    />
+                  </div>
+                </div>
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  Robot stops and closes everything once a run reaches either limit.
+                </p>
+              </div>
             </div>
-            <div className="rounded-xl border border-border bg-secondary/30 p-4">
-              <p className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-foreground">
-                <ShieldAlert className="h-4 w-4 text-amber" aria-hidden="true" />
-                Session limits (USD)
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="mb-1 block text-[11px] uppercase tracking-wide text-muted-foreground" htmlFor="session-profit">
-                    Max profit
-                  </label>
-                  <Input
-                    id="session-profit"
-                    type="number"
-                    min={0}
-                    value={prefs.overallMaxProfitUsd > 0 ? prefs.overallMaxProfitUsd : ''}
-                    placeholder="Off"
-                    onChange={(e) => setOverallMaxProfitUsd(Math.max(0, Number(e.target.value)))}
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-[11px] uppercase tracking-wide text-muted-foreground" htmlFor="session-loss">
-                    Max loss
-                  </label>
-                  <Input
-                    id="session-loss"
-                    type="number"
-                    min={0}
-                    value={prefs.overallMaxLossUsd > 0 ? prefs.overallMaxLossUsd : ''}
-                    placeholder="Off"
-                    onChange={(e) => setOverallMaxLossUsd(Math.max(0, Number(e.target.value)))}
-                  />
-                </div>
-              </div>
-              <p className="mt-1.5 text-xs text-muted-foreground">
-                Robot stops and closes everything once a run reaches either limit.
-              </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Button size="sm" onClick={applyTradeLimits} disabled={!limitsDirty}>
+                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                Apply
+              </Button>
+              <Button variant="ghost" size="sm" onClick={revertTradeLimits} disabled={!limitsDirty}>
+                Revert
+              </Button>
+              {limitsApplied && !limitsDirty && (
+                <span role="status" className="flex items-center gap-1 text-xs text-up">
+                  <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                  Limits applied.
+                </span>
+              )}
             </div>
           </div>
 
-          {/* Strategy profile, chart timeframe, auto-run duration */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {/* Strategy profile + chart timeframe (duration moved up next to Start) */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary/40 px-3 py-2">
               <Sparkles className="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />
               <div className="min-w-0">
@@ -1544,17 +1684,6 @@ export function Trading() {
               {INTERVALS.map((i) => (
                 <option key={i.value} value={i.value}>
                   {i.label}
-                </option>
-              ))}
-            </Select>
-            <Select
-              label="Auto-run duration"
-              value={String(prefs.durationMinutes ?? 0)}
-              onChange={(e) => setDuration(e.target.value === '0' ? null : Number(e.target.value))}
-            >
-              {DURATION_OPTIONS.map((o) => (
-                <option key={String(o.value)} value={String(o.value ?? 0)}>
-                  {o.label}
                 </option>
               ))}
             </Select>

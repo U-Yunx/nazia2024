@@ -279,7 +279,9 @@ async function liveRunCycle(
   for (const input of inputs) {
     if (input.signal === 'neutral') continue
     const side: Side = input.signal === 'buy' ? 'long' : 'short'
-    const perPairCap = config.tradeMode === 'concurrent' ? config.maxPerPair : 1
+    // Per-pair cap comes straight from the config in BOTH modes (sequential
+    // simply runs with maxPerPair = 1 unless the user raises it).
+    const perPairCap = Math.max(1, config.maxPerPair)
     const onSymbol = mirror.positions.filter((p) => p.symbol === input.symbol).length
     if (onSymbol >= perPairCap) {
       events.push(`Skipped ${input.symbol}: ${onSymbol} open, per-pair cap ${perPairCap} reached.`)

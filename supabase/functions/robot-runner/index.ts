@@ -20,6 +20,8 @@ import {
   pipValueUsd,
   rankPairs,
   runRobotCycle,
+  sma,
+  rsi,
   stopDistanceFromAtr,
   STRATEGY_LABELS,
   suggestPositionUnits,
@@ -591,6 +593,20 @@ async function tickRun(
     const scaledUnits = Math.round(units * Math.max(0.1, run.size_multiplier || 1))
     if (scaledUnits <= 0) continue
 
+    // Probability-of-profit ingredients: the pair's setup score plus the
+    // live signal-strength reads from its bars. The engine only OPENS when
+    // the blended estimate is above the 50% threshold.
+    const closes = bars.map((b) => b.close)
+    const last = bars.length - 1
+    const sma20 = sma(closes, 20)[last]
+    const rsiVal = rsi(closes, 14)[last]
+    const atrVal = atr(bars, 14)[last] ?? 0
+    const closesLast = closes[last] ?? 0
+    const windowBars = bars.slice(-20)
+    const range = Math.max(...windowBars.map((b) => b.high)) - Math.min(...windowBars.map((b) => b.low))
+    const momentum = range > 0 && bars.length >= 2 ? Math.abs(closes[last] - closes[last - 1]) / range : 0
+    const trendAlign = sma20 != null ? (closesLast > sma20 ? 1 : -1) : 0
+
     cycleInputs.push({
       symbol: target.symbol,
       signal: target.best.signal,
@@ -600,6 +616,11 @@ async function tickRun(
       stopPips,
       takeProfitPips,
       units: scaledUnits,
+      score: target.best.score,
+      momentum: Math.min(1, momentum),
+      rsi: rsiVal ?? undefined,
+      trend: trendAlign,
+      volatilityPct: closesLast > 0 ? (atrVal / closesLast) * 100 : undefined,
     })
   }
 
