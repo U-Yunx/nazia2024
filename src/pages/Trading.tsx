@@ -323,6 +323,7 @@ export function Trading() {
     closeRobotPositions,
     flattenAll,
     reset,
+    setAccountKind,
   } = usePaperAccount({ oanda: oandaConn?.id, mt: mtConn?.id })
   const [strategy, updateStrategy] = useSelectedStrategy()
   const {
@@ -1825,7 +1826,11 @@ export function Trading() {
     <>
       {riskGate}
       {marketAlert}
-      <AccountSummary account={acc} rates={rates} />
+      <AccountSummary
+        account={acc}
+        rates={rates}
+        onAccountKindChange={mode === 'paper' ? setAccountKind : undefined}
+      />
       {robotCard}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <RiskPanel
