@@ -1,25 +1,18 @@
-# dependencies
-node_modules
-
-# build output
-dist
-dist-ssr
-
-# local env files (secrets are never committed; keep the template)
-.env
-.env.local
-.env.*.local
-!.env.example
-
-# logs
+# Logs
 logs
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+lerna-debug.log*
 
-# editor / OS
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
@@ -29,7 +22,3 @@ pnpm-debug.log*
 *.njsproj
 *.sln
 *.sw?
-
-# testing / tooling
-.playwright
-coverage
