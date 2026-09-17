@@ -4,11 +4,16 @@
  * streak. Equity is marked to the live watchlist rates so the numbers move in
  * real time. When the consecutive-loss breaker trips, a clear "standing down"
  * notice explains why the robot went quiet.
+ *
+ * When `onAccountKindChange` is set (paper mode only), the card also offers the
+ * Standard ↔ Micro account switch — a micro paper account starts from a smaller
+ * balance, which keeps position sizing micro-lot-ish while testing a robot.
  */
 import { ShieldAlert, Wallet } from 'lucide-react'
-import type { AccountState, RatesMap } from '../../lib/trading/types'
+import type { AccountState, PaperAccountKind, RatesMap } from '../../lib/trading/types'
 import { equity, unrealizedPnl } from '../../lib/trading/engine'
 import { consecutiveLosses } from '../../lib/trading/risk'
+import { PAPER_ACCOUNT_KINDS, startingBalanceForKind } from '../../lib/trading/accountKind'
 import { formatUsd } from '../../lib/format'
 import { cn } from '../../lib/cn'
 import { Card, CardContent, CardHeader, CardTitle } from '../ui'
@@ -31,10 +36,20 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: 'up
   )
 }
 
-export function AccountSummary({ account, rates }: { account: AccountState; rates: RatesMap }) {
+export function AccountSummary({
+  account,
+  rates,
+  onAccountKindChange,
+}: {
+  account: AccountState
+  rates: RatesMap
+  onAccountKindChange?: (kind: PaperAccountKind) => void
+}) {
   const eq = equity(account, rates)
   const unreal = unrealizedPnl(account, rates)
   const pnl = eq - account.initialBalance
+  // Legacy accounts saved before the micro option carry no kind — Standard.
+  const kind: PaperAccountKind = account.risk.kind ?? 'standard'
 
   const wins = account.trades.filter((t) => t.pnl > 0).length
   const winRate = account.trades.length > 0 ? (wins / account.trades.length) * 100 : 0
@@ -51,6 +66,39 @@ export function AccountSummary({ account, rates }: { account: AccountState; rate
         </CardTitle>
       </CardHeader>
       <CardContent>
+        {onAccountKindChange && (
+          <div className="mb-4">
+            <div
+              role="group"
+              aria-label="Paper account type"
+              className="flex items-center gap-1 rounded-lg border border-border/60 bg-secondary/40 p-1"
+            >
+              {(Object.keys(PAPER_ACCOUNT_KINDS) as PaperAccountKind[]).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  aria-pressed={kind === k}
+                  onClick={() => {
+                    if (k !== kind) onAccountKindChange(k)
+                  }}
+                  className={cn(
+                    'flex-1 cursor-pointer rounded-md px-3 py-1.5 text-xs font-semibold transition-all duration-150 active:scale-[0.98]',
+                    kind === k
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
+                  )}
+                >
+                  {PAPER_ACCOUNT_KINDS[k].label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+              {PAPER_ACCOUNT_KINDS[kind].description} Starting balance{' '}
+              <span className="font-semibold text-foreground">{formatUsd(startingBalanceForKind(kind))}</span> — switching
+              account type resets the paper account.
+            </p>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Stat label="Balance" value={formatUsd(account.balance)} tone="neutral" />
           <Stat label="Equity" value={formatUsd(eq)} tone="neutral" />

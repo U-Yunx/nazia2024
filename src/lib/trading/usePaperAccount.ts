@@ -16,6 +16,8 @@ import { applySignal, canOpen, closeAllPositions, closeRobotPositions as engineC
 import { clearLocal, loadLocal, loadRemote, resetRemote, saveLocal, saveRemote } from './persistence'
 import { clearRobotRunning, loadRobotRunning, saveRobotRunning } from './robotState'
 import { createBroker, type BrokerAdapter } from './broker'
+import { startingBalanceForKind } from './accountKind'
+import type { PaperAccountKind } from './types'
 
 const MODE_KEY = 'fx-toolkit.broker-mode'
 
@@ -326,6 +328,22 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string })
     [],
   )
 
+  /**
+   * Switch the paper account between Standard and Micro. A micro account is a
+   * smaller, realistic demo account — switching starts a fresh paper account
+   * with the flavour's starting balance (local ledger + Supabase mirror reset)
+   * so position sizes stay honest, like opening a real micro account.
+   */
+  const setAccountKind = useCallback((kind: PaperAccountKind) => {
+    clearLocal()
+    const balance = startingBalanceForKind(kind)
+    const fresh = createAccount(balance)
+    setAccount({ ...fresh, risk: { ...fresh.risk, kind } })
+    clearRobotRunning(userRef.current?.id)
+    const u = userRef.current
+    if (u) void resetRemote(u, balance)
+  }, [])
+
   const setBrokerMode = useCallback((m: BrokerMode) => {
     setMode(m)
     try {
@@ -359,5 +377,7 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string })
     closeRobotPositions,
     flattenAll,
     reset,
+    /** Switch the paper account to Standard or Micro (resets the demo balance). */
+    setAccountKind,
   }
 }

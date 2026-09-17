@@ -13,6 +13,7 @@ import type { Bar, Interval, Signal, StrategyType } from '../types'
 import { STRATEGY_META, STRATEGY_TYPES } from '../strategies'
 import { computeSignal } from '../strategies/signals'
 import { atr, rsi, sma } from '../strategies/indicators'
+import { detectRegime } from './regime'
 
 export interface BestStrategy {
   type: StrategyType
@@ -46,12 +47,32 @@ export function bestStrategyFor(bars: Bar[], interval: Interval): BestStrategy |
   const closes = bars.map((b) => b.close)
   const last = bars.length - 1
 
-  // Market context shared by every strategy's score.
+  // Market context shared by every strategy's score. The regime classifies the
+  // market as trend or range (ADX) with a volatility state, so the score can
+  // reward setups that trade WITH the market and fade the ones that fight it.
+  const regime = detectRegime(bars)
   const atrVal = atr(bars, 14)[last] ?? 0
   const atrPct = closes[last] > 0 ? (atrVal / closes[last]) * 100 : 0
   const rsiVal = rsi(closes, 14)[last]
   const sma20 = sma(closes, 20)[last]
   const trendAlign = sma20 != null ? (closes[last] > sma20 ? 1 : -1) : 0
+
+  // Regime → strategy-family alignment in score form.
+  const regimeScoreFor = (type: StrategyType): number => {
+    if (!regime) return 0
+    const trending = regime.trend !== 'range'
+    const isTrendFollower = type === 'MA' || type === 'MACD'
+    const isReversioner = type === 'RSI' || type === 'BOLLINGER'
+    // Confirmed trend → trend-followers gain conviction, fading setups lose it.
+    if (trending) {
+      if (isTrendFollower) return 6
+      if (isReversioner) return -8
+      return 0
+    }
+    // Range → mean-reversioners get the edge.
+    if (isReversioner) return 5
+    return 0
+  }
 
   let best: BestStrategy | null = null
 
@@ -83,6 +104,16 @@ export function bestStrategyFor(bars: Bar[], interval: Interval): BestStrategy |
     // Volatility penalty: above ~2% ATR the market gets whipsaw-prone and the
     // setup's edge shrinks, no matter what the indicators say.
     if (atrPct > 2) score -= Math.min(20, (atrPct - 2) * 5)
+
+    // Regime alignment: reward strategies that fit the market actually being
+    // traded (trend-followers in trends, mean-reversion in ranges) and make
+    // volatility states shave a little conviction (high = whipsaw, low = calm
+    // tailwinds).
+    score += regimeScoreFor(type)
+    if (regime) {
+      if (regime.volatility === 'high') score -= 6
+      else if (regime.volatility === 'low') score += 3
+    }
 
     const rounded = Math.round(Math.min(99, Math.max(5, score)))
     if (!best || rounded > best.score) {

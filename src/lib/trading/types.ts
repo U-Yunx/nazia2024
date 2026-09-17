@@ -79,8 +79,13 @@ export interface ClosedTrade {
   status: 'closed'
 }
 
+/** Paper/ledger account flavour — 'micro' = smaller demo balance, micro-lot-scale sizing. */
+export type PaperAccountKind = 'standard' | 'micro'
+
 /** Risk-management knobs the robot enforces. */
 export interface RiskConfig {
+  /** Paper account flavour (standard vs micro). Optional for legacy saved accounts. */
+  kind?: PaperAccountKind
   /** % of equity risked per trade (position sizing). */
   riskPerTradePct: number
   /** Max concurrently open positions (across all robot pairs). */
@@ -144,6 +149,7 @@ export interface RiskConfig {
 }
 
 export const DEFAULT_RISK: RiskConfig = {
+  kind: 'standard',
   riskPerTradePct: 1,
   maxOpenPositions: 5,
   defaultStopPips: 20,
