@@ -6,8 +6,9 @@
  * notice explains why the robot went quiet.
  *
  * When `onAccountKindChange` is set (paper mode only), the card also offers the
- * Standard ↔ Micro account switch — a micro paper account starts from a smaller
- * balance, which keeps position sizing micro-lot-ish while testing a robot.
+ * Standard ↔ Micro ↔ Minimal account switch — a micro paper account starts from
+ * a smaller balance (the minimal flavour from the smallest viable one), which
+ * keeps position sizing proportionally small while testing a robot.
  */
 import { ShieldAlert, Wallet } from 'lucide-react'
 import type { AccountState, PaperAccountKind, RatesMap } from '../../lib/trading/types'

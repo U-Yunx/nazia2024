@@ -24,6 +24,11 @@ export const PAPER_ACCOUNT_KINDS: Record<PaperAccountKind, PaperAccountKindInfo>
     startingBalance: 1_000,
     description: 'Small demo account — micro-lot-sized positions, ideal for testing a new robot setup.',
   },
+  minimal: {
+    label: 'Minimal',
+    startingBalance: 50,
+    description: 'Smallest viable demo account — prove a robot works on a minimal deposit before scaling it up.',
+  },
 }
 
 /** Human label for a kind, defaulting to Standard for legacy/absent data. */

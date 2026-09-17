@@ -329,10 +329,11 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string })
   )
 
   /**
-   * Switch the paper account between Standard and Micro. A micro account is a
-   * smaller, realistic demo account — switching starts a fresh paper account
-   * with the flavour's starting balance (local ledger + Supabase mirror reset)
-   * so position sizes stay honest, like opening a real micro account.
+   * Switch the paper account between Standard, Micro and Minimal. A micro
+   * account is a smaller, realistic demo account; the minimal flavour is the
+   * smallest viable balance — switching starts a fresh paper account with the
+   * flavour's starting balance (local ledger + Supabase mirror reset) so
+   * position sizes stay honest, like opening a real micro account.
    */
   const setAccountKind = useCallback((kind: PaperAccountKind) => {
     clearLocal()

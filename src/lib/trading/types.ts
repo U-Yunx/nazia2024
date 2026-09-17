@@ -79,8 +79,9 @@ export interface ClosedTrade {
   status: 'closed'
 }
 
-/** Paper/ledger account flavour — 'micro' = smaller demo balance, micro-lot-scale sizing. */
-export type PaperAccountKind = 'standard' | 'micro'
+/** Paper/ledger account flavour — 'micro' = smaller demo balance, micro-lot-scale sizing;
+ * 'minimal' = smallest viable paper balance, so a robot can be proven on a minimal deposit. */
+export type PaperAccountKind = 'standard' | 'micro' | 'minimal'
 
 /** Risk-management knobs the robot enforces. */
 export interface RiskConfig {
