@@ -6,15 +6,17 @@
  * notice explains why the robot went quiet.
  *
  * When `onAccountKindChange` is set (paper mode only), the card also offers the
- * Standard ↔ Micro ↔ Minimal account switch — a micro paper account starts from
- * a smaller balance (the minimal flavour from the smallest viable one), which
- * keeps position sizing proportionally small while testing a robot.
+ * Standard ↔ Micro ↔ Minimal ↔ Custom switch — a micro paper account starts from
+ * a smaller balance, the minimal flavour from the smallest viable one ($10), and
+ * the custom flavour from an amount the user deposits themselves — which keeps
+ * position sizing proportionally small while testing a robot.
  */
+import { useState } from 'react'
 import { ShieldAlert, Wallet } from 'lucide-react'
 import type { AccountState, PaperAccountKind, RatesMap } from '../../lib/trading/types'
 import { equity, unrealizedPnl } from '../../lib/trading/engine'
 import { consecutiveLosses } from '../../lib/trading/risk'
-import { PAPER_ACCOUNT_KINDS, startingBalanceForKind } from '../../lib/trading/accountKind'
+import { MIN_PAPER_DEPOSIT, PAPER_ACCOUNT_KINDS, startingBalanceForKind } from '../../lib/trading/accountKind'
 import { formatUsd } from '../../lib/format'
 import { cn } from '../../lib/cn'
 import { Card, CardContent, CardHeader, CardTitle } from '../ui'
@@ -44,12 +46,12 @@ export function AccountSummary({
 }: {
   account: AccountState
   rates: RatesMap
-  onAccountKindChange?: (kind: PaperAccountKind) => void
+  onAccountKindChange?: (kind: PaperAccountKind, balance?: number) => void
 }) {
   const eq = equity(account, rates)
   const unreal = unrealizedPnl(account, rates)
   const pnl = eq - account.initialBalance
-  // Legacy accounts saved before the micro option carry no kind — Standard.
+  // Legacy accounts saved before the kind option carry no kind — Standard.
   const kind: PaperAccountKind = account.risk.kind ?? 'standard'
 
   const wins = account.trades.filter((t) => t.pnl > 0).length
@@ -57,6 +59,18 @@ export function AccountSummary({
   const streak = consecutiveLosses(account.trades)
   const breaker = account.risk.maxConsecutiveLosses
   const standingDown = breaker > 0 && streak >= breaker
+
+  // Custom accounts take their displayed starting balance from the live account
+  // (the kind preset is 0), and let the user set a fresh deposit inline.
+  const [depositDraft, setDepositDraft] = useState('')
+  const shownStartingBalance = kind === 'custom' ? account.initialBalance : startingBalanceForKind(kind)
+
+  const applyCustomDeposit = () => {
+    const amount = Math.round(Number(depositDraft))
+    if (!Number.isFinite(amount) || amount < MIN_PAPER_DEPOSIT) return
+    onAccountKindChange?.('custom', amount)
+    setDepositDraft('')
+  }
 
   return (
     <Card>
@@ -93,10 +107,46 @@ export function AccountSummary({
                 </button>
               ))}
             </div>
+            {kind === 'custom' && (
+              <div className="mt-2 flex items-center gap-2">
+                <label htmlFor="custom-deposit" className="sr-only">
+                  Custom paper deposit
+                </label>
+                <span className="shrink-0 rounded-md border border-border/60 bg-secondary/40 px-2 py-1.5 text-xs text-muted-foreground">
+                  $
+                </span>
+                <input
+                  id="custom-deposit"
+                  type="number"
+                  min={MIN_PAPER_DEPOSIT}
+                  step={10}
+                  inputMode="numeric"
+                  placeholder={String(account.initialBalance)}
+                  value={depositDraft}
+                  onChange={(e) => setDepositDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') applyCustomDeposit()
+                  }}
+                  className="min-w-0 flex-1 rounded-md border border-border/60 bg-secondary/40 px-2.5 py-1.5 text-xs font-medium text-foreground outline-none transition-colors focus:border-accent"
+                />
+                <button
+                  type="button"
+                  onClick={applyCustomDeposit}
+                  disabled={!depositDraft || Number(depositDraft) < MIN_PAPER_DEPOSIT}
+                  className="shrink-0 cursor-pointer rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground shadow-sm transition-all duration-150 hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Set deposit
+                </button>
+              </div>
+            )}
             <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
               {PAPER_ACCOUNT_KINDS[kind].description} Starting balance{' '}
-              <span className="font-semibold text-foreground">{formatUsd(startingBalanceForKind(kind))}</span> — switching
-              account type resets the paper account.
+              <span className="font-semibold text-foreground">{formatUsd(shownStartingBalance)}</span> —{' '}
+              {kind === 'custom'
+                ? depositDraft && Number(depositDraft) > 0 && Number(depositDraft) < MIN_PAPER_DEPOSIT
+                  ? 'Minimum deposit is $10.'
+                  : 'type an amount and press "Set deposit" to reset the account with it.'
+                : 'switching account type resets the paper account.'}
             </p>
           </div>
         )}

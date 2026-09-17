@@ -6,11 +6,17 @@
  */
 import type { PaperAccountKind } from './types'
 
+/** Smallest allowed paper deposit (used by the minimal flavour and custom deposits). */
+export const MIN_PAPER_DEPOSIT = 10
+
 export interface PaperAccountKindInfo {
   label: string
   /** Starting balance the paper account is reset to for this flavour. */
   startingBalance: number
   description: string
+  /** True for the user-defined 'custom' flavour — the starting balance comes from
+   * the user (via setAccountKind('custom', amount)), not from a preset value. */
+  custom?: boolean
 }
 
 export const PAPER_ACCOUNT_KINDS: Record<PaperAccountKind, PaperAccountKindInfo> = {
@@ -26,8 +32,14 @@ export const PAPER_ACCOUNT_KINDS: Record<PaperAccountKind, PaperAccountKindInfo>
   },
   minimal: {
     label: 'Minimal',
-    startingBalance: 50,
-    description: 'Smallest viable demo account — prove a robot works on a minimal deposit before scaling it up.',
+    startingBalance: MIN_PAPER_DEPOSIT,
+    description: 'Smallest viable demo account — prove a robot works on a $10 deposit before scaling it up.',
+  },
+  custom: {
+    label: 'Custom',
+    startingBalance: 0,
+    custom: true,
+    description: 'Deposit any amount you like — the robot runs on your own paper balance.',
   },
 }
 

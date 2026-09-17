@@ -16,7 +16,7 @@ import { applySignal, canOpen, closeAllPositions, closeRobotPositions as engineC
 import { clearLocal, loadLocal, loadRemote, resetRemote, saveLocal, saveRemote } from './persistence'
 import { clearRobotRunning, loadRobotRunning, saveRobotRunning } from './robotState'
 import { createBroker, type BrokerAdapter } from './broker'
-import { startingBalanceForKind } from './accountKind'
+import { MIN_PAPER_DEPOSIT, startingBalanceForKind } from './accountKind'
 import type { PaperAccountKind } from './types'
 
 const MODE_KEY = 'fx-toolkit.broker-mode'
@@ -329,15 +329,19 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string })
   )
 
   /**
-   * Switch the paper account between Standard, Micro and Minimal. A micro
-   * account is a smaller, realistic demo account; the minimal flavour is the
-   * smallest viable balance — switching starts a fresh paper account with the
-   * flavour's starting balance (local ledger + Supabase mirror reset) so
+   * Switch the paper account between Standard, Micro, Minimal and Custom. A
+   * micro account is a smaller, realistic demo account; the minimal flavour is
+   * the smallest viable starting balance; the custom flavour takes the user's
+   * own deposit amount (clamped to MIN_PAPER_DEPOSIT). Switching starts a fresh
+   * paper account with that balance (local ledger + Supabase mirror reset) so
    * position sizes stay honest, like opening a real micro account.
    */
-  const setAccountKind = useCallback((kind: PaperAccountKind) => {
+  const setAccountKind = useCallback((kind: PaperAccountKind, customBalance?: number) => {
     clearLocal()
-    const balance = startingBalanceForKind(kind)
+    const balance =
+      kind === 'custom'
+        ? Math.max(MIN_PAPER_DEPOSIT, Math.round(customBalance ?? MIN_PAPER_DEPOSIT))
+        : startingBalanceForKind(kind)
     const fresh = createAccount(balance)
     setAccount({ ...fresh, risk: { ...fresh.risk, kind } })
     clearRobotRunning(userRef.current?.id)

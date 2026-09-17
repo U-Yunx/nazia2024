@@ -80,8 +80,9 @@ export interface ClosedTrade {
 }
 
 /** Paper/ledger account flavour — 'micro' = smaller demo balance, micro-lot-scale sizing;
- * 'minimal' = smallest viable paper balance, so a robot can be proven on a minimal deposit. */
-export type PaperAccountKind = 'standard' | 'micro' | 'minimal'
+ * 'minimal' = smallest viable paper balance, so a robot can be proven on a minimal deposit;
+ * 'custom' = user-chosen starting balance (any amount ≥ MIN_PAPER_DEPOSIT). */
+export type PaperAccountKind = 'standard' | 'micro' | 'minimal' | 'custom'
 
 /** Risk-management knobs the robot enforces. */
 export interface RiskConfig {
