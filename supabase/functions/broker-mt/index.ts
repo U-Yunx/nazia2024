@@ -130,6 +130,42 @@ async function loadMetaApiTokenMode(supabase: any): Promise<"user" | "general"> 
   return v.mode === "general" ? "general" : "user";
 }
 
+/** Starter-tier quotas — server-side mirror of src/lib/trading/tierLimits.ts. */
+const STARTER_MAX_PAIRS = 6;
+const STARTER_MAX_PER_PAIR = 1;
+const UNLOCK_SUBSCRIPTION_DAYS = 30;
+const TIER_DAY_MS = 86_400_000;
+
+/**
+ * The calling user's order tier. Free users and subscribers who have held an
+ * active subscription for fewer than 30 days are limited to STARTER_MAX_PAIRS
+ * distinct trading pairs with STARTER_MAX_PER_PAIR open position each. Admins
+ * are never limited. Enforced on EVERY live order (manual + robot) so the rule
+ * the robot-runner mirror applies to background runs also covers orders placed
+ * straight from the Trading page.
+ */
+async function orderTier(supabase: any, userId: string): Promise<{ limited: boolean; maxPairs: number; maxPerPair: number }> {
+  const { data: profile } = await supabase.from("profiles").select("role").eq("id", userId).maybeSingle();
+  if (profile?.role === "admin") return { limited: false, maxPairs: Infinity, maxPerPair: Infinity };
+  const { data: subs } = await supabase
+    .from("subscriptions")
+    .select("status, starts_at, activated_at, created_at, ends_at")
+    .eq("user_id", userId);
+  const now = Date.now();
+  const starts = (subs ?? [])
+    .filter((s) => s.status === "active" && (!s.ends_at || new Date(s.ends_at).getTime() > now))
+    .map((s) => s.starts_at ?? s.activated_at ?? s.created_at)
+    .filter((t): t is string => Boolean(t))
+    .map((t) => new Date(t).getTime());
+  const days = starts.length > 0 ? Math.max(0, Math.floor((now - Math.min(...starts)) / TIER_DAY_MS)) : null;
+  const unlocked = days != null && days >= UNLOCK_SUBSCRIPTION_DAYS;
+  return {
+    limited: !unlocked,
+    maxPairs: unlocked ? Infinity : STARTER_MAX_PAIRS,
+    maxPerPair: unlocked ? Infinity : STARTER_MAX_PER_PAIR,
+  };
+}
+
 async function isAdmin(supabase: any, userId: string): Promise<boolean> {
   const { data } = await supabase.from("profiles").select("role").eq("id", userId).maybeSingle();
   return data?.role === "admin";
@@ -366,6 +402,63 @@ async function validateMetaApiTokenCached(token: string): Promise<{ ok: boolean;
   return { ok: validation.ok, error: validation.error };
 }
 
+/**
+ * Per-account symbol specifications (minVolume / volumeStep / maxVolume) —
+ * cached 10 minutes. These describe the broker's actual contract (0.01 steps
+ * on micro accounts, 0.1 / 1.0 on standard and cent venues), which is what
+ * makes robot + manual orders on micro accounts execute without "invalid
+ * volume" rejections.
+ */
+const SPEC_TTL_MS = 10 * 60 * 1000;
+const specCache = new Map<string, { minVolume: number; volumeStep: number; maxVolume: number; at: number }>();
+
+async function symbolSpec(
+  accountUrl: string,
+  symbol: string,
+  headers: Record<string, string>,
+): Promise<{ minVolume: number; volumeStep: number; maxVolume: number }> {
+  const key = `${accountUrl}|${symbol}`;
+  const hit = specCache.get(key);
+  if (hit && Date.now() - hit.at < SPEC_TTL_MS) return hit;
+  const fallback = { minVolume: 0.01, volumeStep: 0.01, maxVolume: 0 };
+  try {
+    const res = await fetchWithTimeout(`${accountUrl}/symbols/${encodeURIComponent(symbol)}/specification`, { headers }, 10_000);
+    const spec = (await res.json().catch(() => ({}))) as { minVolume?: number; volumeStep?: number; maxVolume?: number };
+    const parsed = {
+      minVolume: toNumber(spec.minVolume) > 0 ? toNumber(spec.minVolume) : 0.01,
+      volumeStep: toNumber(spec.volumeStep) > 0 ? toNumber(spec.volumeStep) : 0.01,
+      maxVolume: toNumber(spec.maxVolume) > 0 ? toNumber(spec.maxVolume) : 0,
+    };
+    specCache.set(key, { ...parsed, at: Date.now() });
+    return parsed;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Convert engine units → broker volume for THIS account's real contract: snap
+ * to the symbol's volumeStep, then clamp to [minVolume, maxVolume]. Micro
+ * accounts get micro lots (0.01, 0.02, …) that the broker actually accepts —
+ * the "invalid volume" rejections that plague MT4/5 bridges come from sending
+ * a step the venue doesn't support (e.g. 0.03 on a 0.1-step account).
+ */
+async function orderVolume(
+  units: number,
+  accountUrl: string,
+  symbol: string,
+  headers: Record<string, string>,
+): Promise<number> {
+  const spec = await symbolSpec(accountUrl, symbol, headers);
+  const step = spec.volumeStep > 0 ? spec.volumeStep : 0.01;
+  const minVol = spec.minVolume > 0 ? spec.minVolume : 0.01;
+  const raw = Math.round((units / UNITS_PER_LOT) / step) * step;
+  const clamped = spec.maxVolume > 0 ? Math.min(raw, spec.maxVolume) : raw;
+  const floored = Math.max(clamped, minVol);
+  // Kill float noise (0.30000000000000004 → 0.3) before the order is sent.
+  return Math.round(floored * 1e6) / 1e6;
+}
+
 /** In-flight provisioning lock: one create/deploy per connection at a time. */
 type ProvisionResult = {
   ok: boolean;
@@ -375,6 +468,7 @@ type ProvisionResult = {
   code?: BrokerErrorCode;
   details?: string | null;
 };
+
 const provisionLocks = new Map<string, Promise<ProvisionResult>>();
 
 /**
@@ -1134,7 +1228,7 @@ Deno.serve(async (req: Request) => {
       const side = String(body.side ?? "long");
       if (side !== "long" && side !== "short") return json({ ok: false, error: "Invalid side." }, 400);
 
-      const volume = Math.max(0.01, Math.round((units / UNITS_PER_LOT) * 100) / 100);
+      const volume = await orderVolume(units, accountUrl, symbol, metaHeaders);
       const order: Record<string, unknown> = {
         symbol,
         type: side === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
@@ -1163,18 +1257,42 @@ Deno.serve(async (req: Request) => {
       if (conn.account_type === "live" && liveGate.liveExecutionEnabled === false) {
         return json({ ok: false, error: "Live execution is currently disabled by the platform. Switch to a demo account." }, 400);
       }
-      let openForSymbol: number;
+      let openPositions: Array<{ symbol?: string }>;
       const cachedPositions = readCacheHit<{ positions: Array<{ symbol?: string }> }>(conn.id, "open-trades");
       if (cachedPositions) {
-        openForSymbol = cachedPositions.positions.filter((p) => String(p.symbol).toUpperCase() === symbol).length;
+        openPositions = cachedPositions.positions;
       } else {
         const posRes = await fetchWithTimeout(`${accountUrl}/positions`, { headers: metaHeaders });
         const posData = (await posRes.json().catch(() => ({}))) as { positions?: Array<{ symbol?: string }> };
-        readCachePut(conn.id, "open-trades", { positions: posData.positions ?? [] });
-        openForSymbol = (posData.positions ?? []).filter((p) => String(p.symbol).toUpperCase() === symbol).length;
+        openPositions = posData.positions ?? [];
+        readCachePut(conn.id, "open-trades", { positions: openPositions });
       }
+      const openSymbols = openPositions.map((p) => String(p.symbol ?? "").toUpperCase());
+      const openForSymbol = openSymbols.filter((s) => s === symbol).length;
       if (openForSymbol >= risk.maxOpenPositions) {
         return json({ ok: false, error: `Maximum ${risk.maxOpenPositions} open position(s) reached for ${symbol}. Close one first.` }, 400);
+      }
+      // ---- Starter-tier guard: free users and subscribers under 30 days may
+      // trade at most 6 distinct pairs with 1 open position per pair. Mirrors
+      // src/lib/trading/tierLimits.ts and the robot-runner mirror, and covers
+      // manual orders placed straight from the Trading page.
+      const tier = await orderTier(supabase, currentUser.id);
+      if (tier.limited) {
+        const distinctPairs = new Set(openSymbols);
+        if (distinctPairs.size >= tier.maxPairs && !distinctPairs.has(symbol)) {
+          return json({
+            ok: false,
+            code: "starter_pair_limit",
+            error: `Starter plan (free or under 30 days of subscription): limited to ${tier.maxPairs} trading pairs at once. Close an open position on another pair before opening ${symbol}.`,
+          }, 400);
+        }
+        if (openForSymbol >= tier.maxPerPair) {
+          return json({
+            ok: false,
+            code: "starter_pair_limit",
+            error: `Starter plan (free or under 30 days of subscription): max ${tier.maxPerPair} open trade per pair. Close the open ${symbol} position before opening another.`,
+          }, 400);
+        }
       }
 
       // Daily-loss backstop: block new orders once today's realized loss on the

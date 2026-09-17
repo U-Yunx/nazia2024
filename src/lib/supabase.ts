@@ -14,5 +14,13 @@ const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
 export const isSupabaseConfigured = Boolean(url && anonKey)
 
 export const supabase = isSupabaseConfigured
-  ? createClient(url as string, anonKey as string)
+  ? createClient(url as string, anonKey as string, {
+      auth: {
+        // Implicit flow (not PKCE) keeps sign-in working inside the managed
+        // preview iframe; the session persists in localStorage like before.
+        persistSession: true,
+        flowType: 'implicit',
+        autoRefreshToken: true,
+      },
+    })
   : (null as unknown as ReturnType<typeof createClient>)

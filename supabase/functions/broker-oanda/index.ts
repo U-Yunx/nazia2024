@@ -77,6 +77,40 @@ function toOandaSymbol(symbol: string): string {
   return symbol.includes("/") ? symbol.replace("/", "_") : symbol;
 }
 
+/** Starter-tier quotas — server-side mirror of src/lib/trading/tierLimits.ts. */
+const STARTER_MAX_PAIRS = 6;
+const STARTER_MAX_PER_PAIR = 1;
+const UNLOCK_SUBSCRIPTION_DAYS = 30;
+const TIER_DAY_MS = 86_400_000;
+
+/**
+ * The calling user's order tier: free users and subscribers under 30 days are
+ * limited to 6 distinct pairs with 1 open position per pair. Admins are never
+ * limited. Enforced on every live order (manual + robot), mirroring the
+ * robot-runner edge function and src/lib/trading/tierLimits.ts.
+ */
+async function orderTier(client: any, userId: string): Promise<{ limited: boolean; maxPairs: number; maxPerPair: number }> {
+  const { data: profile } = await client.from("profiles").select("role").eq("id", userId).maybeSingle();
+  if (profile?.role === "admin") return { limited: false, maxPairs: Infinity, maxPerPair: Infinity };
+  const { data: subs } = await client
+    .from("subscriptions")
+    .select("status, starts_at, activated_at, created_at, ends_at")
+    .eq("user_id", userId);
+  const now = Date.now();
+  const starts = (subs ?? [])
+    .filter((s) => s.status === "active" && (!s.ends_at || new Date(s.ends_at).getTime() > now))
+    .map((s) => s.starts_at ?? s.activated_at ?? s.created_at)
+    .filter((t) => Boolean(t))
+    .map((t) => new Date(t as string).getTime());
+  const days = starts.length > 0 ? Math.max(0, Math.floor((now - Math.min(...starts)) / TIER_DAY_MS)) : null;
+  const unlocked = days != null && days >= UNLOCK_SUBSCRIPTION_DAYS;
+  return {
+    limited: !unlocked,
+    maxPairs: unlocked ? Infinity : STARTER_MAX_PAIRS,
+    maxPerPair: unlocked ? Infinity : STARTER_MAX_PER_PAIR,
+  };
+}
+
 /**
  * Normalize OANDA's v20 error strings before they reach the UI. OANDA's
  * `errorMessage` is usually already human-readable, but auth failures and
@@ -186,6 +220,24 @@ Deno.serve(async (req) => {
           return json({ ok: false, error: "Invalid order parameters." });
         }
         if (!(stopDistance > 0)) return json({ ok: false, error: "A stop loss is required on every position." });
+        // ---- Starter-tier guard (live users): free users and subscribers
+        // under 30 days may trade at most 6 distinct pairs with 1 open
+        // position per pair. Mirrors tierLimits.ts / robot-runner, and covers
+        // manual orders placed straight from the Trading page.
+        const tier = await orderTier(admin, userId);
+        if (tier.limited) {
+          const openTradesRes = await fetch(`${base}/v3/accounts/${accountId}/openTrades`, { headers });
+          const openTradesData = (await openTradesRes.json().catch(() => ({}))) as { trades?: Array<{ instrument?: string }> };
+          const openSymbols = (openTradesData.trades ?? []).map((t) => String(t.instrument ?? ""));
+          const distinctPairs = new Set(openSymbols);
+          const onSymbol = openSymbols.filter((i) => i === symbol).length;
+          if (onSymbol >= tier.maxPerPair) {
+            return json({ ok: false, code: "starter_pair_limit", error: `Starter plan (free or under 30 days of subscription): max ${tier.maxPerPair} open trade per pair. Close the open ${symbol} position before opening another.` });
+          }
+          if (distinctPairs.size >= tier.maxPairs && !distinctPairs.has(symbol)) {
+            return json({ ok: false, code: "starter_pair_limit", error: `Starter plan (free or under 30 days of subscription): limited to ${tier.maxPairs} trading pairs at once. Close an open position on another pair before opening ${symbol}.` });
+          }
+        }
         const signedUnits = side === "long" ? units : -units;
         const order = {
           type: "MARKET",
