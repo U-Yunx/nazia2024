@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Activity, Check, ListChecks, Pause, Play, ShieldAlert, Sliders, Sparkles, Target, Timer, Wallet } from 'lucide-react'
+import { Activity, Check, ListChecks, Lock, Pause, Play, ShieldAlert, Sliders, Sparkles, Target, Timer, Wallet } from 'lucide-react'
 import { DEFAULT_PAPER_BALANCE, usePaperAccount } from '../lib/trading/usePaperAccount'
 import { useRobotPrefs, methodInterval, methodLabel, methodRiskDefaults } from '../lib/trading/robotPrefs'
 import { useRobotRecorder } from '../lib/trading/useRobotRecorder'
@@ -25,6 +25,7 @@ import { useAuth } from '../hooks/useAuth'
 import { useAccess, useBrokers, useProfile, useSubscriptions } from '../hooks/usePlatform'
 import { acceptRisk } from '../lib/platform'
 import { effectiveRiskPct, pipValueUsd, stopDistanceFromAtr, suggestPositionUnits } from '../lib/trading/risk'
+import { effectiveRobotCaps, robotTier, STARTER_MAX_PAIRS, STARTER_MAX_PER_PAIR, UNLOCK_SUBSCRIPTION_DAYS } from '../lib/trading/tierLimits'
 import { equity } from '../lib/trading/engine'
 import { INTERVALS, STRATEGY_META, STRATEGY_TYPES, intervalLabel } from '../lib/strategies'
 import { atr, rsi, sma } from '../lib/strategies/indicators'
@@ -379,6 +380,19 @@ export function Trading() {
   const scanPairs = useMemo(
     () => (prefs.autoPickPairs ? WATCHLIST.map((p) => p.symbol) : robotPairs),
     [prefs.autoPickPairs, robotPairs],
+  )
+  // Starter-tier robot limits: free users and subscribers under 30 days may
+  // open positions on at most 6 pairs with 1 position per pair. Holding an
+  // active subscription for 30+ days (or being an admin) lifts the cap.
+  const tier = useMemo(() => robotTier(profile, subscriptions), [profile, subscriptions])
+  const robotCaps = useMemo(
+    () =>
+      effectiveRobotCaps(tier, {
+        tradeMode: prefs.tradeMode,
+        maxPerPair: prefs.maxPerPair,
+        maxOpenTrades: prefs.maxOpenTrades,
+      }),
+    [tier, prefs.tradeMode, prefs.maxPerPair, prefs.maxOpenTrades],
   )
   // Live quotes stream over Realtime (the market-data Edge Function refreshes
   // priority symbols — the robot's pairs — first) with polling as a fallback.
@@ -851,12 +865,17 @@ export function Trading() {
         // still scores pairs by that strategy's signal strength and trades the
         // strongest ones first.
         const ranked = rankPairs(barsBySymbol, interval)
-        const targets: RankedPair[] =
+        const rankedTargets: RankedPair[] =
           prefs.strategyMode === 'manual'
             ? manualTargets(barsBySymbol, prefs.manualStrategy, interval)
             : prefs.autoPickPairs
               ? ranked.slice(0, prefs.pairCount)
               : ranked
+        // Starter tier: the robot may OPEN positions on at most
+        // `robotCaps.maxTargets` distinct pairs (6 for free / <30-day
+        // subscribers) — trade the strongest setups within the cap, and the
+        // full watchlist once the 30-day subscription unlock applies.
+        const targets: RankedPair[] = rankedTargets.slice(0, robotCaps.maxTargets)
         if (prefs.autoPickPairs && targets.length > 0) {
           pushLog([
             `Best analysis method picked ${targets.length} pair${targets.length === 1 ? '' : 's'}: ${targets
@@ -971,9 +990,9 @@ export function Trading() {
         if (!cancelled && cycleInputs.length > 0) {
           const config: RobotConfig = {
             pairs: scanPairs,
-            tradeMode: prefs.tradeMode,
-            maxPerPair: prefs.maxPerPair,
-            maxOpenTrades: prefs.maxOpenTrades,
+            tradeMode: robotCaps.tradeMode,
+            maxPerPair: robotCaps.maxPerPair,
+            maxOpenTrades: robotCaps.maxOpenTrades,
           }
           const { events } = await runCycle(cycleInputs, config)
           if (events.length) {
@@ -1006,6 +1025,7 @@ export function Trading() {
     staleSymbols,
     marketKind,
     runCycle,
+    robotCaps,
     tune.sizeMultiplier,
   ])
 
@@ -1152,6 +1172,35 @@ export function Trading() {
       </CardHeader>
       <CardContent>
         <div className="flex flex-col gap-5">
+          {/* Starter-tier market-open limit notice */}
+          {tier.limited ? (
+            <div className="flex flex-col gap-2 rounded-xl border border-amber/40 bg-amber/10 p-3 sm:flex-row sm:items-center">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber/20 text-amber">
+                <Lock className="h-4 w-4" aria-hidden="true" />
+              </div>
+              <p className="text-sm text-muted-foreground">
+                <span className="font-semibold text-amber">Free &amp; starter market limit</span> — the robot opens at
+                most <span className="font-semibold text-amber">{STARTER_MAX_PAIRS} pairs</span> with{' '}
+                <span className="font-semibold text-amber">{STARTER_MAX_PER_PAIR} position per pair</span>
+                {tier.subscriberDays != null ? (
+                  <>
+                    {' '}while under {UNLOCK_SUBSCRIPTION_DAYS} days of subscription (you are at{' '}
+                    {tier.subscriberDays} day{tier.subscriberDays === 1 ? '' : 's'})
+                  </>
+                ) : (
+                  ' while free'
+                )}
+                . Full watchlist and per-pair power unlock automatically after {UNLOCK_SUBSCRIPTION_DAYS} days of
+                subscription.
+              </p>
+            </div>
+          ) : tier.subscriberDays != null ? (
+            <p className="flex items-center gap-1.5 text-xs text-up">
+              <Check className="h-3.5 w-3.5" aria-hidden="true" />
+              Subscribed {tier.subscriberDays} day{tier.subscriberDays === 1 ? '' : 's'} — full market limits unlocked.
+            </p>
+          ) : null}
+
           {/* Start / stop */}
           <div
             className={cn(
@@ -1168,7 +1217,7 @@ export function Trading() {
                 {autoTrade
                   ? prefs.strategyMode === 'manual'
                     ? `Scanning ${robotPairs.length} pair${robotPairs.length === 1 ? '' : 's'} · ${STRATEGY_META[prefs.manualStrategy].shortLabel} method only, strongest signals first.`
-                    : `Scanning ${robotPairs.length} pair${robotPairs.length === 1 ? '' : 's'} · every strategy evaluated on each · up to ${prefs.maxPerPair} position${prefs.maxPerPair === 1 ? '' : 's'} per pair, strongest setups first.`
+                    : `Scanning ${robotPairs.length} pair${robotPairs.length === 1 ? '' : 's'} · every strategy evaluated on each · up to ${robotCaps.maxPerPair} position${robotCaps.maxPerPair === 1 ? '' : 's'} per pair, strongest setups first.`
                   : 'Start the robot to auto-trade the strongest signal across your selected pairs — always risk-sized with a stop-loss.'}
               </p>
             </div>
@@ -1213,16 +1262,16 @@ export function Trading() {
           <div className="rounded-xl border border-border bg-secondary/30 p-4">
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <p className="text-sm font-semibold text-foreground">
-                Watchlist · {prefs.tradeMode === 'concurrent' ? 'Concurrent' : 'Sequential'}
+                Watchlist · {robotCaps.tradeMode === 'concurrent' ? 'Concurrent' : 'Sequential'}
               </p>
               <Badge className="border-border bg-muted text-muted-foreground">
                 {scanPairs.length} pair{scanPairs.length === 1 ? '' : 's'} · {prefs.autoPickPairs ? 'auto-picked' : 'manual'}
               </Badge>
               <Badge className="border-accent/40 bg-accent/10 text-accent">
-                Max {prefs.maxPerPair}/pair
+                Max {robotCaps.maxPerPair}/pair
               </Badge>
               <Badge className="border-border bg-muted text-muted-foreground">
-                Max {prefs.maxOpenTrades > 0 ? prefs.maxOpenTrades : 'unlimited'} total
+                Max {robotCaps.maxOpenTrades > 0 ? robotCaps.maxOpenTrades : 'unlimited'} total
               </Badge>
             </div>
 
@@ -1231,8 +1280,11 @@ export function Trading() {
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold text-foreground">Positions per pair</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  The robot may open up to {prefs.maxPerPair} position{prefs.maxPerPair === 1 ? '' : 's'} on the same
+                  The robot may open up to {robotCaps.maxPerPair} position{robotCaps.maxPerPair === 1 ? '' : 's'} on the same
                   pair at once — raise it to trade each new signal instead of waiting for the previous one to close.
+                  {tier.limited && (
+                    <> The starter tier keeps this at {STARTER_MAX_PER_PAIR} until {UNLOCK_SUBSCRIPTION_DAYS} days of subscription.</>
+                  )}
                 </p>
               </div>
               <div className="flex items-center gap-1.5">
@@ -1245,13 +1297,15 @@ export function Trading() {
                 >
                   −
                 </Button>
-                <span className="w-8 text-center text-sm font-semibold tnum">{prefs.maxPerPair}</span>
+                <span className="w-8 text-center text-sm font-semibold tnum">
+                  {tier.limited ? STARTER_MAX_PER_PAIR : prefs.maxPerPair}
+                </span>
                 <Button
                   variant="secondary"
                   size="sm"
                   aria-label="More positions per pair"
-                  onClick={() => setMaxPerPair(Math.min(10, prefs.maxPerPair + 1))}
-                  disabled={prefs.maxPerPair >= 10}
+                  onClick={() => setMaxPerPair(Math.min(tier.limited ? STARTER_MAX_PER_PAIR : 10, prefs.maxPerPair + 1))}
+                  disabled={prefs.maxPerPair >= (tier.limited ? STARTER_MAX_PER_PAIR : 10)}
                 >
                   +
                 </Button>
@@ -1261,7 +1315,7 @@ export function Trading() {
             <div className="flex flex-wrap gap-1.5">
               {scanPairs.map((sym) => {
                 const openCount = account?.positions.filter((p) => p.symbol === sym).length ?? 0
-                const cap = prefs.maxPerPair
+                const cap = robotCaps.maxPerPair
                 const atCap = openCount >= cap
                 return (
                   <Badge
@@ -1425,9 +1479,13 @@ export function Trading() {
               })}
             </div>
             <p className="mt-1.5 text-xs text-muted-foreground">
-              The robot trades up to {prefs.maxPerPair} position{prefs.maxPerPair === 1 ? '' : 's'} per pair. In Auto
+              The robot trades up to {robotCaps.maxPerPair} position{robotCaps.maxPerPair === 1 ? '' : 's'} per pair. In Auto
               method it picks the best strategy for each pair automatically; in Manual method it uses only the strategy
               you choose below. Add pairs to spread its attention, or remove them to focus it.
+              {tier.limited && (
+                <> The starter tier caps opens at {STARTER_MAX_PAIRS} pairs, {STARTER_MAX_PER_PAIR} position per pair, until{' '}
+                {UNLOCK_SUBSCRIPTION_DAYS} days of subscription.</>
+              )}
             </p>
           </div>
 
@@ -1537,19 +1595,30 @@ export function Trading() {
                   >
                     −
                   </Button>
-                  <span className="w-8 text-center text-sm font-semibold tnum">{prefs.pairCount}</span>
+                  <span className="w-8 text-center text-sm font-semibold tnum">
+                  {tier.limited ? Math.min(prefs.pairCount, STARTER_MAX_PAIRS) : prefs.pairCount}
+                </span>
                   <Button
                     variant="secondary"
                     size="sm"
                     aria-label="More pairs"
-                    onClick={() => setPairCount(Math.min(WATCHLIST.length, prefs.pairCount + 1))}
-                    disabled={prefs.pairCount >= WATCHLIST.length}
+                    onClick={() =>
+                      setPairCount(Math.min(tier.limited ? STARTER_MAX_PAIRS : WATCHLIST.length, prefs.pairCount + 1))
+                    }
+                    disabled={prefs.pairCount >= (tier.limited ? STARTER_MAX_PAIRS : WATCHLIST.length)}
                   >
                     +
                   </Button>
                 </div>
                 <span className="text-xs text-muted-foreground">
-                  Robot trades the top {prefs.pairCount} of {WATCHLIST.length} pairs by probability of profit.
+                  Robot trades the top {tier.limited ? Math.min(prefs.pairCount, STARTER_MAX_PAIRS) : prefs.pairCount} of{' '}
+                  {tier.limited ? STARTER_MAX_PAIRS : WATCHLIST.length} pairs by probability of profit.
+                  {tier.limited && (
+                    <>
+                      {' '}
+                      <span className="text-amber">Capped at {STARTER_MAX_PAIRS} pairs until {UNLOCK_SUBSCRIPTION_DAYS} days of subscription.</span>
+                    </>
+                  )}
                 </span>
               </div>
             )}
@@ -1775,9 +1844,9 @@ export function Trading() {
         rates={rates}
         onClose={handleClose}
         robotCaps={{
-          tradeMode: prefs.tradeMode,
-          maxPerPair: prefs.maxPerPair,
-          maxOpenTrades: prefs.maxOpenTrades,
+          tradeMode: robotCaps.tradeMode,
+          maxPerPair: robotCaps.maxPerPair,
+          maxOpenTrades: robotCaps.maxOpenTrades,
         }}
       />
       <TradeJournal trades={acc.trades} />

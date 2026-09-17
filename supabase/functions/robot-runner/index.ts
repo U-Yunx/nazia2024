@@ -35,9 +35,11 @@ import {
 // over any run whose client heartbeat has gone stale (page closed or refreshed)
 // and keeps trading server-side with the exact same engine rules as the browser
 // — same indicators, same signals, same risk math, same per-pair caps. It also
-// enforces the auto-run duration, the session max-profit / max-loss guard and
-// the user's subscription/trial access, so a robot never trades past its
-// schedule or without access while the owner is away.
+// enforces the auto-run duration, the session max-profit / max-loss guard, the
+// user's subscription/trial access and the starter-tier market-open limits (6
+// pairs, 1 position per pair for free users and subscribers under 30 days), so
+// a robot never trades past its schedule, without access or beyond its tier
+// while the owner is away.
 //
 // Only ledger-backed accounts (paper + managed live) are ever run here — live
 // OANDA / MetaTrader mirrors are never persisted and keep running in the
@@ -69,6 +71,14 @@ const CLIENT_ALIVE_MS = 90_000;
 // minute; this also guards against two overlapping invocations of this
 // function double-trading one run).
 const TICK_COOLDOWN_MS = 45_000;
+
+// Starter-tier market-open limits — mirrors src/lib/trading/tierLimits.ts.
+// Free users and subscribers under 30 days may open positions on at most 6
+// pairs with 1 position per pair; 30+ days of subscription (or admin) lifts it.
+const STARTER_MAX_PAIRS = 6;
+const STARTER_MAX_PER_PAIR = 1;
+const UNLOCK_SUBSCRIPTION_DAYS = 30;
+const DAY_MS = 86_400_000;
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -458,6 +468,47 @@ async function hasAccess(admin: AdminClient, userId: string): Promise<boolean> {
   return (subs ?? []).some((s: { ends_at?: string | null }) => !s.ends_at || new Date(s.ends_at).getTime() > now);
 }
 
+/**
+ * The robot's market-open tier — the server-side mirror of robotTier() in
+ * src/lib/trading/tierLimits.ts. Free users and subscribers who have held an
+ * active subscription for fewer than 30 days are LIMITED to 6 pairs and 1
+ * position per pair; 30+ days (or admin) unlocks the full watchlist.
+ */
+async function robotTierFor(
+  admin: AdminClient,
+  userId: string,
+): Promise<{ limited: boolean; maxPairs: number; maxPerPair: number }> {
+  const { data: profile } = await admin
+    .from("profiles")
+    .select("role")
+    .eq("id", userId)
+    .maybeSingle();
+  if (profile?.role === "admin") return { limited: false, maxPairs: Infinity, maxPerPair: Infinity };
+
+  const now = Date.now();
+  const { data: subs } = await admin
+    .from("subscriptions")
+    .select("status, starts_at, activated_at, created_at, ends_at")
+    .eq("user_id", userId)
+    .eq("status", "active");
+  const starts = ((subs as
+    | Array<{ starts_at?: string | null; activated_at?: string | null; created_at?: string | null; ends_at?: string | null }>
+    | null) ?? [])
+    .filter((s) => !s.ends_at || new Date(s.ends_at).getTime() > now)
+    .map((s) => s.starts_at ?? s.activated_at ?? s.created_at)
+    .filter((t): t is string => Boolean(t));
+  if (starts.length === 0) return { limited: true, maxPairs: STARTER_MAX_PAIRS, maxPerPair: STARTER_MAX_PER_PAIR };
+
+  const earliest = Math.min(...starts.map((t) => new Date(t).getTime()));
+  const days = Math.max(0, Math.floor((now - earliest) / DAY_MS));
+  const unlocked = days >= UNLOCK_SUBSCRIPTION_DAYS;
+  return {
+    limited: !unlocked,
+    maxPairs: unlocked ? Infinity : STARTER_MAX_PAIRS,
+    maxPerPair: unlocked ? Infinity : STARTER_MAX_PER_PAIR,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // One tick for one run — the server-side equivalent of the browser loop in
 // src/pages/Trading.tsx.
@@ -503,6 +554,11 @@ async function tickRun(
     return { action: "finished", reason: "access_lost" };
   }
 
+  // 4b) Market-open tier: free users and subscribers under 30 days may open on
+  //     at most 6 pairs with 1 position per pair (grabbed AFTER the access
+  //     check so a lapsed user is stopped rather than capped).
+  const tier = await robotTierFor(admin, run.user_id);
+
   // 5) Load the authoritative account state.
   const account = await loadAccount(admin, run);
   if (!account) {
@@ -542,12 +598,17 @@ async function tickRun(
 
   // 8) Rank pairs + build cycle inputs — identical rules to the browser.
   const ranked = rankPairs(barsBySymbol, interval);
-  const targets =
+  const rankedTargets =
     run.strategy_mode === "manual"
       ? manualTargets(barsBySymbol, run.manual_strategy ?? "MA", interval)
       : run.auto_pick_pairs
         ? ranked.slice(0, Math.max(1, run.pair_count))
         : ranked;
+  // Starter tier: open on at most 6 distinct pairs — trade the strongest
+  // setups within the cap. Subscribers 30+ days get every ranked pair.
+  const targets = Number.isFinite(tier.maxPairs)
+    ? rankedTargets.slice(0, STARTER_MAX_PAIRS)
+    : rankedTargets;
 
   const cycleInputs: RobotCycleInput[] = [];
   for (const target of targets) {
@@ -631,9 +692,11 @@ async function tickRun(
 
   const config: RobotConfig = {
     pairs: scanSymbols,
-    tradeMode: run.trade_mode,
-    maxPerPair: run.max_per_pair,
-    maxOpenTrades: run.max_open_trades,
+    tradeMode: tier.limited ? "sequential" : run.trade_mode,
+    maxPerPair: tier.limited ? STARTER_MAX_PER_PAIR : run.max_per_pair,
+    maxOpenTrades: tier.limited
+      ? Math.min(STARTER_MAX_PAIRS, run.max_open_trades > 0 ? run.max_open_trades : STARTER_MAX_PAIRS)
+      : run.max_open_trades,
   }
   const cyc = runRobotCycle(next, cycleInputs, config)
   next = cyc.state
