@@ -865,10 +865,10 @@ export function Trading() {
         // loss). Manual mode uses ONLY the user-selected strategy — the robot
         // still scores pairs by that strategy's signal strength and trades the
         // strongest ones first.
-        const ranked = rankPairs(barsBySymbol, interval)
+        const ranked = rankPairs(barsBySymbol, interval, prefs.method)
         const rankedTargets: RankedPair[] =
           prefs.strategyMode === 'manual'
-            ? manualTargets(barsBySymbol, prefs.manualStrategy, interval)
+            ? manualTargets(barsBySymbol, prefs.manualStrategy, interval, prefs.method)
             : prefs.autoPickPairs
               ? ranked.slice(0, prefs.pairCount)
               : ranked

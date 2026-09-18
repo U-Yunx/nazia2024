@@ -9,7 +9,7 @@
  * the one with lower recent volatility (ATR as a % of price) ranks first,
  * because its stop-loss is easier to protect.
  */
-import type { Bar, Interval } from '../types'
+import type { Bar, Interval, TradingMethod } from '../types'
 import { bestStrategyFor, type BestStrategy } from './bestStrategy'
 import { atr } from '../strategies/indicators'
 
@@ -35,13 +35,19 @@ function recentVolatilityPct(bars: Bar[]): number {
 /**
  * Rank every symbol that has bars by its best strategy's score, strongest
  * first. Pairs with no actionable setup still appear (score 0, best null) so
- * the caller can decide whether to skip or surface them.
+ * the caller can decide whether to skip or surface them. The `method` picks
+ * the indicator parameter set (and score weights) used to evaluate each pair —
+ * scalping runs fresh fast-lookback setups, long-term rides slow trend ones.
  */
-export function rankPairs(barsBySymbol: Record<string, Bar[]>, interval: Interval): RankedPair[] {
+export function rankPairs(
+  barsBySymbol: Record<string, Bar[]>,
+  interval: Interval,
+  method: TradingMethod = 'scalping',
+): RankedPair[] {
   const out: RankedPair[] = []
   for (const [symbol, bars] of Object.entries(barsBySymbol)) {
     if (!Array.isArray(bars) || bars.length === 0) continue
-    const best = bestStrategyFor(bars, interval)
+    const best = bestStrategyFor(bars, interval, method)
     out.push({ symbol, score: best?.score ?? 0, best, volatilityPct: recentVolatilityPct(bars) })
   }
   out.sort((a, b) => {

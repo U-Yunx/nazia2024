@@ -8,9 +8,15 @@
  * latest bar, trend alignment (is the signal trading WITH the SMA-20 trend?),
  * RSI conviction for reversal signals, and a volatility penalty (wild, whipsaw
  * markets cap the score no matter how pretty the setup looks).
+ *
+ * The evaluation is method-aware: scalping evaluates every strategy with quick,
+ * short-lookback parameters (and rewards bar-to-bar momentum harder), while
+ * long-term uses slower trend parameters (longer averages, wider channels) and
+ * leans harder on trend alignment — so the same auto-robot acts decisively on
+ * 5-min bars and rides 1-hour moves without overtrading.
  */
-import type { Bar, Interval, Signal, StrategyType } from '../types'
-import { STRATEGY_META, STRATEGY_TYPES } from '../strategies'
+import type { Bar, Interval, Signal, StrategyType, TradingMethod } from '../types'
+import { STRATEGY_TYPES, strategyParamsFor } from '../strategies'
 import { computeSignal } from '../strategies/signals'
 import { atr, rsi, sma } from '../strategies/indicators'
 import { detectRegime } from './regime'
@@ -35,12 +41,19 @@ function momentumStrength(bars: Bar[]): number {
   return Math.abs(last.close - prev.close) / range
 }
 
+/** Method-tuned scoring weights — long-term leans on trend, scalping on momentum. */
+function scoreWeights(method: TradingMethod): { momentum: number; trend: number } {
+  return method === 'longterm'
+    ? { momentum: 120, trend: 18 }
+    : { momentum: 140, trend: 12 }
+}
+
 /**
  * Evaluate all strategies on a symbol's bars. Returns the best actionable
  * setup (non-neutral signal, highest score), or null when there isn't enough
  * data yet / nothing is actionable.
  */
-export function bestStrategyFor(bars: Bar[], interval: Interval): BestStrategy | null {
+export function bestStrategyFor(bars: Bar[], interval: Interval, method: TradingMethod = 'scalping'): BestStrategy | null {
   if (!Array.isArray(bars) || bars.length < 30) return null
 
   const momentum = momentumStrength(bars)
@@ -74,6 +87,7 @@ export function bestStrategyFor(bars: Bar[], interval: Interval): BestStrategy |
     return 0
   }
 
+  const weights = scoreWeights(method)
   let best: BestStrategy | null = null
 
   for (const type of STRATEGY_TYPES) {
@@ -81,18 +95,18 @@ export function bestStrategyFor(bars: Bar[], interval: Interval): BestStrategy |
       pair: '',
       interval,
       type,
-      params: STRATEGY_META[type].defaultParams,
+      params: strategyParamsFor(type, method),
     })
     if (signal === 'neutral') continue
 
     // Base confidence from having a live signal, scaled by how much the market
     // actually moved on the latest bar — a big move confirms the setup.
-    let score = 45 + momentum * 140
+    let score = 45 + momentum * weights.momentum
 
     // Trend alignment: trading WITH the SMA-20 trend adds conviction; against
-    // it (fading a trend) subtracts.
+    // it (fading a trend) subtracts. Long-term leans harder on this.
     if (trendAlign !== 0) {
-      score += (signal === 'buy' ? trendAlign : -trendAlign) * 12
+      score += (signal === 'buy' ? trendAlign : -trendAlign) * weights.trend
     }
 
     // RSI position: for reversal signals, deeper oversold/overbought means the

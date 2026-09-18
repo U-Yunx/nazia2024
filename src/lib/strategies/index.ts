@@ -2,9 +2,36 @@
  * Strategy catalog: supported types, human labels, default parameters and the
  * interval options the robot and backtester share.
  */
-import type { Interval, StrategyConfig, StrategyParams, StrategyType } from '../types'
+import type { Interval, StrategyConfig, StrategyParams, StrategyType, TradingMethod } from '../types'
 
 export const STRATEGY_TYPES: StrategyType[] = ['MA', 'RSI', 'MACD', 'BOLLINGER']
+
+/**
+ * Indicator presets tuned per trading method. Scalping lives on fast 5-min
+ * bars, so it uses fresh, short-lookback parameters (quick crosses, tight
+ * bands) to act within the day. Long-term works on slow 1-hour bars, so it
+ * uses trend parameters (longer averages, wider channels) that ignore the
+ * intraday noise and ride the higher-timeframe move.
+ */
+export const METHOD_PARAMS: Record<TradingMethod, Record<StrategyType, StrategyParams>> = {
+  scalping: {
+    MA: { fastPeriod: 5, slowPeriod: 15 },
+    RSI: { period: 7, oversold: 30, overbought: 70 },
+    MACD: { fastPeriod: 8, slowPeriod: 17, signalPeriod: 5 },
+    BOLLINGER: { period: 15, stdDev: 1.8 },
+  },
+  longterm: {
+    MA: { fastPeriod: 20, slowPeriod: 50 },
+    RSI: { period: 21, oversold: 30, overbought: 70 },
+    MACD: { fastPeriod: 16, slowPeriod: 26, signalPeriod: 9 },
+    BOLLINGER: { period: 30, stdDev: 2.5 },
+  },
+}
+
+/** Fresh, method-tuned parameters for a strategy type. */
+export function strategyParamsFor(type: StrategyType, method: TradingMethod): StrategyParams {
+  return { ...METHOD_PARAMS[method][type] }
+}
 
 export interface StrategyMeta {
   name: string

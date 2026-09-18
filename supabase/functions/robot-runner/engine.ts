@@ -299,6 +299,45 @@ export function atr(bars: Bar[], period = 14): (number | null)[] {
 
 /* -------------------------------- signals --------------------------------- */
 
+/** Indicator settings a strategy evaluates with — same shape as the client's
+ * `strategyParamsFor` presets, so the server scores setups exactly like the
+ * browser does. */
+interface StrategyParams {
+  fastPeriod?: number
+  slowPeriod?: number
+  period?: number
+  oversold?: number
+  overbought?: number
+  signalPeriod?: number
+  stdDev?: number
+}
+
+/** Method-tuned indicator presets — mirrors src/lib/strategies/index.ts.
+ *  Scalping runs fresh short-lookback parameters on 5-min bars; long-term rides
+ *  slow trend parameters on 1-hour bars. */
+const METHOD_PARAMS: Record<TradingMethod, Record<StrategyType, StrategyParams>> = {
+  scalping: {
+    MA: { fastPeriod: 5, slowPeriod: 15 },
+    RSI: { period: 7, oversold: 30, overbought: 70 },
+    MACD: { fastPeriod: 8, slowPeriod: 17, signalPeriod: 5 },
+    BOLLINGER: { period: 15, stdDev: 1.8 },
+  },
+  longterm: {
+    MA: { fastPeriod: 20, slowPeriod: 50 },
+    RSI: { period: 21, oversold: 30, overbought: 70 },
+    MACD: { fastPeriod: 16, slowPeriod: 26, signalPeriod: 9 },
+    BOLLINGER: { period: 30, stdDev: 2.5 },
+  },
+}
+
+/** Method-tuned scoring weights — long-term leans on trend, scalping on momentum
+ *  (mirrors the client's bestStrategy.ts). */
+function scoreWeights(method: TradingMethod): { momentum: number; trend: number } {
+  return method === 'longterm'
+    ? { momentum: 120, trend: 18 }
+    : { momentum: 140, trend: 12 }
+}
+
 function crossOver(prev: number | null | undefined, cur: number | null | undefined, line: number): boolean {
   if (prev == null || cur == null || !Number.isFinite(prev) || !Number.isFinite(cur)) return false
   return prev <= line && cur > line
@@ -315,18 +354,19 @@ function clearsNoise(delta: number, atrVal: number, factor: number): boolean {
   return Math.abs(delta) >= factor * atrVal
 }
 
-function computeSignal(bars: Bar[], type: StrategyType): { signal: Signal; rsiVal: number | null; atrVal: number } {
+function computeSignal(bars: Bar[], type: StrategyType, params: StrategyParams = {}): { signal: Signal; rsiVal: number | null; atrVal: number } {
   const closes = bars.map((b) => b.close)
   const last = bars.length - 1
   const prev = last - 1
   const atrVal = atr(bars, 14)[last] ?? 0
   const close = bars[last]?.close ?? 0
-  const rsiCur = rsi(closes, 14)[last]
+  const rsiPeriod = params.period ?? 14
+  const rsiCur = rsi(closes, rsiPeriod)[last]
 
   switch (type) {
     case 'MA': {
-      const fast = sma(closes, 10)
-      const slow = sma(closes, 30)
+      const fast = sma(closes, params.fastPeriod ?? 10)
+      const slow = sma(closes, params.slowPeriod ?? 30)
       const fCur = fast[last]
       const fPrev = fast[prev]
       const sCur = slow[last]
@@ -337,19 +377,21 @@ function computeSignal(bars: Bar[], type: StrategyType): { signal: Signal; rsiVa
     }
     case 'RSI': {
       const rCur = rsiCur
-      const rPrev = rsi(closes, 14)[prev]
+      const rPrev = rsi(closes, rsiPeriod)[prev]
+      const oversold = params.oversold ?? 30
+      const overbought = params.overbought ?? 70
       const signal: Signal =
         rCur == null
           ? 'neutral'
-          : crossOver(rPrev, rCur, 30) && rCur < 50
+          : crossOver(rPrev, rCur, oversold) && rCur < 50
             ? 'buy'
-            : crossUnder(rPrev, rCur, 70) && rCur > 50
+            : crossUnder(rPrev, rCur, overbought) && rCur > 50
               ? 'sell'
               : 'neutral'
       return { signal, rsiVal: rCur, atrVal }
     }
     case 'MACD': {
-      const hist = macdHistogram(closes, 12, 26, 9)
+      const hist = macdHistogram(closes, params.fastPeriod ?? 12, params.slowPeriod ?? 26, params.signalPeriod ?? 9)
       const hCur = hist[last]
       const hPrev = hist[prev]
       const minHist = close * 0.0002
@@ -364,7 +406,7 @@ function computeSignal(bars: Bar[], type: StrategyType): { signal: Signal; rsiVa
       return { signal, rsiVal: rsiCur, atrVal }
     }
     case 'BOLLINGER': {
-      const { upper, lower } = bollinger(closes, 20, 2)
+      const { upper, lower } = bollinger(closes, params.period ?? 20, params.stdDev ?? 2)
       const up = upper[last]
       const lo = lower[last]
       const c = close
@@ -397,7 +439,7 @@ function momentumStrength(bars: Bar[]): number {
   return Math.abs(last.close - prev.close) / range
 }
 
-export function bestStrategyFor(bars: Bar[], _interval: Interval): BestStrategy | null {
+export function bestStrategyFor(bars: Bar[], _interval: Interval, method: TradingMethod = 'scalping'): BestStrategy | null {
   if (!Array.isArray(bars) || bars.length < 30) return null
   const momentum = momentumStrength(bars)
   const closes = bars.map((b) => b.close)
@@ -408,13 +450,14 @@ export function bestStrategyFor(bars: Bar[], _interval: Interval): BestStrategy 
   const sma20 = sma(closes, 20)[last]
   const trendAlign = sma20 != null ? (closes[last] > sma20 ? 1 : -1) : 0
 
+  const weights = scoreWeights(method)
   let best: BestStrategy | null = null
   for (const type of STRATEGY_TYPES) {
-    const { signal } = computeSignal(bars, type)
+    const { signal } = computeSignal(bars, type, METHOD_PARAMS[method][type])
     if (signal === 'neutral') continue
-    let score = 45 + momentum * 140
+    let score = 45 + momentum * weights.momentum
     if (trendAlign !== 0) {
-      score += (signal === 'buy' ? trendAlign : -trendAlign) * 12
+      score += (signal === 'buy' ? trendAlign : -trendAlign) * weights.trend
     }
     if (rsiVal != null) {
       score += signal === 'buy' ? Math.max(0, 50 - rsiVal) * 0.5 : Math.max(0, rsiVal - 50) * 0.5
@@ -436,11 +479,11 @@ function recentVolatilityPct(bars: Bar[]): number {
   return (atrVal / last.close) * 100
 }
 
-export function rankPairs(barsBySymbol: Record<string, Bar[]>, interval: Interval): RankedPair[] {
+export function rankPairs(barsBySymbol: Record<string, Bar[]>, interval: Interval, method: TradingMethod = 'scalping'): RankedPair[] {
   const out: RankedPair[] = []
   for (const [symbol, bars] of Object.entries(barsBySymbol)) {
     if (!Array.isArray(bars) || bars.length === 0) continue
-    const best = bestStrategyFor(bars, interval)
+    const best = bestStrategyFor(bars, interval, method)
     out.push({ symbol, score: best?.score ?? 0, best, volatilityPct: recentVolatilityPct(bars) })
   }
   out.sort((a, b) => {

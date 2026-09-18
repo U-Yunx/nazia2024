@@ -5,22 +5,26 @@
  * probability-of-profit estimate the auto mode uses, so sizing, stops and the
  * per-pair caps stay identical.
  */
-import type { Bar, Interval, StrategyType } from '../types'
+import type { Bar, Interval, StrategyType, TradingMethod } from '../types'
 import { computeSignal } from '../strategies/signals'
 import { bestStrategyFor, type BestStrategy } from './bestStrategy'
-import { defaultParams } from '../strategies'
+import { strategyParamsFor } from '../strategies'
 import type { RankedPair } from './pairRanking'
 
 /**
  * Rank pairs using ONE user-selected strategy. For each pair with enough bars
  * it computes that strategy's live signal and scores it with the same
  * probability-of-profit estimate as auto mode. Pairs with a neutral signal get
- * score 0 / best null and are skipped by the robot.
+ * score 0 / best null and are skipped by the robot. The `method` decides which
+ * parameter set the chosen strategy trades with (fresh fast-lookback parameters
+ * for scalping, slow trend parameters for long-term) and which score weights
+ * the ranking uses.
  */
 export function manualTargets(
   barsBySymbol: Record<string, Bar[]>,
   type: StrategyType,
   interval: Interval,
+  method: TradingMethod = 'scalping',
 ): RankedPair[] {
   const out: RankedPair[] = []
   for (const [symbol, bars] of Object.entries(barsBySymbol)) {
@@ -29,10 +33,10 @@ export function manualTargets(
       pair: symbol,
       interval,
       type,
-      params: defaultParams(type),
+      params: strategyParamsFor(type, method),
     })
     if (signal === 'neutral') continue
-    const best = bestStrategyFor(bars, interval)
+    const best = bestStrategyFor(bars, interval, method)
     const fallback: BestStrategy = { type, signal, score: 50 }
     out.push({ symbol, score: best?.score ?? 50, best: best ?? fallback })
   }
