@@ -38,9 +38,10 @@ import { corsHeaders } from "jsr:@supabase/supabase-js@2/cors";
 // ---------------------------------------------------------------------------
 
 // Same watchlist as src/lib/watchlist.ts (kept in sync): the full liquid
-// market universe — FX majors, crosses, exotics (Yahoo-covered) + top crypto
-// pairs (Binance-listed). Everything below — quote caching, refresh rotation,
-// market-open flags and provider symbol mapping — scales off this list.
+// market universe — FX majors, crosses, exotics (Yahoo-covered), precious
+// metals (OANDA spot via Yahoo) + top crypto pairs (Binance-listed). Everything
+// below — quote caching, refresh rotation, market-open flags and provider
+// symbol mapping — scales off this list. Keep in sync with `src/lib/watchlist.ts`.
 const FX_SYMBOLS = [
   // Majors
   "EUR/USD",
@@ -99,6 +100,17 @@ const FX_SYMBOLS = [
   "GBP/MXN",
   "GBP/ZAR",
 ];
+const METAL_SYMBOLS = [
+  "XAU/USD",
+  "XAU/EUR",
+  "XAU/GBP",
+  "XAU/JPY",
+  "XAU/CHF",
+  "XAG/USD",
+  "XAG/EUR",
+  "XPT/USD",
+  "XPD/USD",
+];
 const CRYPTO_SYMBOLS = [
   "BTC/USD",
   "ETH/USD",
@@ -134,7 +146,7 @@ const CRYPTO_SYMBOLS = [
   "STX/USD",
   "INJ/USD",
 ];
-const WATCHLIST = [...FX_SYMBOLS, ...CRYPTO_SYMBOLS];
+const WATCHLIST = [...FX_SYMBOLS, ...METAL_SYMBOLS, ...CRYPTO_SYMBOLS];
 const CRYPTO_BASES = new Set(CRYPTO_SYMBOLS.map((s) => s.split("/")[0].toUpperCase()));
 
 const VALID_INTERVALS = ["1min", "5min", "15min", "30min", "1h", "4h", "1day"];

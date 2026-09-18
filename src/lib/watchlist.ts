@@ -3,10 +3,11 @@
  * and the robot can trade. Must stay in sync with `market-data/index.ts`.
  *
  * Coverage is the full liquid market universe the free keyless data sources can
- * serve (Yahoo for FX, Binance for crypto):
+ * serve (Yahoo for FX + metals, Binance for crypto):
  *   * 7 FX majors
  *   * 21 FX crosses
  *   * 25 FX exotics (the OANDA-class emerging-market set)
+ *   * 9 gold / silver / platinum / palladium pairs (OANDA-spot via Yahoo)
  *   * the top ~30 crypto pairs by market cap (all Binance-listed / Yahoo-covered)
  */
 export interface WatchlistPair {
@@ -75,6 +76,19 @@ export const FX_PAIRS: WatchlistPair[] = [
   { symbol: 'GBP/ZAR', name: 'British Pound / South African Rand' },
 ]
 
+// --- Metals (gold / silver / platinum / palladium, OANDA spot via Yahoo) ---
+export const METAL_PAIRS: WatchlistPair[] = [
+  { symbol: 'XAU/USD', name: 'Gold / US Dollar' },
+  { symbol: 'XAU/EUR', name: 'Gold / Euro' },
+  { symbol: 'XAU/GBP', name: 'Gold / British Pound' },
+  { symbol: 'XAU/JPY', name: 'Gold / Japanese Yen' },
+  { symbol: 'XAU/CHF', name: 'Gold / Swiss Franc' },
+  { symbol: 'XAG/USD', name: 'Silver / US Dollar' },
+  { symbol: 'XAG/EUR', name: 'Silver / Euro' },
+  { symbol: 'XPT/USD', name: 'Platinum / US Dollar' },
+  { symbol: 'XPD/USD', name: 'Palladium / US Dollar' },
+]
+
 export const CRYPTO_PAIRS: WatchlistPair[] = [
   { symbol: 'BTC/USD', name: 'Bitcoin / US Dollar' },
   { symbol: 'ETH/USD', name: 'Ethereum / US Dollar' },
@@ -111,8 +125,13 @@ export const CRYPTO_PAIRS: WatchlistPair[] = [
   { symbol: 'INJ/USD', name: 'Injective / US Dollar' },
 ]
 
-/** Full market universe — FX first, then crypto. */
-export const WATCHLIST: WatchlistPair[] = [...FX_PAIRS, ...CRYPTO_PAIRS]
+/** Full market universe — FX, metals, then crypto. */
+export const WATCHLIST: WatchlistPair[] = [...FX_PAIRS, ...METAL_PAIRS, ...CRYPTO_PAIRS]
+
+/** Every metal base asset quoted in the watchlist (OANDA spot metals via Yahoo). */
+export const METAL_BASES = new Set(
+  METAL_PAIRS.map((p) => p.symbol.split('/')[0].toUpperCase()),
+)
 
 /** Every crypto base asset quoted in the watchlist (USDT/USD listed on Binance + Yahoo). */
 export const CRYPTO_BASES = new Set(
@@ -122,6 +141,11 @@ export const CRYPTO_BASES = new Set(
 export function isCryptoPair(symbol: string): boolean {
   const base = symbol.split('/')[0]?.trim().toUpperCase()
   return CRYPTO_BASES.has(base)
+}
+
+export function isMetalPair(symbol: string): boolean {
+  const base = symbol.split('/')[0]?.trim().toUpperCase()
+  return METAL_BASES.has(base)
 }
 
 export function pairBySymbol(symbol: string): WatchlistPair | null {
