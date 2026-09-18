@@ -37,8 +37,12 @@ import { corsHeaders } from "jsr:@supabase/supabase-js@2/cors";
 //     provider's data, and the shared rate gate + in-memory bucket stay as-is.
 // ---------------------------------------------------------------------------
 
-// Same 18-symbol watchlist as src/lib/watchlist.ts (kept in sync).
-const WATCHLIST = [
+// Same watchlist as src/lib/watchlist.ts (kept in sync): the full liquid
+// market universe — FX majors, crosses, exotics (Yahoo-covered) + top crypto
+// pairs (Binance-listed). Everything below — quote caching, refresh rotation,
+// market-open flags and provider symbol mapping — scales off this list.
+const FX_SYMBOLS = [
+  // Majors
   "EUR/USD",
   "GBP/USD",
   "USD/JPY",
@@ -46,9 +50,56 @@ const WATCHLIST = [
   "AUD/USD",
   "NZD/USD",
   "USD/CAD",
+  // Crosses
   "EUR/GBP",
   "EUR/JPY",
   "GBP/JPY",
+  "EUR/CHF",
+  "GBP/CHF",
+  "EUR/AUD",
+  "EUR/CAD",
+  "EUR/NZD",
+  "GBP/AUD",
+  "GBP/CAD",
+  "GBP/NZD",
+  "AUD/JPY",
+  "AUD/CHF",
+  "AUD/CAD",
+  "AUD/NZD",
+  "NZD/JPY",
+  "NZD/CHF",
+  "NZD/CAD",
+  "CAD/JPY",
+  "CAD/CHF",
+  "CHF/JPY",
+  // Exotics
+  "USD/TRY",
+  "USD/MXN",
+  "USD/ZAR",
+  "USD/SGD",
+  "USD/HKD",
+  "USD/NOK",
+  "USD/SEK",
+  "USD/DKK",
+  "USD/PLN",
+  "USD/HUF",
+  "USD/CZK",
+  "USD/CNH",
+  "EUR/TRY",
+  "EUR/NOK",
+  "EUR/SEK",
+  "EUR/PLN",
+  "EUR/HUF",
+  "EUR/CZK",
+  "EUR/MXN",
+  "EUR/ZAR",
+  "GBP/TRY",
+  "GBP/NOK",
+  "GBP/SEK",
+  "GBP/MXN",
+  "GBP/ZAR",
+];
+const CRYPTO_SYMBOLS = [
   "BTC/USD",
   "ETH/USD",
   "BNB/USD",
@@ -57,7 +108,34 @@ const WATCHLIST = [
   "ADA/USD",
   "DOGE/USD",
   "LTC/USD",
+  "AVAX/USD",
+  "LINK/USD",
+  "DOT/USD",
+  "MATIC/USD",
+  "SHIB/USD",
+  "TRX/USD",
+  "UNI/USD",
+  "ATOM/USD",
+  "XLM/USD",
+  "ALGO/USD",
+  "FIL/USD",
+  "ETC/USD",
+  "ICP/USD",
+  "VET/USD",
+  "XTZ/USD",
+  "HBAR/USD",
+  "APT/USD",
+  "NEAR/USD",
+  "ARB/USD",
+  "OP/USD",
+  "SUI/USD",
+  "TON/USD",
+  "LDO/USD",
+  "STX/USD",
+  "INJ/USD",
 ];
+const WATCHLIST = [...FX_SYMBOLS, ...CRYPTO_SYMBOLS];
+const CRYPTO_BASES = new Set(CRYPTO_SYMBOLS.map((s) => s.split("/")[0].toUpperCase()));
 
 const VALID_INTERVALS = ["1min", "5min", "15min", "30min", "1h", "4h", "1day"];
 const TD_BASE = "https://api.twelvedata.com";
@@ -125,8 +203,8 @@ const TTL_MS: Record<string, number> = {
   "4h": 30 * 60_000,
   "1day": 12 * 60 * 60_000,
 };
-// Keyed providers: keep quotes fresh for 5 minutes — a full 18-symbol rotation
-// at 2 symbols/request fits comfortably inside the shared 8/min credit gate.
+// Keyed providers: keep quotes fresh for 5 minutes — a full watchlist
+// rotation at 2 symbols/request fits comfortably inside the shared 8/min gate.
 const QUOTES_FRESH_MS = 300_000;
 // Free keyless source: quotes go stale after a few seconds so the watchlist
 // actually fluctuates in real time. Crypto refreshes in one batched Binance
@@ -735,7 +813,8 @@ function optNum(v: unknown): number | null {
 }
 
 function isCryptoSymbol(symbol: string): boolean {
-  return /BTC|ETH|BNB|SOL|XRP|ADA|DOGE|LTC/.test(symbol);
+  const base = symbol.split("/")[0]?.trim().toUpperCase();
+  return CRYPTO_BASES.has(base);
 }
 
 /**
