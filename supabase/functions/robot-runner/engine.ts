@@ -499,13 +499,14 @@ export function manualTargets(
   barsBySymbol: Record<string, Bar[]>,
   type: StrategyType,
   interval: Interval,
+  method: TradingMethod = 'scalping',
 ): RankedPair[] {
   const out: RankedPair[] = []
   for (const [symbol, bars] of Object.entries(barsBySymbol)) {
     if (!Array.isArray(bars) || bars.length < 30) continue
-    const { signal } = computeSignal(bars, type)
+    const { signal } = computeSignal(bars, type, METHOD_PARAMS[method][type])
     if (signal === 'neutral') continue
-    const best = bestStrategyFor(bars, interval)
+    const best = bestStrategyFor(bars, interval, method)
     const fallback: BestStrategy = { type, signal, score: 50 }
     out.push({ symbol, score: best?.score ?? 50, best: best ?? fallback })
   }

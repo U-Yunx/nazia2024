@@ -597,10 +597,10 @@ async function tickRun(
   }
 
   // 8) Rank pairs + build cycle inputs — identical rules to the browser.
-  const ranked = rankPairs(barsBySymbol, interval);
+  const ranked = rankPairs(barsBySymbol, interval, run.method);
   const rankedTargets =
     run.strategy_mode === "manual"
-      ? manualTargets(barsBySymbol, run.manual_strategy ?? "MA", interval)
+      ? manualTargets(barsBySymbol, run.manual_strategy ?? "MA", interval, run.method)
       : run.auto_pick_pairs
         ? ranked.slice(0, Math.max(1, run.pair_count))
         : ranked;
