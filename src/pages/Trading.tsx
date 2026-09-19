@@ -586,6 +586,15 @@ export function Trading() {
     displayedPnl != null && prefs.overallMaxLossUsd > 0
       ? Math.min(100, Math.max(0, (Math.max(0, -displayedPnl) / prefs.overallMaxLossUsd) * 100))
       : 0
+  // Session max-loss trip: the robot is standing by AFTER the last run bled
+  // past the Max loss limit. While set, "Start robot" is blocked until the
+  // limit is raised (and applied) or the account is reset — the guard can't be
+  // restarted into the same hole. Clears automatically on the next run start.
+  const maxLossHit =
+    !autoTrade &&
+    lastSessionPnl != null &&
+    prefs.overallMaxLossUsd > 0 &&
+    lastSessionPnl <= -prefs.overallMaxLossUsd
 
   // Record robot runs as sessions + equity history while the robot trades.
   useRobotRecorder({
@@ -1123,6 +1132,12 @@ export function Trading() {
       pushLog([`Balance is below $${MIN_TRADE_BALANCE_USD} — trading is locked. Reset the account to trade again.`])
       return
     }
+    if (patch.autoTrade === true && maxLossHit) {
+      pushLog([
+        `Max loss reached — ${formatUsd(Math.abs(lastSessionPnl ?? 0))} lost against the ${formatUsd(prefs.overallMaxLossUsd)} limit, so the robot stays off. Raise the session Max loss (Apply) or reset the account to trade again.`,
+      ])
+      return
+    }
     if (patch.autoTrade === true && needsRiskAccept) {
       pushLog(['Accept the risk disclaimer first — managed live auto-trading stays locked until you do.'])
       return
@@ -1252,23 +1267,37 @@ export function Trading() {
           >
             <div>
               <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                {maxLossHit && <span className="h-2 w-2 shrink-0 rounded-full bg-down" aria-hidden="true" />}
                 {autoTrade && <span className="h-2 w-2 shrink-0 animate-pulse-dot rounded-full bg-up" aria-hidden="true" />}
-                {autoTrade ? 'Robot is live — trading the strongest setups' : 'Robot is standing by'}
+                {maxLossHit ? (
+                  <span className="text-down">Max loss reached — robot stopped</span>
+                ) : autoTrade ? (
+                  'Robot is live — trading the strongest setups'
+                ) : (
+                  'Robot is standing by'
+                )}
               </p>
               <p className="mt-0.5 text-sm text-muted-foreground">
-                {autoTrade
-                  ? prefs.strategyMode === 'manual'
-                    ? `Scanning ${robotPairs.length} pair${robotPairs.length === 1 ? '' : 's'} · ${STRATEGY_META[prefs.manualStrategy].shortLabel} method only, strongest signals first.`
-                    : `Scanning ${robotPairs.length} pair${robotPairs.length === 1 ? '' : 's'} · every strategy evaluated on each · up to ${robotCaps.maxPerPair} position${robotCaps.maxPerPair === 1 ? '' : 's'} per pair, strongest setups first.`
-                  : 'Start the robot to auto-trade the strongest signal across your selected pairs — always risk-sized with a stop-loss.'}
+                {maxLossHit
+                  ? `The last run lost ${formatUsd(Math.abs(lastSessionPnl ?? 0))} against your ${formatUsd(prefs.overallMaxLossUsd)} max-loss limit, so the robot parked itself. Raise the session Max loss (and press Apply) or reset the account to run again.`
+                  : autoTrade
+                    ? prefs.strategyMode === 'manual'
+                      ? `Scanning ${robotPairs.length} pair${robotPairs.length === 1 ? '' : 's'} · ${STRATEGY_META[prefs.manualStrategy].shortLabel} method only, strongest signals first.`
+                      : `Scanning ${robotPairs.length} pair${robotPairs.length === 1 ? '' : 's'} · every strategy evaluated on each · up to ${robotCaps.maxPerPair} position${robotCaps.maxPerPair === 1 ? '' : 's'} per pair, strongest setups first.`
+                    : 'Start the robot to auto-trade the strongest signal across your selected pairs — always risk-sized with a stop-loss.'}
               </p>
             </div>
             <Button
               variant={autoTrade ? 'danger' : 'primary'}
               size="lg"
               onClick={() => void (autoTrade ? stopRobotAndFlatten() : guardedSetRisk({ autoTrade: true }))}
-              disabled={!canRunRobot || stopping || (balanceLocked && !autoTrade)}
+              disabled={!canRunRobot || stopping || (balanceLocked && !autoTrade) || (maxLossHit && !autoTrade)}
               loading={stopping}
+              title={
+                maxLossHit
+                  ? 'Session max loss reached — raise the Max loss limit (Apply) or reset the account to start again.'
+                  : undefined
+              }
               className={cn('w-full shrink-0 sm:w-auto sm:min-w-44', autoTrade && 'animate-pulse-glow')}
             >
               {autoTrade ? <Pause className="h-4 w-4" aria-hidden="true" /> : <Play className="h-4 w-4" aria-hidden="true" />}
@@ -1454,6 +1483,22 @@ export function Trading() {
                           </div>
                         </div>
                       )}
+                      {maxLossHit && (
+                        <div
+                          role="status"
+                          className="flex items-start gap-2 rounded-lg border border-down/30 bg-down/10 px-3 py-2"
+                        >
+                          <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-down" aria-hidden="true" />
+                          <div className="text-xs">
+                            <p className="font-semibold text-down">Max loss reached — robot stopped</p>
+                            <p className="mt-0.5 text-muted-foreground">
+                              Lost {formatUsd(Math.abs(lastSessionPnl ?? 0))} against a{' '}
+                              {formatUsd(prefs.overallMaxLossUsd)} session limit. Raise the Max loss (Apply) or reset
+                              the account to run again — Start stays locked until then.
+                            </p>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                   {autoTrade && runTotalSecs <= 0 && sessionPnl == null && (
@@ -1501,7 +1546,11 @@ export function Trading() {
                 </button>
               </span>
             </span>
-            <div className="flex flex-wrap gap-2" role="group" aria-label="Pairs the robot trades">
+            <div
+              className="flex max-h-[6.75rem] flex-wrap gap-2 overflow-y-auto pr-1"
+              role="group"
+              aria-label="Pairs the robot trades"
+            >
               {WATCHLIST.map((p) => {
                 const on = robotPairs.includes(p.symbol)
                 return (
@@ -1757,6 +1806,28 @@ export function Trading() {
                         setLimitsApplied(false)
                       }}
                     />
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1" role="group" aria-label="Quick set max loss">
+                      {[0, 1, 2, 5].map((v) => (
+                        <button
+                          key={v}
+                          type="button"
+                          aria-pressed={draftTradeLimits.loss === v}
+                          onClick={() => {
+                            setDraftTradeLimits((d) => ({ ...d, loss: v }))
+                            setLimitsDirty(true)
+                            setLimitsApplied(false)
+                          }}
+                          className={cn(
+                            'cursor-pointer rounded border px-2 py-0.5 text-[11px] font-semibold transition-colors duration-150',
+                            draftTradeLimits.loss === v
+                              ? 'border-accent/60 bg-accent/15 text-accent'
+                              : 'border-border bg-secondary/40 text-muted-foreground hover:text-foreground',
+                          )}
+                        >
+                          {v === 0 ? 'Off' : `$${v}`}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
                 <p className="mt-1.5 text-xs text-muted-foreground">
