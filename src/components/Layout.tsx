@@ -48,12 +48,12 @@ function Brand() {
       className="group flex shrink-0 cursor-pointer items-center gap-2.5 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
       aria-label="ANA24 — home"
     >
-      <span className="relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-primary via-primary to-secondary text-on-primary shadow-glow ring-1 ring-white/15 transition-transform duration-150 ease-out group-active:scale-95">
-        <Activity className="h-5 w-5" aria-hidden="true" />
-        <span aria-hidden="true" className="absolute inset-0 rounded-xl bg-gradient-to-t from-black/25 to-transparent opacity-60" />
+      <span className="relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-primary via-primary to-accent text-on-primary shadow-glow ring-1 ring-white/20 transition-transform duration-300 ease-out group-active:scale-95">
+        <Activity className="h-5 w-5" strokeWidth={2.4} aria-hidden="true" />
+        <span aria-hidden="true" className="absolute inset-0 rounded-xl bg-gradient-to-t from-black/20 to-transparent opacity-50" />
       </span>
-      <span className="font-heading text-lg font-bold tracking-tight text-foreground">
-        ANA<span className="text-accent">24</span>
+      <span className="bg-gradient-to-r from-primary via-secondary to-accent bg-clip-text font-heading text-lg font-bold tracking-tight text-transparent">
+        ANA24
       </span>
     </Link>
   )
@@ -95,7 +95,7 @@ function Header() {
     <header className="relative sticky top-0 z-40 border-b border-border/70 bg-background/75 shadow-[0_12px_32px_-20px_rgb(2_6_23/0.9)] backdrop-blur-xl">
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-accent/80 to-transparent"
+        className="pointer-events-none absolute inset-x-0 top-0 h-px bg-[linear-gradient(90deg,transparent,var(--color-primary),var(--color-accent),var(--color-cyan),transparent)]"
       />
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-4 sm:px-6">
         <Brand />
@@ -226,7 +226,7 @@ function Footer() {
     <footer className="relative mt-auto border-t border-border/60 bg-secondary/10">
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent"
+        className="pointer-events-none absolute inset-x-0 top-0 h-px bg-[linear-gradient(90deg,transparent,var(--color-primary),var(--color-accent),var(--color-cyan),transparent)]"
       />
       <div className="mx-auto grid max-w-7xl grid-cols-1 gap-10 px-4 py-12 sm:grid-cols-2 sm:px-6 lg:grid-cols-4">
         <div>
@@ -278,9 +278,11 @@ function AmbientBackground() {
   return (
     <div aria-hidden="true" className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
       <div className="absolute inset-0 bg-background" />
-      <div className="absolute -top-48 left-1/2 h-[520px] w-[820px] -translate-x-1/2 rounded-full bg-primary/12 blur-[130px]" />
-      <div className="absolute -right-40 top-32 h-96 w-96 rounded-full bg-accent/8 blur-[110px]" />
-      <div className="absolute -left-40 top-1/2 h-[420px] w-[420px] rounded-full bg-secondary/8 blur-[130px]" />
+      <div className="absolute -top-48 left-1/2 h-[560px] w-[860px] -translate-x-1/2 rounded-full bg-primary/22 blur-[140px]" />
+      <div className="absolute -right-40 top-32 h-96 w-96 rounded-full bg-cyan/14 blur-[110px]" />
+      <div className="absolute -left-40 top-1/2 h-[460px] w-[460px] rounded-full bg-secondary/14 blur-[130px]" />
+      <div className="absolute bottom-0 left-1/4 h-80 w-80 rounded-full bg-accent/10 blur-[120px]" />
+      <div className="absolute right-1/4 top-2/3 h-72 w-72 rounded-full bg-pink/6 blur-[110px]" />
     </div>
   )
 }

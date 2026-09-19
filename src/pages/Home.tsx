@@ -58,9 +58,10 @@ export function Home() {
       {/* Hero */}
       <section className="relative overflow-hidden text-center">
         <div aria-hidden="true" className="pointer-events-none absolute inset-0">
-          <div className="absolute -top-24 left-1/2 h-72 w-[560px] -translate-x-1/2 rounded-full bg-primary/15 blur-[110px]" />
-          <div className="absolute -right-16 top-40 h-56 w-56 rounded-full bg-accent/10 blur-[90px]" />
-          <div className="absolute -left-16 top-64 h-52 w-52 rounded-full bg-cyan/10 blur-[90px]" />
+          <div className="absolute -top-24 left-1/2 h-72 w-[560px] -translate-x-1/2 rounded-full bg-primary/22 blur-[110px]" />
+          <div className="absolute -right-16 top-40 h-56 w-56 rounded-full bg-accent/14 blur-[90px]" />
+          <div className="absolute -left-16 top-64 h-52 w-52 rounded-full bg-cyan/14 blur-[90px]" />
+          <div className="absolute bottom-0 right-1/3 h-44 w-44 rounded-full bg-pink/8 blur-[90px]" />
         </div>
         <div className="relative">
         <div className="mx-auto mb-5 inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-4 py-1.5 text-xs font-medium text-accent">
