@@ -383,9 +383,15 @@ export function usePublicUserStats() {
   const [stats, setStats] = useState<PublicUserStats>({ registered: 0, active_24h: 0, active_7d: 0, active_30d: 0 })
   useEffect(() => {
     let active = true
-    void fetchPublicUserStats().then((s) => {
-      if (active) setStats(s)
-    })
+    void fetchPublicUserStats()
+      .then((s) => {
+        if (active) setStats(s)
+      })
+      // Never let a data-layer failure become an unhandled rejection; the
+      // landing counters simply stay at their zeros when the backend is down.
+      .catch(() => {
+        if (active) setStats({ registered: 0, active_24h: 0, active_7d: 0, active_30d: 0 })
+      })
     return () => {
       active = false
     }
