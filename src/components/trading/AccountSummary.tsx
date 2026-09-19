@@ -19,7 +19,7 @@ import { consecutiveLosses } from '../../lib/trading/risk'
 import { MIN_PAPER_DEPOSIT, PAPER_ACCOUNT_KINDS, startingBalanceForKind } from '../../lib/trading/accountKind'
 import { formatUsd } from '../../lib/format'
 import { cn } from '../../lib/cn'
-import { Card, CardContent, CardHeader, CardTitle } from '../ui'
+import { CollapsibleCard } from './CollapsibleCard'
 
 function Stat({ label, value, tone }: { label: string; value: string; tone?: 'up' | 'down' | 'neutral' }) {
   return (
@@ -73,14 +73,7 @@ export function AccountSummary({
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Wallet className="h-4 w-4 text-accent" aria-hidden="true" />
-          Account
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
+    <CollapsibleCard title="Account" icon={<Wallet className="h-4 w-4 text-accent" aria-hidden="true" />}>
         {onAccountKindChange && (
           <div className="mb-4">
             <div
@@ -180,7 +173,6 @@ export function AccountSummary({
             </>
           )}
         </p>
-      </CardContent>
-    </Card>
+      </CollapsibleCard>
   )
 }

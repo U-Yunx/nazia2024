@@ -35,7 +35,8 @@ import type { Bar, BrokerConnectionRow, Interval, StrategyConfig, StrategyType, 
 import type { BrokerMode, RatesMap, AccountState, RobotConfig, RobotCycleInput } from '../lib/trading/types'
 import { timeAgo, formatUsd } from '../lib/format'
 import { cn } from '../lib/cn'
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, PageHeader, Select, Skeleton } from '../components/ui'
+import { Badge, Button, Card, CardContent, Input, PageHeader, Select, Skeleton } from '../components/ui'
+import { CollapsibleCard } from '../components/trading/CollapsibleCard'
 import { MarketStatus } from '../components/MarketStatus'
 import { AccountSummary } from '../components/trading/AccountSummary'
 import { PositionsTable } from '../components/trading/PositionsTable'
@@ -1185,10 +1186,10 @@ export function Trading() {
 
   // Shared robot control card — used by both paper and live modes.
   const robotCard = (
-    <Card>
-      <CardHeader>
-        <CardTitle>Robot</CardTitle>
-        <div className="flex items-center gap-2">
+    <CollapsibleCard
+      title="Robot"
+      actions={
+        <>
           {remaining != null && endsAt && (
             <Badge className="border-amber/40 bg-amber/10 text-amber">
               <Timer className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1199,10 +1200,10 @@ export function Trading() {
             {autoTrade ? <Play className="h-3.5 w-3.5" aria-hidden="true" /> : <Pause className="h-3.5 w-3.5" aria-hidden="true" />}
             {autoTrade ? 'Active' : 'Standby'}
           </Badge>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <div className="flex flex-col gap-5">
+        </>
+      }
+    >
+      <div className="flex flex-col gap-5">
           {/* Starter-tier market-open limit notice */}
           {tier.limited ? (
             <div className="flex flex-col gap-2 rounded-xl border border-amber/40 bg-amber/10 p-3 sm:flex-row sm:items-center">
@@ -1909,9 +1910,8 @@ export function Trading() {
             ))}
           </ul>
         )}
-        </div>
-      </CardContent>
-    </Card>
+      </div>
+    </CollapsibleCard>
   )
 
   // Full account body — shared by the paper flow and the live mirror.

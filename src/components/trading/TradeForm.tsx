@@ -14,7 +14,9 @@ import { pipValueUsd, stopTakePrices, suggestPositionUnits } from '../../lib/tra
 import { WATCHLIST } from '../../lib/watchlist'
 import { formatPrice, formatUsd } from '../../lib/format'
 import { cn } from '../../lib/cn'
-import { Button, Card, CardContent, CardHeader, CardTitle, Input, Select } from '../ui'
+import { Button, Input, Select } from '../ui'
+import { CollapsibleCard } from './CollapsibleCard'
+import { formatLots, lotsToUnits, unitsToLots } from '../../lib/trading/lots'
 
 export function TradeForm({
   account,
@@ -30,6 +32,8 @@ export function TradeForm({
   const [stopPips, setStopPips] = useState(20)
   const [takePips, setTakePips] = useState(40)
   const [units, setUnits] = useState<number | null>(null)
+  // Position size unit: raw contract units or forex lots (1 lot = 100,000 units).
+  const [sizeUnit, setSizeUnit] = useState<'units' | 'lots'>('units')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [ok, setOk] = useState(false)
@@ -102,11 +106,7 @@ export function TradeForm({
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Manual trade</CardTitle>
-      </CardHeader>
-      <CardContent>
+    <CollapsibleCard title="Manual trade">
         <div className="grid grid-cols-2 gap-3">
           <Select label="Pair" value={symbol} onChange={(e) => setSymbol(e.target.value)}>
             {WATCHLIST.map((p) => (
@@ -202,14 +202,64 @@ export function TradeForm({
             value={lossCap}
             onChange={(e) => setLossCap(Math.max(0, Number(e.target.value)))}
           />
-          <Input
-            label={`Units (suggested ${suggested})`}
-            type="number"
-            min={1}
-            step={1}
-            value={effectiveUnits}
-            onChange={(e) => setUnits(e.target.value === '' ? null : Number(e.target.value))}
-          />
+          <div className="col-span-2">
+            <span className="mb-1.5 block text-xs font-medium text-muted-foreground">Position size</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <div
+                className="inline-flex items-center gap-1 rounded-lg border border-border bg-secondary/40 p-1"
+                role="group"
+                aria-label="Position size unit"
+              >
+                {(['units', 'lots'] as const).map((u) => (
+                  <button
+                    key={u}
+                    type="button"
+                    onClick={() => setSizeUnit(u)}
+                    aria-pressed={sizeUnit === u}
+                    className={cn(
+                      'h-8 cursor-pointer rounded-md px-3 text-sm font-medium transition-colors duration-150',
+                      sizeUnit === u ? 'bg-accent text-black' : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    {u === 'units' ? 'Units' : 'Lots'}
+                  </button>
+                ))}
+              </div>
+              <span className="text-[11px] text-muted-foreground">
+                1 lot = 100,000 units — the order is always placed in units under the hood.
+              </span>
+            </div>
+          </div>
+          {sizeUnit === 'lots' ? (
+            <Input
+              label={`Lots (suggested ${formatLots(unitsToLots(suggested))})`}
+              type="number"
+              min={0.01}
+              step={0.01}
+              value={units == null ? '' : formatLots(unitsToLots(units))}
+              onChange={(e) => {
+                const raw = e.target.value
+                if (raw === '') return setUnits(null)
+                const lots = Number(raw)
+                if (!Number.isFinite(lots) || lots <= 0) return
+                setUnits(lotsToUnits(lots))
+              }}
+            />
+          ) : (
+            <Input
+              label={`Units (suggested ${suggested})`}
+              type="number"
+              min={1}
+              step={1}
+              value={effectiveUnits}
+              onChange={(e) => {
+                const raw = e.target.value
+                if (raw === '') return setUnits(null)
+                const u = Number(raw)
+                if (Number.isFinite(u) && u > 0) setUnits(Math.round(u))
+              }}
+            />
+          )}
           <div className="flex items-end rounded-lg border border-border bg-secondary/40 px-3 py-2 text-xs text-muted-foreground">
             <div>
               <p className="text-[11px] uppercase tracking-wide">Market</p>
@@ -266,7 +316,6 @@ export function TradeForm({
         >
           {side === 'long' ? 'Buy' : 'Sell'} {symbol}
         </Button>
-      </CardContent>
-    </Card>
+      </CollapsibleCard>
   )
 }

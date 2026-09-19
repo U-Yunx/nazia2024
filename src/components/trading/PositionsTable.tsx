@@ -11,7 +11,8 @@ import { MIN_TRADE_BALANCE_USD } from '../../lib/trading/engine'
 import { pnlUsd } from '../../lib/trading/risk'
 import { formatDateTime, formatPct, formatPrice, formatUnits, formatUsd } from '../../lib/format'
 import { cn } from '../../lib/cn'
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle, EmptyState } from '../ui'
+import { Badge, Button, EmptyState } from '../ui'
+import { CollapsibleCard } from './CollapsibleCard'
 
 export interface RobotCaps {
   tradeMode: TradeMode
@@ -51,10 +52,10 @@ export function PositionsTable({
   const groups = [...bySymbol.entries()]
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Open positions</CardTitle>
-        <div className="flex flex-wrap items-center gap-2">
+    <CollapsibleCard
+      title="Open positions"
+      actions={
+        <>
           {positions.length > 0 && (
             <span className="text-xs text-muted-foreground">
               {positions.length} open{robotCaps ? ` · max ${robotCaps.maxOpenTrades}` : ''}
@@ -65,9 +66,9 @@ export function PositionsTable({
               {robotCaps.tradeMode === 'concurrent' ? 'Concurrent' : 'Sequential'} · {perPairCap(robotCaps)}/pair
             </Badge>
           )}
-        </div>
-      </CardHeader>
-      <CardContent>
+        </>
+      }
+    >
         {positions.length === 0 ? (
           <EmptyState
             title="No open positions"
@@ -178,7 +179,6 @@ export function PositionsTable({
             })}
           </div>
         )}
-      </CardContent>
-    </Card>
+    </CollapsibleCard>
   )
 }

@@ -8,7 +8,8 @@ import { BookOpen } from 'lucide-react'
 import type { ClosedTrade } from '../../lib/trading/types'
 import { formatDateTime, formatPct, formatPrice, formatUsd } from '../../lib/format'
 import { cn } from '../../lib/cn'
-import { Badge, Card, CardContent, CardHeader, CardTitle, EmptyState } from '../ui'
+import { Badge, EmptyState } from '../ui'
+import { CollapsibleCard } from './CollapsibleCard'
 
 const REASON_LABEL: Record<string, string> = {
   signal: 'Signal',
@@ -29,13 +30,11 @@ export function TradeJournal({ trades }: { trades: ClosedTrade[] }) {
   const net = trades.reduce((sum, t) => sum + t.pnl, 0)
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <BookOpen className="h-4 w-4 text-accent" aria-hidden="true" />
-          Trade journal
-        </CardTitle>
-        <div className="flex flex-wrap items-center gap-2">
+    <CollapsibleCard
+      title="Trade journal"
+      icon={<BookOpen className="h-4 w-4 text-accent" aria-hidden="true" />}
+      actions={
+        <>
           {trades.length > 0 && (
             <>
               <span className="text-xs text-muted-foreground">{trades.length} trades</span>
@@ -49,9 +48,9 @@ export function TradeJournal({ trades }: { trades: ClosedTrade[] }) {
               </span>
             </>
           )}
-        </div>
-      </CardHeader>
-      <CardContent>
+        </>
+      }
+    >
         {trades.length === 0 ? (
           <EmptyState
             icon={<BookOpen className="h-6 w-6" aria-hidden="true" />}
@@ -134,7 +133,6 @@ export function TradeJournal({ trades }: { trades: ClosedTrade[] }) {
             </table>
           </div>
         )}
-      </CardContent>
-    </Card>
+      </CollapsibleCard>
   )
 }

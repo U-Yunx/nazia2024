@@ -13,7 +13,8 @@ import { Check, RotateCcw, ShieldAlert } from 'lucide-react'
 import type { RiskConfig } from '../../lib/trading/types'
 import { DEFAULT_RISK } from '../../lib/trading/types'
 import { cn } from '../../lib/cn'
-import { Button, Card, CardContent, CardHeader, CardTitle, Input } from '../ui'
+import { Button, Input } from '../ui'
+import { CollapsibleCard } from './CollapsibleCard'
 
 interface Props {
   risk: RiskConfig
@@ -88,13 +89,11 @@ export function RiskPanel({ risk, onChange, onReset, isLive }: Props) {
   const perTradeLoss = unit === 'pips' ? draft.maxLossPerTradePips : draft.maxLossPerTradeUsd
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <ShieldAlert className="h-4 w-4 text-amber" aria-hidden="true" />
-          Risk management
-        </CardTitle>
-        <div className="flex items-center gap-2">
+    <CollapsibleCard
+      title="Risk management"
+      icon={<ShieldAlert className="h-4 w-4 text-amber" aria-hidden="true" />}
+      actions={
+        <>
           <Button variant="ghost" size="sm" onClick={onReset}>
             <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
             Reset
@@ -106,9 +105,9 @@ export function RiskPanel({ risk, onChange, onReset, isLive }: Props) {
             <Check className="h-3.5 w-3.5" aria-hidden="true" />
             Apply
           </Button>
-        </div>
-      </CardHeader>
-      <CardContent>
+        </>
+      }
+    >
         {isLive && (
           <p className="rounded-lg border border-amber/30 bg-amber/10 px-3 py-2 text-xs text-amber">
             Live mode — these limits are enforced on your real account.
@@ -315,7 +314,6 @@ export function RiskPanel({ risk, onChange, onReset, isLive }: Props) {
           />
           Auto-trade on signals
         </label>
-      </CardContent>
-    </Card>
+      </CollapsibleCard>
   )
 }

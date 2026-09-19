@@ -16,7 +16,8 @@ import { INTERVALS } from '../../lib/strategies'
 import { WATCHLIST } from '../../lib/watchlist'
 import { formatPrice } from '../../lib/format'
 import { CandleChart } from '../CandleChart'
-import { Card, CardContent, CardHeader, CardTitle, Select, Skeleton } from '../ui'
+import { Select, Skeleton } from '../ui'
+import { CollapsibleCard } from './CollapsibleCard'
 
 /** How often to re-fetch bars for new candles (the function caches per-interval, so this stays cheap). */
 const REFETCH_MS = 60_000
@@ -92,13 +93,11 @@ export function LiveChartPanel({
   }, [bars, live])
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <LineChart className="h-4 w-4 text-accent" aria-hidden="true" />
-          Price chart
-        </CardTitle>
-        <div className="flex flex-wrap items-end gap-2">
+    <CollapsibleCard
+      title="Price chart"
+      icon={<LineChart className="h-4 w-4 text-accent" aria-hidden="true" />}
+      actions={
+        <>
           <Select
             label="Pair"
             value={symbol}
@@ -130,9 +129,9 @@ export function LiveChartPanel({
               {formatPrice(live)}
             </span>
           )}
-        </div>
-      </CardHeader>
-      <CardContent>
+        </>
+      }
+    >
         {loading ? (
           <Skeleton className="h-72 w-full" />
         ) : error ? (
@@ -145,7 +144,6 @@ export function LiveChartPanel({
         ) : displayBars ? (
           <CandleChart bars={displayBars} height={300} />
         ) : null}
-      </CardContent>
-    </Card>
+    </CollapsibleCard>
   )
 }
