@@ -35,6 +35,7 @@ export function Configuration() {
     setTradeMode,
     setMaxPerPair,
     setMaxOpenTrades,
+    setProfitPullbackPct,
   } = useRobotPrefs()
 
   const handleSave = () => {
@@ -347,6 +348,49 @@ export function Configuration() {
             <p className="mt-3 text-xs text-muted-foreground">
               Leave per-trade values at 0 to let the robot size stops from market volatility (ATR).
             </p>
+
+            <div className="mt-5 rounded-lg border border-border bg-secondary/30 p-4">
+              <p className="text-sm font-semibold">Profit pull-back lock</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Banks winning trades early — once a position peaks in profit, the robot closes it automatically if
+                it gives back this percentage from the peak. 0 = off (the default on every new run).
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="Profit pull-back percent">
+                {[0, 10, 25, 50].map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    aria-pressed={prefs.profitPullbackPct === v}
+                    onClick={() => setProfitPullbackPct(v)}
+                    className={cn(
+                      'cursor-pointer rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors duration-150',
+                      prefs.profitPullbackPct === v
+                        ? 'border-accent bg-accent/15 text-accent'
+                        : 'border-border bg-secondary/40 text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    {v === 0 ? 'Off' : `${v}%`}
+                  </button>
+                ))}
+                <Input
+                  type="number"
+                  min={0}
+                  max={90}
+                  value={prefs.profitPullbackPct > 0 ? prefs.profitPullbackPct : ''}
+                  placeholder="Custom"
+                  aria-label="Profit pull-back percent"
+                  className="w-24"
+                  onChange={(e) => setProfitPullbackPct(Math.min(90, Math.max(0, Number(e.target.value) || 0)))}
+                />
+              </div>
+              {prefs.profitPullbackPct > 0 && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  A winner that peaks at $20 in profit closes when it gives back {prefs.profitPullbackPct}% — about $
+                  {(20 * (1 - prefs.profitPullbackPct / 100)).toFixed(0)} — so the gain is banked instead of returned to
+                  the market.
+                </p>
+              )}
+            </div>
 
             <p id="config-saved" className="mt-3 rounded-lg border border-up/40 bg-up/10 px-3 py-2 text-xs text-up opacity-0 transition-opacity">
               Preferences saved locally — they take effect on your next robot run.
