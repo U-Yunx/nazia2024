@@ -15,6 +15,9 @@ export function RobotLivePrices({ pairs }: { pairs: string[] }) {
   const { quotes, loading, error } = useQuotes(15_000, pairs)
 
   const rows = (quotes ?? []).filter((q) => pairs.includes(q.symbol))
+  // The panel shows the top 10 priced pairs — with a full watchlist (up to 96
+  // pairs) the rest stay reachable through the scroll.
+  const visibleRows = rows.slice(0, 10)
   const anyClosed = rows.some((q) => q.is_market_open === false)
   const anyStale = rows.some((q) => q.stale && q.is_market_open !== false)
 
@@ -43,11 +46,16 @@ export function RobotLivePrices({ pairs }: { pairs: string[] }) {
         <p className="text-sm text-muted-foreground">{error ?? 'Waiting for prices…'}</p>
       ) : (
         <>
-          <ul className="space-y-2" aria-live="polite">
-            {rows.map((q) => (
+          <ul className="max-h-[18rem] space-y-2 overflow-y-auto pr-1" aria-live="polite">
+            {visibleRows.map((q) => (
               <QuoteRow key={q.symbol} quote={q} />
             ))}
           </ul>
+          {rows.length > visibleRows.length && (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Showing the top {visibleRows.length} of {rows.length} pairs — scroll for the rest.
+            </p>
+          )}
           {(anyClosed || anyStale) && (
             <p className="mt-3 border-t border-border/70 pt-2 text-[11px] leading-relaxed text-muted-foreground">
               {anyClosed

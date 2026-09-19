@@ -1354,25 +1354,28 @@ export function Trading() {
               </div>
             </div>
 
-            <div className="flex flex-wrap gap-1.5">
+            {/* Sequential list capped at 3 visible rows — scroll for the rest. */}
+            <ul className="max-h-24 space-y-1 overflow-y-auto pr-1">
               {scanPairs.map((sym) => {
                 const openCount = account?.positions.filter((p) => p.symbol === sym).length ?? 0
                 const cap = robotCaps.maxPerPair
                 const atCap = openCount >= cap
                 return (
-                  <Badge
+                  <li
                     key={sym}
                     className={cn(
+                      'flex items-center justify-between gap-2 rounded-md border px-2.5 py-1 text-xs',
                       atCap
                         ? 'border-amber/40 bg-amber/10 text-amber'
-                        : 'border-border bg-muted text-muted-foreground',
+                        : 'border-border bg-secondary/40 text-muted-foreground',
                     )}
                   >
-                    {sym} {openCount}/{cap} open
-                  </Badge>
+                    <span className="font-medium">{sym}</span>
+                    <span className="tnum">{openCount}/{cap} open</span>
+                  </li>
                 )
               })}
-            </div>
+            </ul>
             <p className="mt-2 text-xs text-muted-foreground">
               The per-pair cap applies in both modes — a pair at its cap is skipped until a position closes. The global
               cap (above) still limits how many positions the whole robot holds at once.
@@ -1899,17 +1902,23 @@ export function Trading() {
         )}
 
         {robotLog.length > 0 && (
-          <ul className="mt-4 space-y-1.5">
-            {robotLog.map((e, i) => (
-              <li
-                key={`${i}-${e.t}`}
-                className="flex items-start gap-2 rounded-md bg-muted/40 px-3 py-1.5 font-mono text-xs tnum"
-              >
-                <span className="shrink-0 whitespace-nowrap text-muted-foreground">{timeAgo(e.t)}</span>
-                <span>{e.m}</span>
-              </li>
-            ))}
-          </ul>
+          <>
+            <p className="mb-2 mt-4 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <Activity className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
+              Auto-tune &amp; robot history
+            </p>
+            <ul className="max-h-44 space-y-1.5 overflow-y-auto pr-1">
+              {robotLog.map((e, i) => (
+                <li
+                  key={`${i}-${e.t}`}
+                  className="flex items-start gap-2 rounded-md bg-muted/40 px-3 py-1.5 font-mono text-xs tnum"
+                >
+                  <span className="shrink-0 whitespace-nowrap text-muted-foreground">{timeAgo(e.t)}</span>
+                  <span>{e.m}</span>
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </div>
     </CollapsibleCard>
