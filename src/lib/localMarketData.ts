@@ -199,6 +199,16 @@ function aggregateBars(bars: Bar[], n: number): Bar[] {
   return out
 }
 
+/**
+ * lightweight-charts requires strictly ascending, unique times. Upstream
+ * providers occasionally return bars newest-first, so normalize before handing
+ * bars to callers (charts, indicators) — sort asc, then drop duplicate stamps.
+ */
+function normalizeBars(bars: Bar[]): Bar[] {
+  const sorted = [...bars].sort((a, b) => Date.parse(a.time) - Date.parse(b.time))
+  return sorted.filter((b, i) => i === 0 || b.time !== sorted[i - 1].time)
+}
+
 /** Binance klines (crypto only, native 4h/1d). */
 async function binanceTimeSeries(symbol: string, interval: string, outputsize: number): Promise<Bar[] | null> {
   const map: Record<string, string> = {
@@ -211,14 +221,16 @@ async function binanceTimeSeries(symbol: string, interval: string, outputsize: n
     if (res.status === 429 || res.status === 418 || !res.ok) return null
     const data = (await res.json()) as unknown[] | { code?: number } | null
     if (!Array.isArray(data) || data.length === 0) return null
-    return (data as Array<Array<number | string>>).map((k) => ({
-      time: new Date(Number(k[0])).toISOString(),
-      open: num(k[1]),
-      high: num(k[2]),
-      low: num(k[3]),
-      close: num(k[4]),
-      volume: k[5] != null ? num(k[5]) : undefined,
-    }))
+    return normalizeBars(
+      (data as Array<Array<number | string>>).map((k) => ({
+        time: new Date(Number(k[0])).toISOString(),
+        open: num(k[1]),
+        high: num(k[2]),
+        low: num(k[3]),
+        close: num(k[4]),
+        volume: k[5] != null ? num(k[5]) : undefined,
+      })),
+    )
   } catch {
     return null
   }
@@ -259,7 +271,7 @@ async function yahooTimeSeries(symbol: string, interval: string, outputsize: num
     }
     let out = bars
     if (interval === '4h') out = aggregateBars(out, 4)
-    return out.slice(-outputsize)
+    return normalizeBars(out).slice(-outputsize)
   } catch {
     return null
   }
@@ -274,5 +286,6 @@ export async function localTimeSeries(symbol: string, interval: Interval, output
     const bin = await binanceTimeSeries(symbol, interval, outputsize)
     if (bin) return bin
   }
-  return yahooTimeSeries(symbol, interval, outputsize)
+  const yh = await yahooTimeSeries(symbol, interval, outputsize)
+  return yh ? normalizeBars(yh).slice(-outputsize) : null
 }

@@ -270,6 +270,25 @@ function aggregateBars(bars: Bar[], n: number): Bar[] {
   return out;
 }
 
+/**
+ * Chart consumers (lightweight-charts) require strictly ascending, unique
+ * times. Some upstream providers return bars newest-first (Twelve Data) and
+ * cached rows may predate normalization, so sort + dedupe before serving or
+ * caching. `slice(-n)` keeps the most recent bars after the sort.
+ */
+function normalizeBars(bars: Bar[], n?: number): Bar[] {
+  const t = (b: Bar): number => Date.parse(b.time);
+  const sorted: Bar[] = [];
+  const seen = new Set<string>();
+  const ordered = [...bars].sort((a, b) => t(a) - t(b));
+  for (const b of ordered) {
+    if (seen.has(b.time)) continue;
+    seen.add(b.time);
+    sorted.push(b);
+  }
+  return typeof n === "number" ? sorted.slice(-Math.max(0, n)) : sorted;
+}
+
 // --- Auth --------------------------------------------------------------------
 const PROJECT_REF = (() => {
   try {
@@ -1342,23 +1361,24 @@ async function handleTimeSeries(providerId: string, apiKey: string, body: Record
   const updatedAt = row ? new Date(row.updated_at).getTime() : (memoryCache.get(cacheKey)?.at ?? 0);
 
   if (payload && Array.isArray(payload) && Date.now() - updatedAt <= ttl) {
-    return json({ bars: payload });
+    return json({ bars: normalizeBars(payload, outputsize) });
   }
   if (!canUseCredit() || !(await claimUpstreamSlot())) {
-    if (payload && Array.isArray(payload)) return json({ bars: payload, stale: true });
+    if (payload && Array.isArray(payload)) return json({ bars: normalizeBars(payload, outputsize), stale: true });
     return json({ error: "rate_limited" });
   }
   const res = await provider.fetchTimeSeries(apiKey, symbol, interval, outputsize, start_date, end_date);
   if (res.rateLimited) {
-    if (payload && Array.isArray(payload)) return json({ bars: payload, stale: true });
+    if (payload && Array.isArray(payload)) return json({ bars: normalizeBars(payload, outputsize), stale: true });
     return json({ error: "rate_limited" });
   }
   if (res.error) {
-    if (payload && Array.isArray(payload)) return json({ bars: payload, stale: true });
+    if (payload && Array.isArray(payload)) return json({ bars: normalizeBars(payload, outputsize), stale: true });
     return json({ error: "upstream", message: res.error ?? "Upstream error." });
   }
-  await cacheSet(cacheKey, res.bars);
-  return json({ bars: res.bars });
+  const bars = normalizeBars(res.bars, outputsize);
+  await cacheSet(cacheKey, bars);
+  return json({ bars });
 }
 
 async function handleQuotesWithFallback(chain: string[], priority: string[]): Promise<Response> {

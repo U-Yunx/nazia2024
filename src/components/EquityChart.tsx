@@ -49,8 +49,11 @@ export function EquityChart({ points, height = 260 }: { points: EquityPoint[]; h
     })
     chartRef.current = chart
     seriesRef.current = series
-    const ro = new ResizeObserver(() => chart.applyOptions({ width: containerRef.current!.clientWidth }))
-    ro.observe(containerRef.current)
+    const el = containerRef.current
+    const ro = new ResizeObserver(() => {
+      if (el && el.isConnected) chart.applyOptions({ width: el.clientWidth })
+    })
+    ro.observe(el)
     return () => {
       ro.disconnect()
       chart.remove()
@@ -62,12 +65,19 @@ export function EquityChart({ points, height = 260 }: { points: EquityPoint[]; h
 
   useEffect(() => {
     if (!seriesRef.current || points.length === 0) return
-    const data = points.map((p) => ({
-      time: /^\d{4}-\d{2}-\d{2}$/.test(p.time)
-        ? p.time
-        : (Math.floor(Date.parse(p.time) / 1000) as Time),
-      value: p.equity,
-    }))
+    const data = points
+      .map((p) => ({
+        time: /^\d{4}-\d{2}-\d{2}$/.test(p.time)
+          ? p.time
+          : (Math.floor(Date.parse(p.time) / 1000) as Time),
+        value: p.equity,
+      }))
+      .sort((a, b) => {
+        const at = typeof a.time === 'number' ? a.time : Date.parse(a.time as string) / 1000
+        const bt = typeof b.time === 'number' ? b.time : Date.parse(b.time as string) / 1000
+        return at - bt
+      })
+      .filter((p, i, arr) => i === 0 || p.time !== arr[i - 1].time)
     seriesRef.current.setData(data)
     chartRef.current?.timeScale().fitContent()
   }, [points])

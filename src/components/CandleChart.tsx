@@ -26,6 +26,26 @@ function toCandle(b: Bar): CandlestickData {
   return { time: t as Time, open: b.open, high: b.high, low: b.low, close: b.close }
 }
 
+/** Sortable millisecond time for any lightweight-charts Time value. */
+function timeToMs(t: Time): number {
+  if (typeof t === 'number') return t * 1000
+  if (typeof t === 'string') return Date.parse(t)
+  // BusinessDay object (e.g. { year, month, day }).
+  return Date.UTC(t.year, t.month - 1, t.day)
+}
+
+/**
+ * lightweight-charts requires strictly ascending, unique times. Upstream
+ * providers occasionally return bars newest-first or with duplicate stamps, so
+ * normalize before setData — sort asc, then drop consecutive duplicates.
+ */
+function toSortedCandles(bars: Bar[]): CandlestickData[] {
+  return bars
+    .map(toCandle)
+    .sort((a, b) => timeToMs(a.time) - timeToMs(b.time))
+    .filter((c, i, arr) => i === 0 || timeToMs(c.time) !== timeToMs(arr[i - 1].time))
+}
+
 export function CandleChart({ bars, height = 360 }: { bars: Bar[]; height?: number }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -65,8 +85,11 @@ export function CandleChart({ bars, height = 360 }: { bars: Bar[]; height?: numb
     })
     chartRef.current = chart
     seriesRef.current = series
-    const ro = new ResizeObserver(() => chart.applyOptions({ width: containerRef.current!.clientWidth }))
-    ro.observe(containerRef.current)
+    const el = containerRef.current
+    const ro = new ResizeObserver(() => {
+      if (el && el.isConnected) chart.applyOptions({ width: el.clientWidth })
+    })
+    ro.observe(el)
     return () => {
       ro.disconnect()
       chart.remove()
@@ -78,7 +101,7 @@ export function CandleChart({ bars, height = 360 }: { bars: Bar[]; height?: numb
 
   useEffect(() => {
     if (!seriesRef.current || bars.length === 0) return
-    seriesRef.current.setData(bars.map(toCandle))
+    seriesRef.current.setData(toSortedCandles(bars))
     const first = bars[0].time
     if (fittedRef.current !== first) {
       fittedRef.current = first
