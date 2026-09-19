@@ -1805,9 +1805,10 @@ export function Trading() {
               <p className="mt-2 text-xs text-muted-foreground">
                 {draftTradeLimits.pullback > 0 ? (
                   <>
-                    A winner that peaks at $20 in profit closes when it gives back{' '}
-                    {draftTradeLimits.pullback}% — about ${(20 * (1 - draftTradeLimits.pullback / 100)).toFixed(0)} — so the
-                    gain is banked instead of returned to the market.
+                    Active once a trade's profit exceeds $1 — then it closes when it gives back{' '}
+                    {draftTradeLimits.pullback}% from its highest profit. A winner that peaks at $20 locks at about $
+                    {(20 * (1 - draftTradeLimits.pullback / 100)).toFixed(0)}, banking the gain instead of returning
+                    it to the market.
                   </>
                 ) : (
                   'Off — winners run to their take-profit or trailing stop.'

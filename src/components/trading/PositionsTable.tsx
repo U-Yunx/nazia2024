@@ -37,6 +37,11 @@ export function PositionsTable({
   robotCaps?: RobotCaps
 }) {
   const { positions } = account
+  // Pull-back lock status for the rows: when armed (> $1 profit reached), show
+  // the peak and the $ level it will close at (peak × give-back). Mirrors the
+  // engine rule exactly so the UI tells the trader what the robot will do.
+  const pullbackPct = account.risk.profitPullbackPct ?? 0
+  const pullbackActivate = account.risk.profitPullbackActivateUsd ?? 1
   // Sub-$1 balance: every trading control locks (the engine refuses entries
   // and the emergency closeout handles a blown account) — close buttons
   // included, per the account-safety rule.
@@ -151,6 +156,28 @@ export function PositionsTable({
                                 <span className={cn('ml-2 text-xs font-normal', pnl >= 0 ? 'text-up/80' : 'text-down/80')}>
                                   {formatPct(p.entryEquity > 0 ? (pnl / p.entryEquity) * 100 : 0)}
                                 </span>
+                                {pullbackPct > 0 && (() => {
+                                  const peak = p.peakProfitUsd ?? 0
+                                  const armed = peak > pullbackActivate
+                                  const lock = peak * (1 - pullbackPct / 100)
+                                  return (
+                                    <span
+                                      className={cn(
+                                        'mt-1 block rounded px-1.5 py-0.5 text-[10px] font-medium not-italic',
+                                        armed ? 'bg-cyan/15 text-cyan' : 'bg-muted/60 text-muted-foreground',
+                                      )}
+                                      title={
+                                        armed
+                                          ? `Pull-back armed — peak ${formatUsd(peak)}, closes at ${formatUsd(lock)} (${pullbackPct}% give-back)`
+                                          : `Pull-back inactive — arms once profit exceeds ${formatUsd(pullbackActivate)}`
+                                      }
+                                    >
+                                      {armed
+                                        ? `⇣ lock ${formatUsd(lock)} · peak ${formatUsd(peak)}`
+                                        : `⇣ arm > ${formatUsd(pullbackActivate)}`}
+                                    </span>
+                                  )
+                                })()}
                               </td>
                               <td className="whitespace-nowrap py-3 pr-4 text-right text-xs text-muted-foreground">
                                 {formatDateTime(p.entryTime)}

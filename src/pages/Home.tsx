@@ -58,13 +58,13 @@ export function Home() {
       {/* Hero */}
       <section className="relative overflow-hidden text-center">
         <div aria-hidden="true" className="pointer-events-none absolute inset-0">
-          <div className="absolute -top-24 left-1/2 h-72 w-[560px] -translate-x-1/2 rounded-full bg-primary/22 blur-[110px]" />
-          <div className="absolute -right-16 top-40 h-56 w-56 rounded-full bg-accent/14 blur-[90px]" />
-          <div className="absolute -left-16 top-64 h-52 w-52 rounded-full bg-cyan/14 blur-[90px]" />
-          <div className="absolute bottom-0 right-1/3 h-44 w-44 rounded-full bg-pink/8 blur-[90px]" />
+          <div className="absolute -top-24 left-1/2 h-72 w-[560px] -translate-x-1/2 rounded-full bg-primary/20 blur-[110px]" />
+          <div className="absolute -right-16 top-40 h-56 w-56 rounded-full bg-accent/12 blur-[90px]" />
+          <div className="absolute -left-16 top-64 h-52 w-52 rounded-full bg-cyan/12 blur-[90px]" />
+          <div className="absolute bottom-0 right-1/3 h-44 w-44 rounded-full bg-pink/6 blur-[90px]" />
         </div>
         <div className="relative">
-        <div className="mx-auto mb-5 inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-4 py-1.5 text-xs font-medium text-accent">
+        <div className="surface-premium mx-auto mb-5 inline-flex items-center gap-2 rounded-full border border-accent/30 px-4 py-1.5 text-xs font-medium text-accent">
           <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
           AI-assisted trading, risk-first by design
         </div>
@@ -116,7 +116,7 @@ export function Home() {
             return (
               <div
                 key={p.symbol}
-                className="surface surface-hover flex items-center justify-between rounded-xl border border-border/70 px-4 py-3.5"
+                className="surface-premium surface-hover flex items-center justify-between rounded-xl border border-border/70 px-4 py-3.5"
               >
                 <div>
                   <p className="text-sm font-medium text-foreground">{p.symbol}</p>
@@ -143,7 +143,10 @@ export function Home() {
           {PILLARS.map((p) => (
             <div
               key={p.title}
-              className={cn('surface-hover group rounded-2xl border bg-gradient-to-b p-6', p.gradient)}
+              className={cn(
+                'surface-premium surface-hover group rounded-2xl border bg-gradient-to-b p-6',
+                p.gradient,
+              )}
             >
               <div className="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-border/60 bg-background/50 text-accent shadow-sm transition-transform duration-200 ease-out group-hover:scale-105">
                 <p.icon className="h-5 w-5" aria-hidden="true" />
@@ -156,10 +159,14 @@ export function Home() {
       </section>
 
       {/* CTA */}
-      <section className="relative mt-16 overflow-hidden rounded-2xl border border-border/70 bg-gradient-to-r from-primary/15 via-primary/5 to-primary/15 p-8 text-center shadow-card">
+      <section className="surface-premium relative mt-16 overflow-hidden rounded-2xl border border-primary/25 p-8 text-center shadow-[0_24px_60px_-24px_color-mix(in_oklab,var(--color-primary)_45%,transparent)]">
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute -top-24 left-1/2 h-48 w-96 -translate-x-1/2 rounded-full bg-accent/10 blur-[80px]"
+          className="pointer-events-none absolute -top-24 left-1/2 h-48 w-96 -translate-x-1/2 rounded-full bg-accent/12 blur-[80px]"
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 bg-[radial-gradient(60%_50%_at_50%_0%,color-mix(in_oklab,var(--color-primary)_14%,transparent),transparent)]"
         />
         <div className="relative">
         <BarChart3 className="mx-auto mb-4 h-8 w-8 text-accent" aria-hidden="true" />
@@ -189,7 +196,7 @@ export function Home() {
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="surface surface-hover rounded-xl border border-border/70 px-4 py-3.5">
+    <div className="surface-premium surface-hover rounded-xl border border-border/70 px-4 py-3.5">
       <p className="tnum font-mono text-xl font-bold tracking-tight text-foreground">{value}</p>
       <p className="mt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
     </div>

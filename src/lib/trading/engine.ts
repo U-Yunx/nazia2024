@@ -391,12 +391,15 @@ export function markToMarket(
 
     // Profit-pullback lock — close a winner that has retraced X% from its peak
     // unrealized profit (e.g. peak $20 @ 25% → lock at $15) to bank the gains.
-    // Only positions that actually went green (peak > 0) can trigger it; a
-    // position at its take-profit already closed as 'take_profit' above.
+    // The lock only ARMS once the position's profit exceeded
+    // `profitPullbackActivateUsd` (default $1) — a trade that never got
+    // meaningfully green can't be trapped by the give-back rule. Positions at
+    // their take-profit already closed as 'take_profit' above.
     if (!reason && state.risk.profitPullbackPct > 0) {
       const pnl = pnlUsd(p.side, p.entryPrice, cur, p.units, p.symbol, rates)
       const peak = p.peakProfitUsd ?? 0
-      if (peak > 0 && pnl <= peak * (1 - state.risk.profitPullbackPct / 100)) {
+      const activate = state.risk.profitPullbackActivateUsd ?? 1
+      if (peak > activate && pnl <= peak * (1 - state.risk.profitPullbackPct / 100)) {
         reason = 'pullback'
       }
     }

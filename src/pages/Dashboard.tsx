@@ -125,7 +125,7 @@ export function Dashboard() {
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-border/60 bg-secondary/30 px-4 py-3">
+    <div className="surface-premium rounded-xl border border-border/60 px-4 py-3">
       <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
       <p className="mt-1 tnum font-mono text-xl font-bold text-foreground">{value}</p>
     </div>
@@ -147,13 +147,13 @@ function QuickLink({
     <Link
       to={to}
       className={cn(
-        'group flex items-start gap-3 rounded-xl border border-border bg-secondary/30 p-4',
-        'transition-colors hover:border-accent/50 hover:bg-secondary/50',
+        'surface-premium surface-hover group flex items-start gap-3 rounded-xl border border-border/60 p-4',
+        'transition-colors hover:border-accent/50',
       )}
     >
-      <div className="rounded-lg bg-muted p-2">{icon}</div>
+      <div className="rounded-lg bg-muted p-2 transition-colors duration-200 group-hover:bg-accent/15">{icon}</div>
       <div>
-        <p className="font-medium text-foreground group-hover:text-accent">{title}</p>
+        <p className="font-medium text-foreground transition-colors duration-200 group-hover:text-accent">{title}</p>
         <p className="mt-0.5 text-xs text-muted-foreground">{desc}</p>
       </div>
     </Link>

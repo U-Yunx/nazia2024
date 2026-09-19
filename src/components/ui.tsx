@@ -17,7 +17,7 @@ import { cn } from '../lib/cn'
 
 export function Card({ className, children }: { className?: string; children?: ReactNode }) {
   return (
-    <div className={cn('surface rounded-2xl border border-border/70 p-5', className)}>
+    <div className={cn('surface-premium rounded-2xl border border-border/70 p-5', className)}>
       {children}
     </div>
   )
@@ -63,9 +63,9 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   primary:
-    'btn-lift border border-white/10 bg-gradient-to-b from-primary to-primary/80 text-on-primary shadow-[0_10px_28px_-12px_var(--color-primary)] hover:shadow-[0_14px_34px_-12px_var(--color-primary)]',
+    'btn-lift border border-white/10 bg-gradient-to-b from-primary via-primary to-primary/85 text-on-primary shadow-[0_10px_28px_-12px_var(--color-primary)] hover:shadow-[0_14px_34px_-10px_var(--color-primary),0_0_24px_-12px_var(--color-accent)]',
   secondary:
-    'btn-lift border border-border/80 bg-secondary/40 text-foreground backdrop-blur-sm hover:border-border hover:bg-secondary/60',
+    'btn-lift border border-border/80 bg-secondary/40 text-foreground backdrop-blur-sm hover:border-accent/40 hover:bg-secondary/60',
   ghost: 'btn-lift border border-transparent bg-transparent text-muted-foreground hover:bg-secondary/40 hover:text-foreground',
   danger: 'btn-lift border border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20',
 }
@@ -166,10 +166,7 @@ export function PageHeader({
         {description && (
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">{description}</p>
         )}
-        <div
-          aria-hidden="true"
-          className="mt-3 h-px w-12 bg-gradient-to-r from-primary via-accent to-transparent"
-        />
+        <div className="hairline mt-3 w-16" />
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2 pb-0.5">{actions}</div>}
     </div>

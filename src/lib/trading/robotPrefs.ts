@@ -22,7 +22,7 @@ const DEFAULTS: RobotPrefs = {
   tradeMode: 'sequential',
   maxPerPair: 1,
   maxOpenTrades: 0,
-  profitPullbackPct: 0,
+  profitPullbackPct: 25,
 }
 
 function num(v: unknown, fallback: number): number {

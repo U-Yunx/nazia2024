@@ -120,8 +120,12 @@ export interface RiskConfig {
   maxConsecutiveLosses: number
   adaptiveRisk: boolean
   volatilityFilter: boolean
-  /** Profit-pullback lock % — close a winner that gives back this % of its peak. */
+  /** Profit-pullback lock % — close a winner that gives back this % of its peak.
+   *  Only arms once profit exceeded `profitPullbackActivateUsd` (default $1). */
   profitPullbackPct: number
+  /** Profit-pullback activation ($) — the lock arms only after unrealized
+   *  profit has exceeded this amount (default $1: "active once profit > $1"). */
+  profitPullbackActivateUsd: number
   /**
    * Drawdown stop (%): a losing position is closed once down this % from its
    * entry price — the slow bleed case. EXCEPTION: when the whole band is
@@ -150,7 +154,8 @@ export const DEFAULT_RISK: RiskConfig = {
   maxConsecutiveLosses: 0,
   adaptiveRisk: true,
   volatilityFilter: false,
-  profitPullbackPct: 0,
+  profitPullbackPct: 25,
+  profitPullbackActivateUsd: 1,
   drawdownClosePct: 25,
 }
 
@@ -935,11 +940,15 @@ export function markToMarket(
     }
 
     // Profit-pullback lock — close a winner once it retraces X% from its peak
-    // unrealized profit (e.g. peak $20 @ 25% → lock at $15).
+    // unrealized profit (e.g. peak $20 @ 25% → lock at $15). The lock only
+    // ARMS once the position's profit exceeded `profitPullbackActivateUsd`
+    // (default $1) — a trade that never got meaningfully green can't be
+    // trapped by the give-back rule.
     if (!reason && state.risk.profitPullbackPct > 0) {
       const pnl = pnlUsd(p.side, p.entryPrice, cur, p.units, p.symbol, rates)
       const peak = p.peakProfitUsd ?? 0
-      if (peak > 0 && pnl <= peak * (1 - state.risk.profitPullbackPct / 100)) {
+      const activate = state.risk.profitPullbackActivateUsd ?? 1
+      if (peak > activate && pnl <= peak * (1 - state.risk.profitPullbackPct / 100)) {
         reason = 'pullback'
       }
     }

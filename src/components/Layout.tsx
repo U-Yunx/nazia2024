@@ -48,7 +48,7 @@ function Brand() {
       className="group flex shrink-0 cursor-pointer items-center gap-2.5 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
       aria-label="ANA24 — home"
     >
-      <span className="relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-primary via-primary to-accent text-on-primary shadow-glow ring-1 ring-white/20 transition-transform duration-300 ease-out group-active:scale-95">
+      <span className="relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-primary via-primary to-accent text-on-primary shadow-glow ring-1 ring-white/20 transition-all duration-300 ease-out group-hover:shadow-[0_0_24px_-6px_var(--color-accent)] group-active:scale-95">
         <Activity className="h-5 w-5" strokeWidth={2.4} aria-hidden="true" />
         <span aria-hidden="true" className="absolute inset-0 rounded-xl bg-gradient-to-t from-black/20 to-transparent opacity-50" />
       </span>
@@ -92,7 +92,7 @@ function Header() {
   const items = user ? APP_NAV : PUBLIC_NAV
 
   return (
-    <header className="relative sticky top-0 z-40 border-b border-border/70 bg-background/75 shadow-[0_12px_32px_-20px_rgb(2_6_23/0.9)] backdrop-blur-xl">
+    <header className="surface-premium relative sticky top-0 z-40 border-b border-border/60">
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 top-0 h-px bg-[linear-gradient(90deg,transparent,var(--color-primary),var(--color-accent),var(--color-cyan),transparent)]"
@@ -273,16 +273,18 @@ function Footer() {
 }
 
 /** Fixed ambient light field behind the whole app — layered depth over flat
- *  colour. Pointer-events disabled; purely decorative. */
+ *  colour. Pointer-events disabled; purely decorative. The page itself carries
+ *  a soft radial base (index.css body::before) — this field adds the brighter
+ *  accent blooms so hero sections feel alive without disturbing dense data. */
 function AmbientBackground() {
   return (
     <div aria-hidden="true" className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
       <div className="absolute inset-0 bg-background" />
-      <div className="absolute -top-48 left-1/2 h-[560px] w-[860px] -translate-x-1/2 rounded-full bg-primary/22 blur-[140px]" />
-      <div className="absolute -right-40 top-32 h-96 w-96 rounded-full bg-cyan/14 blur-[110px]" />
-      <div className="absolute -left-40 top-1/2 h-[460px] w-[460px] rounded-full bg-secondary/14 blur-[130px]" />
-      <div className="absolute bottom-0 left-1/4 h-80 w-80 rounded-full bg-accent/10 blur-[120px]" />
-      <div className="absolute right-1/4 top-2/3 h-72 w-72 rounded-full bg-pink/6 blur-[110px]" />
+      <div className="absolute -top-48 left-1/2 h-[560px] w-[860px] -translate-x-1/2 rounded-full bg-primary/20 blur-[140px]" />
+      <div className="absolute -right-40 top-32 h-96 w-96 rounded-full bg-cyan/12 blur-[110px]" />
+      <div className="absolute -left-40 top-1/2 h-[460px] w-[460px] rounded-full bg-secondary/12 blur-[130px]" />
+      <div className="absolute bottom-0 left-1/4 h-80 w-80 rounded-full bg-accent/8 blur-[120px]" />
+      <div className="absolute right-1/4 top-2/3 h-72 w-72 rounded-full bg-pink/5 blur-[110px]" />
     </div>
   )
 }

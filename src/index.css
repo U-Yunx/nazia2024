@@ -97,6 +97,36 @@
     background: var(--color-muted);
     border-radius: 8px;
   }
+  /* Premium ambient page backdrop — layered radial glows over near-black so
+     the page never reads as one flat fill, without noise behind dense data
+     (restraint: gradients stay soft and low-saturation). */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -2;
+    pointer-events: none;
+    background:
+      radial-gradient(52% 42% at 50% -6%, color-mix(in oklab, var(--color-primary) 16%, transparent), transparent 70%),
+      radial-gradient(34% 30% at 88% 8%, color-mix(in oklab, var(--color-cyan) 8%, transparent), transparent 65%),
+      radial-gradient(40% 36% at 6% 22%, color-mix(in oklab, var(--color-secondary) 9%, transparent), transparent 70%),
+      var(--color-background);
+  }
+  /* Faint blueprint grid — only visible as a whisper behind hero/marketing. */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    opacity: 0.35;
+    background-image:
+      linear-gradient(to right, color-mix(in oklab, var(--color-foreground) 4%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklab, var(--color-foreground) 4%, transparent) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(75% 60% at 50% 0%, black 20%, transparent 100%);
+    -webkit-mask-image: radial-gradient(75% 60% at 50% 0%, black 20%, transparent 100%);
+  }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
       animation-duration: 0.01ms !important;
@@ -117,6 +147,34 @@
       color-mix(in oklab, var(--color-secondary) 5%, var(--color-background))
     );
     box-shadow: var(--shadow-card);
+  }
+
+  /* Premium surface: glassy, hairline gradient border + inner top light.
+     Used for hero cards, feature grids and the shell chrome. */
+  .surface-premium {
+    position: relative;
+    background-image: linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--color-secondary) 20%, color-mix(in oklab, var(--color-background) 92%, transparent)),
+      color-mix(in oklab, var(--color-secondary) 6%, var(--color-background))
+    );
+    box-shadow: var(--shadow-card);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+  .surface-premium::before {
+    content: '';
+    position: absolute;
+    inset-inline: 1.25rem;
+    top: 0;
+    height: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in oklab, var(--color-accent) 55%, transparent),
+      transparent
+    );
+    pointer-events: none;
   }
 
   /* Interactive surface: subtle lift on hover (desktop only), consistent 200ms
@@ -170,6 +228,17 @@
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
+  }
+
+  /* Premium gradient hairline — top edge of cards, headers, dividers. */
+  .hairline {
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in oklab, var(--color-accent) 50%, transparent),
+      transparent
+    );
+    height: 1px;
   }
 }
 

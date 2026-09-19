@@ -197,8 +197,18 @@ export interface RiskConfig {
    * Profit-pullback lock (%): when a position's unrealized PnL retraces this
    * percentage from its peak, markToMarket closes it to bank the gains.
    * Example — a trade at peak $20 with 25% locks at $15. 0 = off.
+   * The lock only ARMS once the position's profit has exceeded
+   * `profitPullbackActivateUsd` (default $1) — a trade that never got meaningfully
+   * green can't be trapped by the pull-back rule.
    */
   profitPullbackPct: number
+  /**
+   * Profit-pullback activation ($): the lock arms only after a position's
+   * unrealized profit has exceeded this amount. Below it, the pull-back rule is
+   * dormant — a $0.40 blip up then back down never closes a trade. Default $1:
+   * "active once the profit is more than a dollar, then close on X% give-back".
+   */
+  profitPullbackActivateUsd: number
   /**
    * Drawdown stop (%): a losing position is closed once it is down this %
    * from its entry price — the slow bleed to -25% case. EXCEPTION: when the
@@ -236,7 +246,8 @@ export const DEFAULT_RISK: RiskConfig = {
   maxConsecutiveLosses: 0,
   adaptiveRisk: true,
   volatilityFilter: false,
-  profitPullbackPct: 0,
+  profitPullbackPct: 25,
+  profitPullbackActivateUsd: 1,
   drawdownClosePct: 25,
   costPerTradeUsd: 0,
 }

@@ -518,7 +518,8 @@ describe('profit pull-back lock', () => {
   it('keeps a winner open until the take-profit when the lock is off', () => {
     const acc = createAccount(10_000)
     acc.risk.trailingStop = false
-    // profitPullbackPct defaults to 0 — no peak tracking, no give-back close.
+    // Pull-back explicitly off — no peak tracking, no give-back close.
+    acc.risk.profitPullbackPct = 0
     const { state: opened } = openPosition(acc, {
       symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
     }, rates)
@@ -530,6 +531,50 @@ describe('profit pull-back lock', () => {
     const tp = markToMarket(back.state, { ...rates, 'EUR/USD': 1.104 })
     expect(tp.closed).toHaveLength(1)
     expect(tp.closed[0].closeReason).toBe('take_profit')
+  })
+
+  it('never arms below the $1 activation — a small blip up then down stays open', () => {
+    // 1000 units EUR/USD: pnl = (price − 1.1) × 1000. A $0.60 peak (1.1006)
+    // is under the $1 activation, so a 25%+ give-back must NOT close it.
+    const acc = createAccount(10_000)
+    acc.risk.trailingStop = false
+    acc.risk.profitPullbackPct = 25
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
+    }, rates)
+    // Peak $0.60 — below the $1 arming line.
+    const up = markToMarket(opened, { ...rates, 'EUR/USD': 1.1006 })
+    expect(up.state.positions[0].peakProfitUsd).toBeCloseTo(0.6, 5)
+    // Give-back beyond 25% of the (un-armed) peak — still held.
+    const back = markToMarket(up.state, { ...rates, 'EUR/USD': 1.1002 })
+    expect(back.closed).toHaveLength(0)
+    expect(back.state.positions).toHaveLength(1)
+  })
+
+  it('arms at the $1 activation and closes on 25% give-back from the peak', () => {
+    // Peak $1.20 (1.1012) > $1 → armed; retrace to $0.90 (1.1009) is 25% back
+    // from the peak → the lock fires.
+    const acc = createAccount(10_000)
+    acc.risk.trailingStop = false
+    acc.risk.profitPullbackPct = 25
+    acc.risk.profitPullbackActivateUsd = 1
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
+    }, rates)
+    const up = markToMarket(opened, { ...rates, 'EUR/USD': 1.1012 })
+    expect(up.closed).toHaveLength(0)
+    expect(up.state.positions[0].peakProfitUsd).toBeCloseTo(1.2, 5)
+    // Lock level = 1.2 × 0.75 = $0.90 — exactly hit at 1.1009.
+    const locked = markToMarket(up.state, { ...rates, 'EUR/USD': 1.1009 })
+    expect(locked.closed).toHaveLength(1)
+    expect(locked.closed[0].closeReason).toBe('pullback')
+    expect(locked.closed[0].pnl).toBeCloseTo(0.9, 5)
+  })
+
+  it('defaults the pull-back lock to 25% with a $1 activation', () => {
+    const acc = createAccount(10_000)
+    expect(acc.risk.profitPullbackPct).toBe(25)
+    expect(acc.risk.profitPullbackActivateUsd).toBe(1)
   })
 
   it('never fires on a position that never went green', () => {

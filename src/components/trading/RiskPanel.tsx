@@ -162,10 +162,31 @@ export function RiskPanel({ risk, onChange, onReset, isLive }: Props) {
             step={1}
             suffix="%"
           />
+          <Field
+            label="Profit pull-back"
+            value={draft.profitPullbackPct ?? DEFAULT_RISK.profitPullbackPct}
+            onChange={(v) => patch({ profitPullbackPct: Math.min(90, Math.max(0, v)) })}
+            min={0}
+            max={90}
+            step={1}
+            suffix="%"
+          />
           <p className="col-span-2 -mt-1 text-[11px] text-muted-foreground">
             A position that slowly bleeds this % from its entry is closed to lock the loss. A
             fast crash (the whole step in one mark) is left open instead of sold at the bottom.
             Set 0 to disable.
+          </p>
+          <Field
+            label="Arm pull-back at"
+            value={draft.profitPullbackActivateUsd ?? DEFAULT_RISK.profitPullbackActivateUsd}
+            onChange={(v) => patch({ profitPullbackActivateUsd: Math.max(0, v) })}
+            min={0}
+            step={0.5}
+            suffix="$"
+          />
+          <p className="col-span-2 -mt-1 text-[11px] text-muted-foreground">
+            The pull-back lock only arms once a trade's profit exceeds this amount (default $1) —
+            then it closes when profit gives back the % above from its highest point.
           </p>
 
           {/* Per-trade profit: pick the unit first (pips or USD) */}
