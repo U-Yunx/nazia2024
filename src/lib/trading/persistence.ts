@@ -131,6 +131,7 @@ function toRow(account: AccountState, userId: string): {
       strategy: t.strategy ?? null,
       target_profit_usd: null,
       target_loss_usd: null,
+      peak_profit_usd: null,
       created_at: null,
     })),
   ]
