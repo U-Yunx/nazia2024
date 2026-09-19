@@ -51,6 +51,7 @@ const BEST: RobotPrefs = {
   maxPerPair: 1,
   maxOpenTrades: 0,
   profitPullbackPct: 25,
+  lot: 1,
 }
 
 /** Everyday defaults, pre-wired to the classic 7 FX majors. */
@@ -70,6 +71,7 @@ const COMMON: RobotPrefs = {
   maxPerPair: 1,
   maxOpenTrades: 0,
   profitPullbackPct: 25,
+  lot: 1,
 }
 
 export const ROBOT_PRESETS: RobotPreset[] = [

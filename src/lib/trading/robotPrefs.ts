@@ -23,6 +23,9 @@ const DEFAULTS: RobotPrefs = {
   maxPerPair: 1,
   maxOpenTrades: 0,
   profitPullbackPct: 25,
+  // 0 = no lot picked yet — the robot must not start until the user chooses
+  // an integer lot ≥ 1 (the "pick lot before start" required step).
+  lot: 0,
 }
 
 function num(v: unknown, fallback: number): number {
@@ -60,6 +63,9 @@ export function loadRobotPrefs(): RobotPrefs {
       // Profit-pullback lock % — clamp to a sane 0–90 so a typo can't trap a
       // winner into closing almost immediately.
       profitPullbackPct: Math.min(90, Math.max(0, num(p.profitPullbackPct, DEFAULTS.profitPullbackPct))),
+      // Lot size the robot trades at: always an integer ≥ 1 (0 = not picked
+      // yet, the robot refuses to start until one is chosen).
+      lot: Math.max(0, Math.round(num(p.lot, DEFAULTS.lot))),
     }
   } catch {
     return DEFAULTS
@@ -99,6 +105,7 @@ export function useRobotPrefs() {
     setMaxPerPair: (maxPerPair: number) => update({ maxPerPair }),
     setMaxOpenTrades: (maxOpenTrades: number) => update({ maxOpenTrades }),
     setProfitPullbackPct: (profitPullbackPct: number) => update({ profitPullbackPct }),
+    setLot: (lot: number) => update({ lot: Math.max(0, Math.round(lot)) }),
   }
 }
 

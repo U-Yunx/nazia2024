@@ -538,6 +538,12 @@ export interface RobotPrefs {
    * $15). 0 = off. Enforced at mark-to-market via `risk.profitPullbackPct`.
    */
   profitPullbackPct: number
+  /**
+   * Lot size (integer ≥ 1) the robot opens EVERY trade at. A lot must be
+   * chosen before the robot can start — it is a required pre-start step
+   * (1 lot = 100,000 units). 0 = none picked yet (start refused).
+   */
+  lot: number
 }
 
 /** Result of the auto-tune optimizer. */
