@@ -240,7 +240,7 @@ export function RiskPanel({ risk, onChange, onReset, isLive }: Props) {
                   )
                 }
                 min={0}
-                step={unit === 'pips' ? 1 : 5}
+                step={1}
                 suffix={unit === 'pips' ? 'pips' : '$'}
               />
             </div>

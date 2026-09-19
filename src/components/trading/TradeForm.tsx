@@ -198,7 +198,7 @@ export function TradeForm({
             label={`Loss cap (${targetUnit === 'pips' ? 'pips' : '$'})`}
             type="number"
             min={0}
-            step={targetUnit === 'pips' ? 1 : 5}
+            step={1}
             value={lossCap}
             onChange={(e) => setLossCap(Math.max(0, Number(e.target.value)))}
           />
