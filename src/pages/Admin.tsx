@@ -1664,7 +1664,7 @@ function SettingsTab() {
     if (e1 || e2) setMsg(e1 ?? e2)
     else {
       await refresh()
-      setMsg('Saved ✓')
+      setMsg('Saved')
       setTimeout(() => setMsg(null), 2000)
     }
   }
@@ -1768,7 +1768,7 @@ function MetaApiBridgeEditor() {
       return
     }
     if (res.data) setConfig(res.data)
-    setMsg('MetaApi token mode saved ✓')
+    setMsg('MetaApi token mode saved')
     setTimeout(() => setMsg(null), 2500)
   }
 
@@ -1790,7 +1790,7 @@ function MetaApiBridgeEditor() {
     }
     if (res.data) setConfig(res.data)
     setToken('')
-    setMsg(res.data?.note ?? 'General MetaApi token saved ✓')
+    setMsg(res.data?.note ?? 'General MetaApi token saved')
     setTimeout(() => setMsg(null), 5000)
   }
 
@@ -2282,7 +2282,7 @@ function ContactEditor() {
       setMsg(err)
     } else {
       await refresh()
-      setMsg('Saved ✓')
+      setMsg('Saved')
       setTimeout(() => setMsg(null), 2000)
     }
   }

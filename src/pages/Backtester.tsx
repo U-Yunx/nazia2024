@@ -30,6 +30,7 @@ export function Backtester() {
   const [tradeMode, setTradeMode] = useState<TradeMode>('sequential')
   const [maxPerPair, setMaxPerPair] = useState(1)
   const [maxOpenTrades, setMaxOpenTrades] = useState(3)
+  const [costPerTrade, setCostPerTrade] = useState(2.5)
   const [barsBySymbol, setBarsBySymbol] = useState<Record<string, Bar[]>>({})
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -40,12 +41,12 @@ export function Backtester() {
     setPairs((prev) => (prev.includes(symbol) ? prev.filter((x) => x !== symbol) : [...prev, symbol]))
 
   const multi = pairs.length > 1
-  const settings: MultiBacktestSettings = { pairs, tradeMode, maxPerPair, maxOpenTrades }
+  const settings: MultiBacktestSettings = { pairs, tradeMode, maxPerPair, maxOpenTrades, costPerTrade }
   const result =
     ran && Object.keys(barsBySymbol).length > 0
       ? multi
         ? runMultiBacktest(barsBySymbol, strategy, settings)
-        : runBacktest(barsBySymbol[pairs[0] ?? strategy.pair] ?? [], strategy)
+        : runBacktest(barsBySymbol[pairs[0] ?? strategy.pair] ?? [], strategy, 10_000, costPerTrade)
       : null
   const primaryBars = barsBySymbol[strategy.pair] ?? barsBySymbol[pairs[0] ?? ''] ?? []
 
@@ -183,6 +184,20 @@ export function Backtester() {
                   onChange={(e) => setMaxOpenTrades(Math.max(1, Math.round(Number(e.target.value))))}
                 />
               </div>
+              <Input
+                label="Cost per round trip (USD)"
+                type="number"
+                min={0}
+                step={0.5}
+                value={costPerTrade}
+                onChange={(e) => setCostPerTrade(Math.max(0, Number(e.target.value)))}
+              />
+              {costPerTrade > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Realistic broker costs — {formatUsd(costPerTrade)} is deducted from equity on every simulated
+                  close, so returns are net, not gross.
+                </p>
+              )}
               {tradeMode === 'concurrent' && maxPerPair > maxOpenTrades && (
                 <p role="alert" className="rounded-lg border border-amber/40 bg-amber/10 px-3 py-2 text-xs text-amber">
                   Max per pair ({maxPerPair}) is above the global cap ({maxOpenTrades}) — the global cap wins.
@@ -225,6 +240,11 @@ export function Backtester() {
                   <Badge className="border-border bg-muted text-muted-foreground">Max {maxPerPair}/pair</Badge>
                 )}
                 <Badge className="border-border bg-muted text-muted-foreground">Max {maxOpenTrades} open</Badge>
+                {costPerTrade > 0 && (
+                  <Badge className="border-border bg-muted text-muted-foreground">
+                    ≈ {formatUsd(costPerTrade)} cost / round trip
+                  </Badge>
+                )}
               </div>
 
               <MetricsCards
@@ -235,6 +255,9 @@ export function Backtester() {
                   { label: 'Profit factor', value: formatNum(m.profitFactor, 2), tone: m.profitFactor >= 1 ? 'up' : 'down' },
                   { label: 'Net profit', value: formatUsd(m.netProfit), tone: m.netProfit >= 0 ? 'up' : 'down' },
                   { label: 'Trades', value: String(m.totalTrades), tone: 'neutral' },
+                  ...(costPerTrade > 0
+                    ? [{ label: 'Costs paid', value: formatUsd(m.costsPaid ?? 0), tone: 'neutral' as const }]
+                    : []),
                 ]}
               />
 

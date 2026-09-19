@@ -170,6 +170,13 @@ export interface RiskConfig {
    * Example — a trade at peak $20 with 25% locks at $15. 0 = off.
    */
   profitPullbackPct: number
+  /**
+   * Round-trip trading cost per trade in USD (spread + commission model).
+   * Deducted from the position's gross PnL when it closes, so paper results
+   * and backtests reflect realistic broker costs instead of free fills.
+   * 0 = cost-free simulation (default).
+   */
+  costPerTradeUsd: number
 }
 
 export const DEFAULT_RISK: RiskConfig = {
@@ -193,6 +200,7 @@ export const DEFAULT_RISK: RiskConfig = {
   adaptiveRisk: true,
   volatilityFilter: false,
   profitPullbackPct: 0,
+  costPerTradeUsd: 0,
 }
 
 /** The full persisted state of a paper account. */

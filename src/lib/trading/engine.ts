@@ -210,7 +210,11 @@ export function closePosition(
   const pos = state.positions.find((p) => p.id === positionId)
   if (!pos) return { state, trade: null }
   const now = opts.time ?? new Date().toISOString()
-  const pnl = pnlUsd(pos.side, pos.entryPrice, opts.price, pos.units, pos.symbol, opts.rates)
+  const gross = pnlUsd(pos.side, pos.entryPrice, opts.price, pos.units, pos.symbol, opts.rates)
+  // Round-trip trading costs (spread + commission model) — a trade only books
+  // what's left after the broker's cut, so paper results stay honest.
+  const cost = Math.max(0, state.risk.costPerTradeUsd ?? 0)
+  const pnl = gross - cost
   const pnlPct = pos.entryEquity > 0 ? (pnl / pos.entryEquity) * 100 : 0
   const trade: ClosedTrade = {
     id: pos.id,

@@ -4,7 +4,7 @@
  * Renders nothing when no approved ad is live, so pages stay clean.
  */
 import { useCallback, useState } from 'react'
-import { Megaphone } from 'lucide-react'
+import { Megaphone, X } from 'lucide-react'
 import { useAds } from '../hooks/usePlatform'
 import { incrementAdClick, logAdEvent } from '../lib/platform'
 import { useAuth } from '../hooks/useAuth'
@@ -47,7 +47,7 @@ export function AdBanner() {
             'hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
           )}
         >
-          ✕
+          <X className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
       </div>
     </div>

@@ -159,7 +159,7 @@ export function ApiTokensCard() {
         setInputs((prev) => ({ ...prev, [r.name]: '' }))
         verdicts.push(
           r.validation?.ok
-            ? `${r.label} — saved & validated ✓`
+            ? `${r.label} — saved & validated`
             : `${r.label} — saved, but ${r.validation?.error ?? 'the provider could not verify it'}`,
         )
       } else {

@@ -72,6 +72,8 @@ export interface BacktestMetrics {
   wins: number
   losses: number
   netProfit: number
+  /** Total round-trip costs deducted across all simulated trades (0 = none). */
+  costsPaid?: number
 }
 
 export interface BacktestResult {

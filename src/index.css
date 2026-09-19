@@ -2,25 +2,26 @@
 @import "tailwindcss";
 
 /* ANA24 — dark fintech terminal. Palette from design-system/MASTER.md
-   (gold trust + violet tech) with vivid cyan/pink accent support and market
-   signal colours. Do not move these @import/@theme lines. */
+   (blue trust + cyan tech — user requested blue as the dominant colour).
+   Market signal colours stay green/red/amber. Do not move these
+   @import/@theme lines. */
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-heading: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
 
-  /* Brand */
-  --color-primary: oklch(0.7686 0.1647 70.08);
-  --color-on-primary: oklch(0.2077 0.0398 265.75);
-  --color-secondary: oklch(0.8369 0.1644 84.43);
-  --color-accent: oklch(0.6056 0.2189 292.72);
+  /* Brand — blue dominant */
+  --color-primary: oklch(0.546 0.245 262.88);
+  --color-on-primary: oklch(0.9842 0.0034 247.86);
+  --color-secondary: oklch(0.746 0.16 236.62);
+  --color-accent: oklch(0.707 0.165 254.62);
   --color-background: oklch(0.2077 0.0398 265.75);
   --color-foreground: oklch(0.9842 0.0034 247.86);
   --color-muted: oklch(0.3065 0.0362 266.64);
   --color-muted-foreground: oklch(0.6645 0.0456 260.72);
   --color-border: oklch(0.3717 0.0392 257.29);
   --color-destructive: oklch(0.6368 0.2078 25.33);
-  --color-ring: oklch(0.7686 0.1647 70.08);
+  --color-ring: oklch(0.546 0.245 262.88);
 
   /* Market signal colours — used as bg-up/10, text-down, border-amber/40 … */
   --color-up: oklch(0.7007 0.178 156.42);

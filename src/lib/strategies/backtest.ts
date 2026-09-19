@@ -33,7 +33,13 @@ const NO_METRICS: BacktestMetrics = {
   netProfit: 0,
 }
 
-export type MultiBacktestSettings = Pick<RobotConfig, 'pairs' | 'tradeMode' | 'maxPerPair' | 'maxOpenTrades'>
+export type MultiBacktestSettings = Pick<RobotConfig, 'pairs' | 'tradeMode' | 'maxPerPair' | 'maxOpenTrades'> & {
+  /**
+   * Round-trip trading cost per trade in USD (spread + commission model).
+   * Deducted from equity on every simulated close — 0 = cost-free.
+   */
+  costPerTrade?: number
+}
 
 interface OpenMultiTrade {
   symbol: string
@@ -59,7 +65,7 @@ export function runMultiBacktest(
   const symbols = settings.pairs.filter((s) => (barsBySymbol[s]?.length ?? 0) >= 2)
   if (symbols.length <= 1) {
     const only = symbols[0] ?? config.pair
-    return runBacktest(barsBySymbol[only] ?? [], { ...config, pair: only }, startEquity)
+    return runBacktest(barsBySymbol[only] ?? [], { ...config, pair: only }, startEquity, settings.costPerTrade ?? 0)
   }
 
   // One time-ordered event per bar across every symbol.
@@ -83,6 +89,7 @@ export function runMultiBacktest(
   const trades: Trade[] = []
   const equityCurve: EquityPoint[] = []
   const perPairCap = settings.tradeMode === 'concurrent' ? settings.maxPerPair : 1
+  const costPerTrade = Math.max(0, settings.costPerTrade ?? 0)
   let equity = startEquity
   let peak = startEquity
   let maxDrawdown = 0
@@ -90,6 +97,7 @@ export function runMultiBacktest(
   let losses = 0
   let grossProfit = 0
   let grossLoss = 0
+  let totalCosts = 0
   let open: OpenMultiTrade[] = []
 
   const mark = (time: string) => {
@@ -115,6 +123,10 @@ export function runMultiBacktest(
         const pnlPct = (pnlPts / o.entryPrice) * 100
         const pnl = (equity * pnlPct) / 100
         equity += pnl
+        if (costPerTrade > 0) {
+          equity -= costPerTrade
+          totalCosts += costPerTrade
+        }
         trades.push({
           side: o.side,
           symbol,
@@ -163,6 +175,10 @@ export function runMultiBacktest(
       const pnlPct = (pnlPts / o.entryPrice) * 100
       const pnl = (equity * pnlPct) / 100
       equity += pnl
+      if (costPerTrade > 0) {
+        equity -= costPerTrade
+        totalCosts += costPerTrade
+      }
       trades.push({
         side: o.side,
         symbol: o.symbol,
@@ -180,7 +196,7 @@ export function runMultiBacktest(
   }
 
   const totalTrades = trades.length
-  const netProfit = grossProfit - grossLoss
+  const netProfit = grossProfit - grossLoss - totalCosts
   const totalReturnPct = startEquity > 0 ? (netProfit / startEquity) * 100 : 0
   const metrics: BacktestMetrics = {
     totalReturnPct,
@@ -191,6 +207,7 @@ export function runMultiBacktest(
     wins,
     losses,
     netProfit,
+    costsPaid: totalCosts,
   }
 
   return {
@@ -204,7 +221,12 @@ export function runMultiBacktest(
   }
 }
 
-export function runBacktest(bars: Bar[], config: StrategyConfig, startEquity = 10_000): BacktestResult {
+export function runBacktest(
+  bars: Bar[],
+  config: StrategyConfig,
+  startEquity = 10_000,
+  costPerTrade = 0,
+): BacktestResult {
   const trades: Trade[] = []
   const equityCurve: EquityPoint[] = []
   if (bars.length < 2) {
@@ -227,6 +249,8 @@ export function runBacktest(bars: Bar[], config: StrategyConfig, startEquity = 1
   let losses = 0
   let grossProfit = 0
   let grossLoss = 0
+  let totalCosts = 0
+  const cost = Math.max(0, costPerTrade ?? 0)
 
   // Equity is tracked per closed trade plus a final mark at the last bar.
   const mark = (time: string) => {
@@ -249,6 +273,10 @@ export function runBacktest(bars: Bar[], config: StrategyConfig, startEquity = 1
         const pnlPct = (pnlPts / open.entryPrice) * 100
         const pnl = (equity * pnlPct) / 100
         equity += pnl
+        if (cost > 0) {
+          equity -= cost
+          totalCosts += cost
+        }
         trades.push({
           side: open.side,
           entryTime: open.entryTime,
@@ -278,7 +306,7 @@ export function runBacktest(bars: Bar[], config: StrategyConfig, startEquity = 1
   }
 
   const totalTrades = trades.length
-  const netProfit = grossProfit - grossLoss
+  const netProfit = grossProfit - grossLoss - totalCosts
   const totalReturnPct = startEquity > 0 ? (netProfit / startEquity) * 100 : 0
   const metrics: BacktestMetrics = {
     totalReturnPct,
@@ -289,6 +317,7 @@ export function runBacktest(bars: Bar[], config: StrategyConfig, startEquity = 1
     wins,
     losses,
     netProfit,
+    costsPaid: totalCosts,
   }
 
   return {
