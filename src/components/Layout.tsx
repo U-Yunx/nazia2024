@@ -48,8 +48,9 @@ function Brand() {
       className="group flex shrink-0 cursor-pointer items-center gap-2.5 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
       aria-label="ANA24 — home"
     >
-      <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-on-primary shadow-[0_0_20px_-6px_var(--color-primary)] transition-transform duration-150 ease-out group-active:scale-95">
+      <span className="relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-primary via-primary to-secondary text-on-primary shadow-glow ring-1 ring-white/15 transition-transform duration-150 ease-out group-active:scale-95">
         <Activity className="h-5 w-5" aria-hidden="true" />
+        <span aria-hidden="true" className="absolute inset-0 rounded-xl bg-gradient-to-t from-black/25 to-transparent opacity-60" />
       </span>
       <span className="font-heading text-lg font-bold tracking-tight text-foreground">
         ANA<span className="text-accent">24</span>
@@ -91,7 +92,11 @@ function Header() {
   const items = user ? APP_NAV : PUBLIC_NAV
 
   return (
-    <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur-md">
+    <header className="relative sticky top-0 z-40 border-b border-border/70 bg-background/75 shadow-[0_12px_32px_-20px_rgb(2_6_23/0.9)] backdrop-blur-xl">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-accent/80 to-transparent"
+      />
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-4 sm:px-6">
         <Brand />
 
@@ -218,7 +223,11 @@ const FOOTER_COLUMNS: { title: string; links: { to: string; label: string }[] }[
 function Footer() {
   const year = new Date().getFullYear()
   return (
-    <footer className="mt-auto border-t border-border bg-secondary/20">
+    <footer className="relative mt-auto border-t border-border/60 bg-secondary/10">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent"
+      />
       <div className="mx-auto grid max-w-7xl grid-cols-1 gap-10 px-4 py-12 sm:grid-cols-2 sm:px-6 lg:grid-cols-4">
         <div>
           <Brand />
@@ -229,13 +238,15 @@ function Footer() {
         </div>
         {FOOTER_COLUMNS.map((col) => (
           <div key={col.title}>
-            <h3 className="text-sm font-semibold text-foreground">{col.title}</h3>
+            <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              {col.title}
+            </h3>
             <ul className="mt-4 space-y-2.5">
               {col.links.map((link) => (
                 <li key={link.to + link.label}>
                   <Link
                     to={link.to}
-                    className="cursor-pointer text-sm text-muted-foreground transition-colors duration-150 ease-out hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                    className="cursor-pointer text-sm text-muted-foreground transition-colors duration-200 ease-out hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                   >
                     {link.label}
                   </Link>
@@ -245,7 +256,7 @@ function Footer() {
           </div>
         ))}
       </div>
-      <div className="border-t border-border">
+      <div className="border-t border-border/60">
         <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
           <p className="text-xs leading-relaxed text-muted-foreground/70">
             ANA24 is a trading-technology demonstration. Nothing on this site is financial advice.
@@ -261,9 +272,23 @@ function Footer() {
   )
 }
 
+/** Fixed ambient light field behind the whole app — layered depth over flat
+ *  colour. Pointer-events disabled; purely decorative. */
+function AmbientBackground() {
+  return (
+    <div aria-hidden="true" className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
+      <div className="absolute inset-0 bg-background" />
+      <div className="absolute -top-48 left-1/2 h-[520px] w-[820px] -translate-x-1/2 rounded-full bg-primary/12 blur-[130px]" />
+      <div className="absolute -right-40 top-32 h-96 w-96 rounded-full bg-accent/8 blur-[110px]" />
+      <div className="absolute -left-40 top-1/2 h-[420px] w-[420px] rounded-full bg-secondary/8 blur-[130px]" />
+    </div>
+  )
+}
+
 export default function Layout() {
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="isolate flex min-h-screen flex-col">
+      <AmbientBackground />
       <Header />
       <main className="flex-1">
         <Outlet />

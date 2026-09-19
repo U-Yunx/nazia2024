@@ -26,25 +26,25 @@ const PILLARS = [
     icon: Bot,
     title: 'Robot trading',
     desc: 'Run fully automated strategies on a paper account first, then connect a real broker when you are ready.',
-    gradient: 'from-trading/30 to-trading/5 border-trading/30',
+    gradient: 'from-primary/25 to-primary/5 border-primary/20',
   },
   {
     icon: Target,
     title: 'Auto-tune & backtest',
     desc: 'Stress-test any strategy against historical data and let the optimizer pick your best parameters.',
-    gradient: 'from-tune/30 to-tune/5 border-tune/30',
+    gradient: 'from-cyan/20 to-cyan/5 border-cyan/20',
   },
   {
     icon: LineChart,
     title: 'Live signals',
     desc: 'Real-time watchlist quotes and indicator-driven signals across forex and crypto pairs.',
-    gradient: 'from-run/30 to-run/5 border-run/30',
+    gradient: 'from-amber/20 to-amber/5 border-amber/20',
   },
   {
     icon: ShieldCheck,
     title: 'Risk first',
     desc: 'Per-trade risk limits, trailing stops and daily loss caps protect your balance automatically.',
-    gradient: 'from-pick/30 to-pick/5 border-pick/30',
+    gradient: 'from-up/20 to-up/5 border-up/20',
   },
 ]
 
@@ -56,14 +56,20 @@ export function Home() {
   return (
     <div className="mx-auto max-w-6xl px-4 py-12 sm:py-16">
       {/* Hero */}
-      <section className="text-center">
+      <section className="relative overflow-hidden text-center">
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0">
+          <div className="absolute -top-24 left-1/2 h-72 w-[560px] -translate-x-1/2 rounded-full bg-primary/15 blur-[110px]" />
+          <div className="absolute -right-16 top-40 h-56 w-56 rounded-full bg-accent/10 blur-[90px]" />
+          <div className="absolute -left-16 top-64 h-52 w-52 rounded-full bg-cyan/10 blur-[90px]" />
+        </div>
+        <div className="relative">
         <div className="mx-auto mb-5 inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-4 py-1.5 text-xs font-medium text-accent">
           <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
           AI-assisted trading, risk-first by design
         </div>
         <h1 className="mx-auto max-w-3xl font-heading text-4xl font-bold tracking-tight text-foreground sm:text-5xl">
           Trade markets with a robot that respects your{' '}
-          <span className="text-accent">risk limits</span>
+          <span className="text-gradient">risk limits</span>
         </h1>
         <p className="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-muted-foreground sm:text-lg">
           ANA24 runs proven strategies on a free paper account, backtests them against history, and
@@ -91,6 +97,7 @@ export function Home() {
           <Stat label="Active 7d" value={stats.active_7d.toLocaleString()} />
           <Stat label="Active 30d" value={stats.active_30d.toLocaleString()} />
         </div>
+        </div>
       </section>
 
       {/* Live watchlist snapshot */}
@@ -101,14 +108,14 @@ export function Home() {
             All pairs <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
           </Link>
         </div>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {WATCHLIST.slice(0, 6).map((p) => {
             const q = quotes?.find((x) => x.symbol === p.symbol)
             const change = q?.percent_change ?? q?.change ?? 0
             return (
               <div
                 key={p.symbol}
-                className="flex items-center justify-between rounded-xl border border-border bg-secondary/30 px-4 py-3"
+                className="surface surface-hover flex items-center justify-between rounded-xl border border-border/70 px-4 py-3.5"
               >
                 <div>
                   <p className="text-sm font-medium text-foreground">{p.symbol}</p>
@@ -128,14 +135,19 @@ export function Home() {
 
       {/* Pillars */}
       <section className="mt-16">
-        <h2 className="mb-6 text-center font-heading text-2xl font-bold text-foreground">
+        <h2 className="mb-6 text-center font-heading text-2xl font-bold tracking-tight text-foreground">
           Everything you need to trade smarter
         </h2>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {PILLARS.map((p) => (
-            <div key={p.title} className={cn('rounded-2xl border bg-gradient-to-b p-6', p.gradient)}>
-              <p.icon className="mb-3 h-6 w-6 text-accent" aria-hidden="true" />
-              <h3 className="font-heading text-lg font-semibold text-foreground">{p.title}</h3>
+            <div
+              key={p.title}
+              className={cn('surface-hover group rounded-2xl border bg-gradient-to-b p-6', p.gradient)}
+            >
+              <div className="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-border/60 bg-background/50 text-accent shadow-sm transition-transform duration-200 ease-out group-hover:scale-105">
+                <p.icon className="h-5 w-5" aria-hidden="true" />
+              </div>
+              <h3 className="font-heading text-lg font-semibold tracking-tight text-foreground">{p.title}</h3>
               <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{p.desc}</p>
             </div>
           ))}
@@ -143,10 +155,15 @@ export function Home() {
       </section>
 
       {/* CTA */}
-      <section className="mt-16 rounded-2xl border border-border bg-gradient-to-r from-primary/10 via-transparent to-primary/10 p-8 text-center">
+      <section className="relative mt-16 overflow-hidden rounded-2xl border border-border/70 bg-gradient-to-r from-primary/15 via-primary/5 to-primary/15 p-8 text-center shadow-card">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -top-24 left-1/2 h-48 w-96 -translate-x-1/2 rounded-full bg-accent/10 blur-[80px]"
+        />
+        <div className="relative">
         <BarChart3 className="mx-auto mb-4 h-8 w-8 text-accent" aria-hidden="true" />
-        <h2 className="font-heading text-2xl font-bold text-foreground">Start with a free paper account</h2>
-        <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">
+        <h2 className="font-heading text-2xl font-bold tracking-tight text-foreground">Start with a free paper account</h2>
+        <p className="mx-auto mt-2 max-w-xl text-sm leading-relaxed text-muted-foreground">
           No card, no risk. Run one robot on paper trading today, backtest your ideas, and upgrade
           only when you're ready for live markets.
         </p>
@@ -163,6 +180,7 @@ export function Home() {
             </Button>
           </Link>
         </div>
+        </div>
       </section>
     </div>
   )
@@ -170,9 +188,9 @@ export function Home() {
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-border bg-secondary/30 px-4 py-3">
-      <p className="tnum font-mono text-xl font-bold text-foreground">{value}</p>
-      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
+    <div className="surface surface-hover rounded-xl border border-border/70 px-4 py-3.5">
+      <p className="tnum font-mono text-xl font-bold tracking-tight text-foreground">{value}</p>
+      <p className="mt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
     </div>
   )
 }

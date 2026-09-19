@@ -16,11 +16,14 @@ export function MetricsCards({ items, className }: { items: MetricItem[]; classN
   return (
     <div className={cn('grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4', className)}>
       {items.map((it) => (
-        <div key={it.label} className="rounded-xl border border-border/60 bg-secondary/30 px-4 py-3">
+        <div
+          key={it.label}
+          className="surface surface-hover rounded-xl border border-border/70 px-4 py-3.5"
+        >
           <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{it.label}</p>
           <p
             className={cn(
-              'mt-1 tnum font-mono text-lg font-bold',
+              'mt-1 tnum font-mono text-lg font-bold tracking-tight',
               it.tone === 'up' && 'text-up',
               it.tone === 'down' && 'text-down',
               it.tone === 'accent' && 'text-accent',
