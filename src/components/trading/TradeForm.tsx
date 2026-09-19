@@ -9,7 +9,7 @@
 import { useMemo, useState } from 'react'
 import { ArrowDown, ArrowUp } from 'lucide-react'
 import type { AccountState, OpenPositionRequest, RatesMap, Side } from '../../lib/trading/types'
-import { equity } from '../../lib/trading/engine'
+import { equity, MIN_TRADE_BALANCE_USD } from '../../lib/trading/engine'
 import { pipValueUsd, stopTakePrices, suggestPositionUnits } from '../../lib/trading/risk'
 import { WATCHLIST } from '../../lib/watchlist'
 import { formatPrice, formatUsd } from '../../lib/format'
@@ -40,6 +40,10 @@ export function TradeForm({
 
   const price = rates[symbol]
   const pipValue = pipValueUsd(symbol, rates)
+  // Sub-$1 balance: nothing left to risk — the whole form is locked. The
+  // engine's canOpen gate refuses entries at the same threshold, so this is
+  // purely a UI mirror (and a human explanation instead of a silent disable).
+  const locked = account.balance < MIN_TRADE_BALANCE_USD
   const suggested = useMemo(() => {
     if (pipValue == null || pipValue <= 0) return 0
     return suggestPositionUnits({
@@ -248,7 +252,18 @@ export function TradeForm({
           </p>
         )}
 
-        <Button className="mt-4 w-full" loading={busy} onClick={() => void submit()} disabled={price == null}>
+        {locked && (
+          <p role="status" className="mt-3 rounded-lg border border-amber/40 bg-amber/10 px-3 py-2 text-xs text-amber">
+            Balance is below $1 — trading is locked. Reset or top up the account to place orders again.
+          </p>
+        )}
+
+        <Button
+          className="mt-4 w-full"
+          loading={busy}
+          onClick={() => void submit()}
+          disabled={price == null || locked}
+        >
           {side === 'long' ? 'Buy' : 'Sell'} {symbol}
         </Button>
       </CardContent>

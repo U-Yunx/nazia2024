@@ -25,6 +25,12 @@ export type CloseReason =
    * are held open; see Position.crashHold).
    */
   | 'drawdown'
+  /**
+   * Emergency margin closeout: the account's balance or equity reached the
+   * near-zero floor (`engine.NEAR_ZERO_BALANCE_USD`), so every open position
+   * was closed at market and the robot stood down.
+   */
+  | 'margin'
 
 export type BrokerMode = 'paper' | 'managed' | 'oanda' | 'mt'
 

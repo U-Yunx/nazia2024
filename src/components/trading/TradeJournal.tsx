@@ -16,6 +16,7 @@ const REASON_LABEL: Record<string, string> = {
   take_profit: 'Take profit',
   target: 'Money target',
   manual: 'Manual',
+  margin: 'Margin call',
   pullback: 'Profit pullback',
   drawdown: 'Drawdown stop',
   risk: 'Risk',

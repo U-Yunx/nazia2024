@@ -26,7 +26,7 @@ import { useAccess, useBrokers, useProfile, useSubscriptions } from '../hooks/us
 import { acceptRisk } from '../lib/platform'
 import { effectiveRiskPct, pipValueUsd, stopDistanceFromAtr, suggestPositionUnits } from '../lib/trading/risk'
 import { effectiveRobotCaps, robotTier, STARTER_MAX_PAIRS, STARTER_MAX_PER_PAIR, UNLOCK_SUBSCRIPTION_DAYS } from '../lib/trading/tierLimits'
-import { equity } from '../lib/trading/engine'
+import { equity, MIN_TRADE_BALANCE_USD } from '../lib/trading/engine'
 import { INTERVALS, STRATEGY_META, STRATEGY_TYPES, intervalLabel } from '../lib/strategies'
 import { atr, rsi, sma } from '../lib/strategies/indicators'
 import { WATCHLIST } from '../lib/watchlist'
@@ -545,6 +545,13 @@ export function Trading() {
   }, [rates, account, sync])
 
   const autoTrade = (account?.risk.autoTrade ?? false) && canRunRobot
+
+  // Account-safety lock: below $1 balance every trading control is disabled
+  // (engine canOpen refuses entries at the same threshold) — the robot won't
+  // start, the trade forms are locked, and only the STOP path stays live so a
+  // running robot can always be halted. The near-zero emergency closeout
+  // (markToMarket) handles the blown-account end.
+  const balanceLocked = (account?.balance ?? 0) < MIN_TRADE_BALANCE_USD
 
   // Keep the engine's risk config in line with the saved profit-pull-back
   // preference — prefs survive reloads (localStorage), account.risk (jsonb)
@@ -1111,6 +1118,10 @@ export function Trading() {
   }
 
   const guardedSetRisk = (patch: Parameters<typeof setRisk>[0]) => {
+    if (patch.autoTrade === true && balanceLocked) {
+      pushLog([`Balance is below $${MIN_TRADE_BALANCE_USD} — trading is locked. Reset the account to trade again.`])
+      return
+    }
     if (patch.autoTrade === true && needsRiskAccept) {
       pushLog(['Accept the risk disclaimer first — managed live auto-trading stays locked until you do.'])
       return
@@ -1222,6 +1233,16 @@ export function Trading() {
           ) : null}
 
           {/* Start / stop */}
+          {balanceLocked && !autoTrade && (
+            <div className="flex items-start gap-3 rounded-xl border border-amber/40 bg-amber/10 p-3">
+              <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber" aria-hidden="true" />
+              <p className="text-sm text-muted-foreground">
+                <span className="font-semibold text-amber">Balance is below $1 — trading is locked.</span> The robot
+                won't start and the trade forms are disabled until you reset or top up the account. If balance or
+                equity ever hits $0.01, the robot stops and closes everything automatically.
+              </p>
+            </div>
+          )}
           <div
             className={cn(
               'flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between',
@@ -1245,7 +1266,7 @@ export function Trading() {
               variant={autoTrade ? 'danger' : 'primary'}
               size="lg"
               onClick={() => void (autoTrade ? stopRobotAndFlatten() : guardedSetRisk({ autoTrade: true }))}
-              disabled={!canRunRobot || stopping}
+              disabled={!canRunRobot || stopping || (balanceLocked && !autoTrade)}
               loading={stopping}
               className={cn('w-full shrink-0 sm:w-auto sm:min-w-44', autoTrade && 'animate-pulse-glow')}
             >

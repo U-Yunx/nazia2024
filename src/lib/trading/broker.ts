@@ -115,8 +115,12 @@ export class PaperBroker implements BrokerAdapter {
   }
 
   async markToMarket(rates: RatesMap): Promise<{ closed: number; error: string | null }> {
-    const { state, closed } = markToMarket(this.getState(), rates)
-    if (closed.length) this.commit(state)
+    const cur = this.getState()
+    const { state, closed } = markToMarket(cur, rates)
+    // Commit on identity change — not just when positions closed — so an
+    // emergency margin closeout that only stands the robot down (a flat blown
+    // account) still persists `autoTrade: false`.
+    if (state !== cur) this.commit(state)
     return { closed: closed.length, error: null }
   }
 
@@ -175,8 +179,12 @@ export class ManagedBroker implements BrokerAdapter {
   }
 
   async markToMarket(rates: RatesMap): Promise<{ closed: number; error: string | null }> {
-    const { state, closed } = markToMarket(this.getState(), rates)
-    if (closed.length) this.commit({ ...state, broker: 'managed' })
+    const cur = this.getState()
+    const { state, closed } = markToMarket(cur, rates)
+    // Commit on identity change — not just when positions closed — so an
+    // emergency margin closeout that only stands the robot down (a flat blown
+    // account) still persists `autoTrade: false`.
+    if (state !== cur) this.commit({ ...state, broker: 'managed' })
     return { closed: closed.length, error: null }
   }
 

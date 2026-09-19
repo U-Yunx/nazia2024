@@ -7,6 +7,7 @@
  */
 import { X } from 'lucide-react'
 import type { AccountState, Position, RatesMap, TradeMode } from '../../lib/trading/types'
+import { MIN_TRADE_BALANCE_USD } from '../../lib/trading/engine'
 import { pnlUsd } from '../../lib/trading/risk'
 import { formatDateTime, formatPct, formatPrice, formatUnits, formatUsd } from '../../lib/format'
 import { cn } from '../../lib/cn'
@@ -35,6 +36,10 @@ export function PositionsTable({
   robotCaps?: RobotCaps
 }) {
   const { positions } = account
+  // Sub-$1 balance: every trading control locks (the engine refuses entries
+  // and the emergency closeout handles a blown account) — close buttons
+  // included, per the account-safety rule.
+  const locked = account.balance < MIN_TRADE_BALANCE_USD
 
   // Group positions by pair, preserving watchlist order.
   const bySymbol = new Map<string, Position[]>()
@@ -70,6 +75,12 @@ export function PositionsTable({
           />
         ) : (
           <div className="space-y-4">
+            {locked && (
+              <p role="status" className="rounded-lg border border-amber/40 bg-amber/10 px-3 py-2 text-xs text-amber">
+                Balance is below $1 — trading is locked, so positions can no longer be closed manually. The robot
+                closes everything automatically if balance or equity ever hits $0.01.
+              </p>
+            )}
             {groups.map(([symbol, rows]) => {
               const cap = perPairCap(robotCaps)
               const atCap = rows.length >= cap
@@ -148,6 +159,8 @@ export function PositionsTable({
                                   variant="danger"
                                   size="sm"
                                   onClick={() => onClose(p.id)}
+                                  disabled={locked}
+                                  title={locked ? 'Trading is locked below $1 balance' : undefined}
                                   aria-label={`Close ${p.symbol} position`}
                                 >
                                   <X className="h-3.5 w-3.5" aria-hidden="true" />

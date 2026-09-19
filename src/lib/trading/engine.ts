@@ -19,6 +19,22 @@ import { consecutiveLosses, perTradeTargetUsd, pnlUsd, pipSize, stopTakePrices }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 
+/**
+ * Account-safety floors.
+ *
+ * `NEAR_ZERO_BALANCE_USD` — when balance OR equity falls to this floor the
+ * account is considered blown: markToMarket closes every open position at
+ * market (reason 'margin') and stands the robot down. The floor is a tiny
+ * epsilon so a dust balance can never keep trading.
+ *
+ * `MIN_TRADE_BALANCE_USD` — below this NO new entry may open (canOpen blocks
+ * every manual order, robot cycle and signal flip) and the UI disables the
+ * trade / robot buttons. A sub-$1 account has nothing left to risk, so every
+ * entry is refused until the account is reset or topped up.
+ */
+export const NEAR_ZERO_BALANCE_USD = 0.01
+export const MIN_TRADE_BALANCE_USD = 1
+
 /** Ingredients describing how strong a setup is — the robot uses these to
  * estimate the probability of profit before opening a trade. */
 export interface ProbabilityIngredients {
@@ -134,6 +150,18 @@ export function createAccount(initialBalance: number, id: string | null = null):
 /** Total equity = balance + unrealized PnL on open positions. */
 export function equity(state: AccountState, rates: RatesMap): number {
   return state.balance + unrealizedPnl(state, rates)
+}
+
+/** True when the account is blown — balance OR equity at/below the floor. */
+export function accountBlown(
+  state: AccountState,
+  rates: RatesMap,
+): { blown: boolean; equityValue: number } {
+  const equityValue = equity(state, rates)
+  return {
+    blown: state.balance <= NEAR_ZERO_BALANCE_USD || equityValue <= NEAR_ZERO_BALANCE_USD,
+    equityValue,
+  }
 }
 
 export function unrealizedPnl(state: AccountState, rates: RatesMap): number {
@@ -301,6 +329,25 @@ export function markToMarket(
 ): { state: AccountState; closed: ClosedTrade[] } {
   let next = state
   const closed: ClosedTrade[] = []
+  // Emergency margin closeout: the moment balance OR equity reaches the
+  // near-zero floor the account is blown — close EVERY open position at market
+  // (reason 'margin') and stand the robot down, before any other rule runs.
+  // This deliberately overrides the fast-crash hold: once the account itself
+  // is at zero there is nothing left to ride out, so the whole book flattens
+  // here and now.
+  const blown = accountBlown(next, rates)
+  if (blown.blown) {
+    for (const p of next.positions) {
+      const cur = rates[p.symbol] ?? p.entryPrice
+      const res = closePosition(next, p.id, { price: cur, reason: 'margin', rates })
+      if (res.trade) closed.push(res.trade)
+      next = res.state
+    }
+    // Even a flat blown account stands the robot down — a dust balance must
+    // never auto-trade again until it is reset or topped up.
+    next = { ...next, risk: { ...next.risk, autoTrade: false } }
+    return { state: next, closed }
+  }
   // Ratchet trailing stops first so a profit-protecting stop can trigger below.
   if (state.risk.trailingStop && state.risk.trailPips > 0) {
     next = trailStops(next, rates)
@@ -467,6 +514,16 @@ export function todayPnlUsd(state: AccountState, rates: RatesMap): number {
 
 /** Safety gate: block new entries when the daily loss limit is reached. */
 export function canOpen(state: AccountState, rates: RatesMap): { ok: boolean; reason?: string } {
+  // Account floor: a balance below $1 has nothing left to risk, so every entry
+  // is refused — manual orders, robot cycles and signal flips alike — until the
+  // account is reset or topped up. The UI mirrors this by disabling the trade
+  // and robot buttons at the same threshold.
+  if (state.balance < MIN_TRADE_BALANCE_USD) {
+    return {
+      ok: false,
+      reason: `Balance is below $${MIN_TRADE_BALANCE_USD} — trading is locked until the account is reset.`,
+    }
+  }
   // Consecutive-loss circuit breaker: after N losses in a row the robot stands
   // down until the streak is broken (a win) or the limit is raised. Off by
   // default (maxConsecutiveLosses = 0); presets turn it on.
