@@ -24,7 +24,7 @@ import { useSelectedStrategy } from '../hooks/useSelectedStrategy'
 import { useAuth } from '../hooks/useAuth'
 import { useAccess, useBrokers, useProfile, useSubscriptions } from '../hooks/usePlatform'
 import { acceptRisk } from '../lib/platform'
-import { effectiveRiskPct, pipValueUsd, stopDistanceFromAtr, suggestPositionUnits } from '../lib/trading/risk'
+import { pipValueUsd, stopDistanceFromAtr } from '../lib/trading/risk'
 import { effectiveRobotCaps, robotTier, STARTER_MAX_PAIRS, STARTER_MAX_PER_PAIR, UNLOCK_SUBSCRIPTION_DAYS } from '../lib/trading/tierLimits'
 import { equity, MIN_TRADE_BALANCE_USD } from '../lib/trading/engine'
 import { lotsToUnits } from '../lib/trading/lots'
@@ -344,6 +344,7 @@ export function Trading() {
     setOverallMaxLossUsd,
     setMaxPerPair,
     setProfitPullbackPct,
+    setLot,
   } = useRobotPrefs()
   // Draft copies of the per-trade stops (pips) and session limits (USD) — the
   // robot keeps trading on the committed prefs until "Apply limits" is pressed.
@@ -554,6 +555,11 @@ export function Trading() {
   // running robot can always be halted. The near-zero emergency closeout
   // (markToMarket) handles the blown-account end.
   const balanceLocked = (account?.balance ?? 0) < MIN_TRADE_BALANCE_USD
+
+  // Picking a lot is a REQUIRED pre-start step: an integer ≥ 1 (1 lot =
+  // 100,000 units). The robot opens every trade at this size, so it refuses to
+  // start until a valid lot is chosen — the picker sits right above Start.
+  const lotValid = Number.isInteger(prefs.lot) && prefs.lot >= 1
 
   // Keep the engine's risk config in line with the saved profit-pull-back
   // preference — prefs survive reloads (localStorage), account.risk (jsonb)
@@ -786,6 +792,9 @@ export function Trading() {
       pairs: robotPairs,
       endsAt,
       sessionStartEquity: sessionStartRef.current ?? sessionStart,
+      // The picked lot is part of the run's config — the background runner
+      // sizes every trade from it too (same engine rules as the browser).
+      lot: prefs.lot,
       sizeMultiplier: tune.sizeMultiplier,
       profitPullbackPct: prefs.profitPullbackPct,
     })
@@ -971,22 +980,20 @@ export function Trading() {
               : Math.round(stopPips * account.risk.takeProfitRatio)
           const pipValue = pipValueUsd(target.symbol, rates)
           if (pipValue == null) continue
-          const units = suggestPositionUnits({
-            equity: equity(account, rates),
-            // Adaptive de-risking: after consecutive losses the robot quietly
-            // trades smaller (see effectiveRiskPct) until a win warms it back up.
-            riskPct: effectiveRiskPct(account),
-            stopPips,
-            pipValue,
-          })
+          // The robot opens EVERY trade at the lot the user picked before
+          // starting (1 lot = 100,000 units). The lot is a required pre-start
+          // step — `lotValid` gates Start — so by the time we're here it's
+          // always a valid integer ≥ 1. 0 (never picked / localStorage wiped)
+          // still can't open a zero-size position.
+          const units = lotsToUnits(prefs.lot)
           if (units <= 0) {
             pushLog([
-              `Skipped ${target.symbol}: position size rounds to zero on this account — lower the stop or raise risk per trade.`,
+              `Skipped ${target.symbol}: pick a lot size first (an integer of 1 or more) — the robot opens every trade at the lot you choose.`,
             ])
             continue
           }
 
-          // Manual tune scales position size relative to the risk-based default.
+          // Manual tune scales position size relative to the picked lot.
           const scaledUnits = Math.round(units * tune.sizeMultiplier)
           if (scaledUnits <= 0) {
             pushLog([
@@ -1064,6 +1071,7 @@ export function Trading() {
     marketKind,
     runCycle,
     robotCaps,
+    prefs.lot,
     tune.sizeMultiplier,
   ])
 
@@ -1136,6 +1144,12 @@ export function Trading() {
     if (patch.autoTrade === true && maxLossHit) {
       pushLog([
         `Max loss reached — ${formatUsd(Math.abs(lastSessionPnl ?? 0))} lost against the ${formatUsd(prefs.overallMaxLossUsd)} limit, so the robot stays off. Raise the session Max loss (Apply) or reset the account to trade again.`,
+      ])
+      return
+    }
+    if (patch.autoTrade === true && !lotValid) {
+      pushLog([
+        `Pick a lot size first — the robot opens every trade at the lot you choose (an integer of 1 or more; 1 lot = 100,000 units). Choose it above the Start button and Start unlocks.`,
       ])
       return
     }
@@ -1249,6 +1263,65 @@ export function Trading() {
             </p>
           ) : null}
 
+          {/* Pick lot — REQUIRED pre-start step. The robot opens every trade
+              at this size (1 lot = 100,000 units), so Start stays locked
+              until an integer lot ≥ 1 is chosen. */}
+          <div
+            className={cn(
+              'flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between',
+              lotValid ? 'border-border bg-secondary/30' : 'border-amber/40 bg-amber/10',
+            )}
+          >
+            <div className="min-w-0 flex-1">
+              <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+                <Sliders className="h-4 w-4 text-accent" aria-hidden="true" />
+                Lot size
+                {lotValid ? (
+                  <Badge className="border-up/30 bg-up/15 text-up">{prefs.lot} lot{prefs.lot === 1 ? '' : 's'}</Badge>
+                ) : (
+                  <Badge className="border-amber/40 bg-amber/10 text-amber">Required</Badge>
+                )}
+              </p>
+              <p className="mt-0.5 text-sm text-muted-foreground">
+                {lotValid
+                  ? `The robot opens every trade at ${prefs.lot} lot${prefs.lot === 1 ? '' : 's'} (1 lot = 100,000 units) — set your position size before starting.`
+                  : <span className="font-medium text-amber">Pick a lot size before starting — the robot opens every trade at the lot you choose (an integer of 1 or more; 1 lot = 100,000 units).</span>}
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Button
+                variant="secondary"
+                size="sm"
+                aria-label="Decrease lot size"
+                onClick={() => setLot(Math.max(1, prefs.lot - 1))}
+                disabled={prefs.lot <= 1}
+              >
+                −
+              </Button>
+              <Input
+                type="number"
+                min={1}
+                step={1}
+                value={prefs.lot > 0 ? prefs.lot : ''}
+                placeholder="Lot"
+                aria-label="Lot size"
+                className="w-24 text-center tnum"
+                onChange={(e) => {
+                  const v = Math.round(Number(e.target.value))
+                  if (Number.isFinite(v)) setLot(Math.max(1, v))
+                }}
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                aria-label="Increase lot size"
+                onClick={() => setLot(prefs.lot + 1)}
+              >
+                +
+              </Button>
+            </div>
+          </div>
+
           {/* Start / stop */}
           {balanceLocked && !autoTrade && (
             <div className="flex items-start gap-3 rounded-xl border border-amber/40 bg-amber/10 p-3">
@@ -1292,12 +1365,14 @@ export function Trading() {
               variant={autoTrade ? 'danger' : 'primary'}
               size="lg"
               onClick={() => void (autoTrade ? stopRobotAndFlatten() : guardedSetRisk({ autoTrade: true }))}
-              disabled={!canRunRobot || stopping || (balanceLocked && !autoTrade) || (maxLossHit && !autoTrade)}
+              disabled={!canRunRobot || stopping || (balanceLocked && !autoTrade) || (maxLossHit && !autoTrade) || (!lotValid && !autoTrade)}
               loading={stopping}
               title={
                 maxLossHit
                   ? 'Session max loss reached — raise the Max loss limit (Apply) or reset the account to start again.'
-                  : undefined
+                  : !lotValid
+                    ? 'Pick a lot size first — the robot opens every trade at the lot you choose (an integer of 1 or more).'
+                    : undefined
               }
               className={cn('w-full shrink-0 sm:w-auto sm:min-w-44', autoTrade && 'animate-pulse-glow')}
             >

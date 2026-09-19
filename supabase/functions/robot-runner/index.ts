@@ -12,7 +12,6 @@ import {
   atr,
   bestStrategyFor,
   closeRobotPositions,
-  effectiveRiskPct,
   equity,
   intervalForMethod,
   manualTargets,
@@ -24,7 +23,6 @@ import {
   rsi,
   stopDistanceFromAtr,
   STRATEGY_LABELS,
-  suggestPositionUnits,
 } from "./engine.ts";
 
 // ---------------------------------------------------------------------------
@@ -63,6 +61,9 @@ const WATCHLIST = [
   "EUR/GBP", "EUR/JPY", "GBP/JPY", "BTC/USD", "ETH/USD", "BNB/USD", "SOL/USD",
   "XRP/USD", "ADA/USD", "DOGE/USD", "LTC/USD",
 ];
+
+// Contract size of one standard lot — mirrors src/lib/trading/lots.ts.
+const LOT_UNITS = 100_000;
 
 // A client heartbeat fresher than this means the browser is trading right now —
 // the server stands down so the two never trade the same account at once.
@@ -372,6 +373,8 @@ interface RobotRunRow {
   per_trade_stop_loss_pips: number;
   overall_max_profit_usd: number;
   overall_max_loss_usd: number;
+  /** Integer lot (≥ 1, 1 lot = 100,000 units) the robot opens EVERY trade at. */
+  lot: number;
   size_multiplier: number;
   profit_pullback_pct: number;
   duration_minutes: number | null;
@@ -655,12 +658,11 @@ async function tickRun(
         : Math.round(stopPips * account.risk.takeProfitRatio)
     const pipValue = pipValueUsd(target.symbol, rates)
     if (pipValue == null) continue
-    const units = suggestPositionUnits({
-      equity: equity(account, rates),
-      riskPct: effectiveRiskPct(account),
-      stopPips,
-      pipValue,
-    })
+    // The picked lot (integer ≥ 1, 1 lot = 100,000 units) is the robot's
+    // position size — the same required pre-start step as in the browser. The
+    // engine's `units` are whole units of the base currency.
+    const lot = Number(run.lot ?? 0)
+    const units = Number.isInteger(lot) && lot >= 1 ? Math.max(1, Math.round(lot * LOT_UNITS)) : 0
     if (units <= 0) continue
     const scaledUnits = Math.round(units * Math.max(0.1, run.size_multiplier || 1))
     if (scaledUnits <= 0) continue

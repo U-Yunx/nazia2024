@@ -37,6 +37,8 @@ export interface RobotRunRow {
   per_trade_stop_loss_pips: number
   overall_max_profit_usd: number
   overall_max_loss_usd: number
+  /** Integer lot (≥ 1, 1 lot = 100,000 units) the robot opens EVERY trade at. */
+  lot: number
   size_multiplier: number
   profit_pullback_pct: number
   duration_minutes: number | null
@@ -57,6 +59,8 @@ export interface RobotRunSyncInput {
   endsAt: number | null
   /** Equity when the run started (session guard baseline), or null. */
   sessionStartEquity: number | null
+  /** The picked lot (integer ≥ 1) — the robot opens every trade at this size. */
+  lot: number
   /** Manual-tune position-size multiplier (1 when untouched). */
   sizeMultiplier: number
   /** Profit-pullback lock % — enforced server-side when the page is closed. */
@@ -104,6 +108,7 @@ export async function saveRobotRun(userId: string, accountId: string, input: Rob
     per_trade_stop_loss_pips: input.prefs.perTradeStopLossPips,
     overall_max_profit_usd: input.prefs.overallMaxProfitUsd,
     overall_max_loss_usd: input.prefs.overallMaxLossUsd,
+    lot: Number.isInteger(input.lot) && input.lot >= 1 ? input.lot : 0,
     size_multiplier: input.sizeMultiplier || 1,
     profit_pullback_pct: input.profitPullbackPct || 0,
     duration_minutes: input.prefs.durationMinutes,
