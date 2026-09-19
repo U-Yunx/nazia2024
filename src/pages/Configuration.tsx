@@ -6,8 +6,9 @@
  * key.
  */
 import { useCallback, useEffect, useState } from 'react'
-import { RefreshCw, Save, SlidersHorizontal, Layers, ShieldCheck, Zap, Wrench, ListChecks } from 'lucide-react'
+import { Check, Layers, RefreshCw, Save, ShieldCheck, SlidersHorizontal, Sparkles, Zap, Wrench, ListChecks } from 'lucide-react'
 import { useRobotPrefs, methodLabel } from '../lib/trading/robotPrefs'
+import { ROBOT_PRESETS, loadPresetMode, savePresetMode, type RobotPresetKey } from '../lib/trading/robotPresets'
 import { WATCHLIST, isCryptoPair } from '../lib/watchlist'
 import { activateFreeMarketData, fetchMarketDataConfig, reconfigureMarketData } from '../lib/platform'
 import type { MarketDataConfig } from '../lib/platform'
@@ -21,6 +22,7 @@ import { ApiTokensCard } from '../components/ApiTokensCard'
 export function Configuration() {
   const {
     prefs,
+    applyAll,
     setMethod,
     setStrategyMode,
     setManualStrategy,
@@ -49,6 +51,29 @@ export function Configuration() {
     }
   }
 
+  // One-click robot settings presets (Best / Common / Manual).
+  const [presetMode, setPresetMode] = useState<RobotPresetKey>(loadPresetMode)
+  const [presetMsg, setPresetMsg] = useState(false)
+
+  const applyPreset = (key: RobotPresetKey) => {
+    const preset = ROBOT_PRESETS.find((p) => p.key === key)
+    if (!preset) return
+    savePresetMode(key)
+    setPresetMode(key)
+    // 'best' and 'common' overwrite every field in one shot; 'manual' keeps
+    // the user's own values and only flips strategy picking to manual.
+    if (preset.prefs) applyAll(preset.prefs)
+    else setStrategyMode('manual')
+    setPresetMsg(true)
+    window.setTimeout(() => setPresetMsg(false), 3000)
+  }
+
+  const presetIcons: Record<RobotPresetKey, typeof Sparkles> = {
+    best: Sparkles,
+    common: Layers,
+    manual: SlidersHorizontal,
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -57,6 +82,55 @@ export function Configuration() {
       />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ListChecks className="h-4 w-4 text-accent" aria-hidden="true" />
+              Robot settings preset
+            </CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Set every robot configuration field at once — trading style, strategy, pairs, trade mode and run
+              limits. Pick one and it fills the whole form.
+            </p>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" role="group" aria-label="Robot settings preset">
+              {ROBOT_PRESETS.map((preset) => {
+                const Icon = presetIcons[preset.key]
+                const active = presetMode === preset.key
+                return (
+                  <button
+                    key={preset.key}
+                    type="button"
+                    onClick={() => applyPreset(preset.key)}
+                    aria-pressed={active}
+                    className={cn(
+                      'cursor-pointer rounded-xl border p-4 text-left transition-all duration-150 active:scale-[0.97]',
+                      active
+                        ? 'border-accent bg-accent/15 shadow-sm'
+                        : 'border-border bg-secondary/40 hover:border-accent/50 hover:bg-secondary',
+                    )}
+                  >
+                    <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                      <Icon className={cn('h-4 w-4', active ? 'text-accent' : 'text-muted-foreground')} aria-hidden="true" />
+                      {preset.label}
+                      {active && <Check className="ml-auto h-4 w-4 text-accent" aria-hidden="true" />}
+                    </span>
+                    <span className="mt-2 block text-xs leading-relaxed text-muted-foreground">{preset.description}</span>
+                  </button>
+                )
+              })}
+            </div>
+            {presetMsg && (
+              <p role="status" className="mt-3 rounded-lg border border-up/40 bg-up/10 px-3 py-2 text-xs text-up">
+                {presetMode === 'manual'
+                  ? 'Manual setting active — your own configuration is kept exactly as it was.'
+                  : `${ROBOT_PRESETS.find((p) => p.key === presetMode)?.label ?? 'Preset'} applied — every robot configuration field above is updated and saved locally.`}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
         <ApiTokensCard />
 
         <MarketDataCard />

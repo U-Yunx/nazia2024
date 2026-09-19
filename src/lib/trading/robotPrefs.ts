@@ -81,6 +81,8 @@ export function useRobotPrefs() {
   }, [])
   return {
     prefs,
+    /** Replace every field at once (used by the one-click settings presets). */
+    applyAll: (all: RobotPrefs) => update(all),
     setMethod: (m: TradingMethod) => update({ method: m }),
     setStrategyMode: (strategyMode: StrategyMode) => update({ strategyMode }),
     setManualStrategy: (manualStrategy: StrategyType) => update({ manualStrategy }),
