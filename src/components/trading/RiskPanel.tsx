@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Check, RotateCcw, ShieldAlert } from 'lucide-react'
 import type { RiskConfig } from '../../lib/trading/types'
+import { DEFAULT_RISK } from '../../lib/trading/types'
 import { cn } from '../../lib/cn'
 import { Button, Card, CardContent, CardHeader, CardTitle, Input } from '../ui'
 
@@ -154,6 +155,19 @@ export function RiskPanel({ risk, onChange, onReset, isLive }: Props) {
             step={0.5}
             suffix="%"
           />
+          <Field
+            label="Close on drawdown"
+            value={draft.drawdownClosePct ?? DEFAULT_RISK.drawdownClosePct}
+            onChange={(v) => patch({ drawdownClosePct: Math.max(0, v) })}
+            min={0}
+            step={1}
+            suffix="%"
+          />
+          <p className="col-span-2 -mt-1 text-[11px] text-muted-foreground">
+            A position that slowly bleeds this % from its entry is closed to lock the loss. A
+            fast crash (the whole step in one mark) is left open instead of sold at the bottom.
+            Set 0 to disable.
+          </p>
 
           {/* Per-trade profit: pick the unit first (pips or USD) */}
           <div className="col-span-2 rounded-lg border border-border bg-secondary/30 p-3">

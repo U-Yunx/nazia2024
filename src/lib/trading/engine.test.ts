@@ -560,3 +560,87 @@ describe('profit pull-back lock', () => {
     expect(res.closed[0].closeReason).toBe('take_profit')
   })
 })
+
+describe('drawdown stop (25%) with fast-crash hold', () => {
+  // 6000-pip stop on EUR/USD = stop at 0.50, far below any price these tests
+  // visit, so the % drawdown rule (not the raw stop) is what's under test.
+  const openLong = (acc = createAccount(10_000)) =>
+    openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 6000, takeProfitPips: 40, units: 1000,
+    }, rates).state
+
+  it('closes a position that bleeds slowly down across −25% (gradual)', () => {
+    const opened = openLong()
+    // Small steps (< 25% each) — a slow bleed, never a crash.
+    let state = opened
+    for (const price of [1.08, 1.02, 0.95, 0.87]) {
+      const res = markToMarket(state, { ...rates, 'EUR/USD': price })
+      expect(res.closed).toHaveLength(0) // −21% at 0.87 is still inside the band
+      state = res.state
+    }
+    // 0.82 → −25.45% from entry, reached in a 5.9% step → drawdown stop fires.
+    const { closed, state: out } = markToMarket(state, { ...rates, 'EUR/USD': 0.82 })
+    expect(closed).toHaveLength(1)
+    expect(closed[0].closeReason).toBe('drawdown')
+    expect(out.positions).toHaveLength(0)
+  })
+
+  it('keeps a trade open when the whole band is crossed in ONE fast mark (crash)', () => {
+    const opened = openLong()
+    // Entry 1.10 → 0.70 in a single observation: step −36%, down −36% — a
+    // fast, long crash. It must NOT be sold at the bottom.
+    const { closed, state } = markToMarket(opened, { ...rates, 'EUR/USD': 0.70 })
+    expect(closed).toHaveLength(0)
+    expect(state.positions).toHaveLength(1)
+    expect(state.positions[0].crashHold).toBe(true)
+    expect(state.positions[0].lastMarkPrice).toBeCloseTo(0.70, 5)
+
+    // Deeper still (small step) — the crash-held position rides it out.
+    const deeper = markToMarket(state, { ...rates, 'EUR/USD': 0.66 })
+    expect(deeper.closed).toHaveLength(0)
+    expect(deeper.state.positions).toHaveLength(1)
+
+    // A real recovery all the way to the take-profit still banks the win.
+    const recovered = markToMarket(deeper.state, { ...rates, 'EUR/USD': 1.104 })
+    expect(recovered.closed).toHaveLength(1)
+    expect(recovered.closed[0].closeReason).toBe('take_profit')
+  })
+
+  it('still honours the hard stop on a crash-held position', () => {
+    const opened = openLong()
+    const crashed = markToMarket(opened, { ...rates, 'EUR/USD': 0.70 })
+    expect(crashed.state.positions[0].crashHold).toBe(true)
+    // The real stop (0.50) is never suspended — a cataclysmic drop still cuts.
+    const stopped = markToMarket(crashed.state, { ...rates, 'EUR/USD': 0.49 })
+    expect(stopped.closed).toHaveLength(1)
+    expect(stopped.closed[0].closeReason).toBe('stop_loss')
+  })
+
+  it('holds a fast crash to the upside on a short', () => {
+    const acc = createAccount(10_000)
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'short', entryPrice: 1.1, stopPips: 6000, takeProfitPips: 40, units: 1000,
+    }, rates)
+    // One mark +32% against the short — fast and long — so it is held open.
+    const { closed, state } = markToMarket(opened, { ...rates, 'EUR/USD': 1.45 })
+    expect(closed).toHaveLength(0)
+    expect(state.positions[0].crashHold).toBe(true)
+  })
+
+  it('does nothing when the drawdown stop is off (drawdownClosePct = 0)', () => {
+    const acc = createAccount(10_000)
+    acc.risk.drawdownClosePct = 0
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 6000, takeProfitPips: 40, units: 1000,
+    }, rates)
+    let r = opened
+    for (const price of [0.95, 0.85, 0.72]) {
+      const res = markToMarket(r, { ...rates, 'EUR/USD': price })
+      expect(res.closed).toHaveLength(0)
+      r = res.state
+    }
+    // −34.5% and still held — the feature is opt-in.
+    expect(r.positions).toHaveLength(1)
+    expect(r.positions[0].crashHold).toBeUndefined()
+  })
+})

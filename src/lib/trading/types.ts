@@ -19,6 +19,12 @@ export type CloseReason =
   | 'risk'
   | 'robot_stop'
   | 'pullback'
+  /**
+   * Drawdown stop: the position bled `risk.drawdownClosePct` from its entry
+   * price and was closed at the % level (NOT used for fast crashes — those
+   * are held open; see Position.crashHold).
+   */
+  | 'drawdown'
 
 export type BrokerMode = 'paper' | 'managed' | 'oanda' | 'mt'
 
@@ -58,6 +64,23 @@ export interface Position {
    * tracked (lock off, or a position that never went green).
    */
   peakProfitUsd?: number
+  /**
+   * Price this position was last marked at (persisted). The drawdown stop
+   * uses the gap between two consecutive marks to tell a *fast crash* (one
+   * giant step that crossed the whole drawdown band) apart from a slow bleed,
+   * so a flash crash isn't sold at the bottom. Undefined = never marked yet
+   * (the engine treats the entry price as the previous mark).
+   */
+  lastMarkPrice?: number
+  /**
+   * Set when the position's adverse move crossed `risk.drawdownClosePct`
+   * inside a single mark-to-market step — a fast, long drop. While set, the
+   * % drawdown stop is suppressed for this position (it rides the crash out
+   * instead of selling the bottom) but every other rule — real stop, targets,
+   * take-profit, pullback, signal flip — still applies. Persisted so the hold
+   * survives reloads and server-side takeovers.
+   */
+  crashHold?: boolean
   /** Account equity at the moment the position was opened (for PnL %). */
   entryEquity: number
   strategy?: string
@@ -171,7 +194,15 @@ export interface RiskConfig {
    */
   profitPullbackPct: number
   /**
-   * Round-trip trading cost per trade in USD (spread + commission model).
+   * Drawdown stop (%): a losing position is closed once it is down this %
+   * from its entry price — the slow bleed to -25% case. EXCEPTION: when the
+   * whole threshold is crossed in one fast mark (a crash), the position is
+   * kept open instead (Position.crashHold) so it isn't sold at the bottom.
+   * 0 = off (default risk preset enables it at 25).
+   */
+  drawdownClosePct: number
+  /**
+   * Round-trip trading cost per trade in USD (commission + spread model).
    * Deducted from the position's gross PnL when it closes, so paper results
    * and backtests reflect realistic broker costs instead of free fills.
    * 0 = cost-free simulation (default).
@@ -200,6 +231,7 @@ export const DEFAULT_RISK: RiskConfig = {
   adaptiveRisk: true,
   volatilityFilter: false,
   profitPullbackPct: 0,
+  drawdownClosePct: 25,
   costPerTradeUsd: 0,
 }
 

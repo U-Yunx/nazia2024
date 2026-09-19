@@ -19,6 +19,7 @@ export type CloseReason =
   | 'risk'
   | 'robot_stop'
   | 'pullback'
+  | 'drawdown'
 export type TradingMethod = 'scalping' | 'longterm'
 export type StrategyMode = 'auto' | 'manual'
 
@@ -48,6 +49,22 @@ export interface Position {
   targetLossUsd?: number
   /** Best unrealized PnL reached while open — profit-pullback lock. */
   peakProfitUsd?: number
+  /**
+   * Price this position was last marked at. The drawdown stop uses the gap
+   * between two consecutive marks to tell a fast crash (one giant step that
+   * crossed the whole drawdown band) apart from a slow bleed, so a flash
+   * crash isn't sold at the bottom. Undefined = never marked yet (the engine
+   * treats the entry price as the previous mark).
+   */
+  lastMarkPrice?: number
+  /**
+   * Set when the position's adverse move crossed `risk.drawdownClosePct`
+   * inside a single mark-to-market step — a fast, long drop. While set, the
+   * % drawdown stop is suppressed for this position (it rides the crash out
+   * instead of selling the bottom); every other rule — real stop, targets,
+   * take-profit, pullback, signal flip — still applies.
+   */
+  crashHold?: boolean
   entryEquity: number
   strategy?: string
   /** Probability of profit (0–1) estimated when the position was opened. */
@@ -105,6 +122,13 @@ export interface RiskConfig {
   volatilityFilter: boolean
   /** Profit-pullback lock % — close a winner that gives back this % of its peak. */
   profitPullbackPct: number
+  /**
+   * Drawdown stop (%): a losing position is closed once down this % from its
+   * entry price — the slow bleed case. EXCEPTION: when the whole band is
+   * crossed in one fast mark (crash) the position is held open instead
+   * (Position.crashHold). 0 = off.
+   */
+  drawdownClosePct: number
 }
 
 export const DEFAULT_RISK: RiskConfig = {
@@ -127,6 +151,7 @@ export const DEFAULT_RISK: RiskConfig = {
   adaptiveRisk: true,
   volatilityFilter: false,
   profitPullbackPct: 0,
+  drawdownClosePct: 25,
 }
 
 export interface AccountState {
@@ -841,6 +866,29 @@ function trackProfitPeaks(state: AccountState, rates: RatesMap): AccountState {
   return changed ? { ...state, positions } : state
 }
 
+/** Track each position's last marked price so the drawdown stop can tell a
+ * slow bleed from a fast crash. When the adverse move between two consecutive
+ * marks crosses the ENTIRE drawdown band AND leaves the position down more
+ * than the band from entry, the position is flagged `crashHold` — it crashed,
+ * so the % drawdown stop stands down and it rides the move out instead of
+ * being sold at the bottom. Only runs while the drawdown stop is on. */
+function trackPriceMarks(state: AccountState, rates: RatesMap): AccountState {
+  const threshold = state.risk.drawdownClosePct
+  if (!(threshold > 0)) return state
+  let changed = false
+  const positions = state.positions.map((p) => {
+    const cur = rates[p.symbol]
+    if (cur == null) return p
+    const prev = p.lastMarkPrice ?? p.entryPrice
+    const stepGap = (p.side === 'long' ? prev - cur : cur - prev) / prev
+    const fromEntry = (p.side === 'long' ? p.entryPrice - cur : cur - p.entryPrice) / p.entryPrice
+    const fastCrash = !p.crashHold && stepGap * 100 >= threshold && fromEntry * 100 >= threshold
+    changed = changed || fastCrash || prev !== cur
+    return { ...p, lastMarkPrice: cur, crashHold: p.crashHold || fastCrash }
+  })
+  return changed ? { ...state, positions } : state
+}
+
 export function markToMarket(
   state: AccountState,
   rates: RatesMap,
@@ -853,6 +901,11 @@ export function markToMarket(
   // Profit-pullback lock — record peaks first so give-back is measured this pass.
   if (state.risk.profitPullbackPct > 0) {
     next = trackProfitPeaks(next, rates)
+  }
+  // Drawdown stop — record each position's last marked price up front so the
+  // fast-vs-slow distinction is already decided when closes are evaluated.
+  if (state.risk.drawdownClosePct > 0) {
+    next = trackPriceMarks(next, rates)
   }
   for (const p of next.positions) {
     const cur = rates[p.symbol]
@@ -888,6 +941,19 @@ export function markToMarket(
       const peak = p.peakProfitUsd ?? 0
       if (peak > 0 && pnl <= peak * (1 - state.risk.profitPullbackPct / 100)) {
         reason = 'pullback'
+      }
+    }
+
+    // Drawdown stop — close a position that has bled `drawdownClosePct` from
+    // its entry price ("slightly down to 25%"). Positions flagged `crashHold`
+    // (the whole band crossed inside one fast mark) are deliberately left
+    // open — selling a flash crash at the bottom locks in the worst loss, so
+    // let it ride until a target, real stop, or reversal takes it out.
+    if (!reason && state.risk.drawdownClosePct > 0 && !p.crashHold) {
+      const fromEntry =
+        (p.side === 'long' ? p.entryPrice - cur : cur - p.entryPrice) / p.entryPrice
+      if (fromEntry * 100 >= state.risk.drawdownClosePct) {
+        reason = 'drawdown'
       }
     }
     if (reason) {
