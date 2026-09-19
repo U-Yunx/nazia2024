@@ -10,7 +10,15 @@ export type Side = 'long' | 'short'
 
 export type PositionStatus = 'open' | 'closed'
 
-export type CloseReason = 'signal' | 'stop_loss' | 'take_profit' | 'target' | 'manual' | 'risk' | 'robot_stop'
+export type CloseReason =
+  | 'signal'
+  | 'stop_loss'
+  | 'take_profit'
+  | 'target'
+  | 'manual'
+  | 'risk'
+  | 'robot_stop'
+  | 'pullback'
 
 export type BrokerMode = 'paper' | 'managed' | 'oanda' | 'mt'
 
@@ -42,6 +50,14 @@ export interface Position {
    * bleeding money is cut at the $ limit.
    */
   targetLossUsd?: number
+  /**
+   * Best unrealized PnL (USD) this position has reached while open. The
+   * profit-pullback lock (`risk.profitPullbackPct`) closes the trade once it
+   * gives back that % from this peak, banking the gains. Persisted so the
+   * peak survives reloads and server-side takeovers. 0 / undefined = not
+   * tracked (lock off, or a position that never went green).
+   */
+  peakProfitUsd?: number
   /** Account equity at the moment the position was opened (for PnL %). */
   entryEquity: number
   strategy?: string
@@ -148,6 +164,12 @@ export interface RiskConfig {
   adaptiveRisk: boolean
   /** Skip new entries when volatility (ATR) is spiking — stand aside. */
   volatilityFilter: boolean
+  /**
+   * Profit-pullback lock (%): when a position's unrealized PnL retraces this
+   * percentage from its peak, markToMarket closes it to bank the gains.
+   * Example — a trade at peak $20 with 25% locks at $15. 0 = off.
+   */
+  profitPullbackPct: number
 }
 
 export const DEFAULT_RISK: RiskConfig = {
@@ -170,6 +192,7 @@ export const DEFAULT_RISK: RiskConfig = {
   maxConsecutiveLosses: 0,
   adaptiveRisk: true,
   volatilityFilter: false,
+  profitPullbackPct: 0,
 }
 
 /** The full persisted state of a paper account. */

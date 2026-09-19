@@ -78,6 +78,8 @@ interface PaperTradeRow {
   strategy: string | null
   target_profit_usd: number | null
   target_loss_usd: number | null
+  /** Best unrealized PnL (USD) the position reached — profit-pullback lock. */
+  peak_profit_usd: number | null
   created_at: string | null
 }
 
@@ -106,6 +108,7 @@ function toRow(account: AccountState, userId: string): {
       strategy: p.strategy ?? null,
       target_profit_usd: p.targetProfitUsd ?? null,
       target_loss_usd: p.targetLossUsd ?? null,
+      peak_profit_usd: p.peakProfitUsd ?? null,
       created_at: null,
     })),
     ...account.trades.map<PaperTradeRow>((t) => ({
@@ -162,6 +165,7 @@ function fromRows(row: PaperAccountRow, trades: PaperTradeRow[]): AccountState {
         strategy: t.strategy ?? undefined,
         targetProfitUsd: t.target_profit_usd ?? undefined,
         targetLossUsd: t.target_loss_usd ?? undefined,
+        peakProfitUsd: t.peak_profit_usd ?? undefined,
         status: 'open',
       })
     } else {

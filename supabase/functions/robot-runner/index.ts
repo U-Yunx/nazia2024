@@ -192,6 +192,8 @@ interface PaperTradeRow {
   strategy: string | null;
   target_profit_usd: number | null;
   target_loss_usd: number | null;
+  /** Best unrealized PnL (USD) the position reached — profit-pullback lock. */
+  peak_profit_usd: number | null;
   /** Optional — `created_at` is deliberately omitted on insert (DB default applies). */
   created_at?: string | null;
 }
@@ -214,6 +216,7 @@ function fromRows(row: PaperAccountRow, trades: PaperTradeRow[]): AccountState {
         strategy: t.strategy ?? undefined,
         targetProfitUsd: t.target_profit_usd ?? undefined,
         targetLossUsd: t.target_loss_usd ?? undefined,
+        peakProfitUsd: t.peak_profit_usd ?? undefined,
         status: "open",
       });
     } else {
@@ -276,6 +279,7 @@ function toRows(account: AccountState, userId: string): {
       strategy: p.strategy ?? null,
       target_profit_usd: p.targetProfitUsd ?? null,
       target_loss_usd: p.targetLossUsd ?? null,
+      peak_profit_usd: p.peakProfitUsd ?? null,
     })),
     ...account.trades.map<PaperTradeRow>((t) => ({
       id: t.id,
@@ -369,6 +373,7 @@ interface RobotRunRow {
   overall_max_profit_usd: number;
   overall_max_loss_usd: number;
   size_multiplier: number;
+  profit_pullback_pct: number;
   duration_minutes: number | null;
   ends_at: string | null;
   session_start_equity: number | null;
@@ -564,6 +569,12 @@ async function tickRun(
   if (!account) {
     await admin.from("robot_runs").update({ last_error: "Account not found." }).eq("id", run.id);
     return { action: "error" };
+  }
+
+  // 5b) Profit-pullback lock mirrored from the browser — the server enforces
+  //     the same give-back rule while the page is closed.
+  if (typeof run.profit_pullback_pct === "number" && run.profit_pullback_pct > 0) {
+    account.risk.profitPullbackPct = run.profit_pullback_pct;
   }
 
   // 6) Fresh quotes for the run's pairs + bars for signal computation.

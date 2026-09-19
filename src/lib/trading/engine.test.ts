@@ -486,3 +486,77 @@ describe('profit probability gate', () => {
     expect(trade?.entryProbability).toBeCloseTo(0.61, 3)
   })
 })
+
+describe('profit pull-back lock', () => {
+  it('tracks the peak unrealized PnL and closes a winner past the give-back', () => {
+    // 1000 units EUR/USD: pnl = (price − 1.1) × 1000. Lock at 25% → a $2 peak
+    // must close once PnL retraces to $1.50 (1.1015).
+    const acc = createAccount(10_000)
+    acc.risk.trailingStop = false
+    acc.risk.profitPullbackPct = 25
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
+    }, rates)
+
+    // Price rises to 1.102 → peak $2 recorded, nothing closes.
+    const up = markToMarket(opened, { ...rates, 'EUR/USD': 1.102 })
+    expect(up.closed).toHaveLength(0)
+    expect(up.state.positions[0].peakProfitUsd).toBeCloseTo(2, 5)
+
+    // Price holds above the lock threshold (1.1015 → $1.50) — still open.
+    const hold = markToMarket(up.state, { ...rates, 'EUR/USD': 1.102 })
+    expect(hold.closed).toHaveLength(0)
+
+    // Price retraces to 1.1015 → PnL $1.50 ≤ peak × 0.75 → locked in.
+    const locked = markToMarket(hold.state, { ...rates, 'EUR/USD': 1.1015 })
+    expect(locked.closed).toHaveLength(1)
+    expect(locked.closed[0].closeReason).toBe('pullback')
+    expect(locked.closed[0].pnl).toBeCloseTo(1.5, 5)
+    expect(locked.state.positions).toHaveLength(0)
+  })
+
+  it('keeps a winner open until the take-profit when the lock is off', () => {
+    const acc = createAccount(10_000)
+    acc.risk.trailingStop = false
+    // profitPullbackPct defaults to 0 — no peak tracking, no give-back close.
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
+    }, rates)
+    const up = markToMarket(opened, { ...rates, 'EUR/USD': 1.102 })
+    const back = markToMarket(up.state, { ...rates, 'EUR/USD': 1.101 })
+    expect(back.closed).toHaveLength(0)
+    expect(back.state.positions[0].peakProfitUsd).toBeUndefined()
+    // The price take-profit still works as usual.
+    const tp = markToMarket(back.state, { ...rates, 'EUR/USD': 1.104 })
+    expect(tp.closed).toHaveLength(1)
+    expect(tp.closed[0].closeReason).toBe('take_profit')
+  })
+
+  it('never fires on a position that never went green', () => {
+    const acc = createAccount(10_000)
+    acc.risk.trailingStop = false
+    acc.risk.profitPullbackPct = 25
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
+    }, rates)
+    // Price never rose above entry — peak stays 0, so pull-back can't close it.
+    const res = markToMarket(opened, { ...rates, 'EUR/USD': 1.099 })
+    expect(res.closed).toHaveLength(0)
+    expect(res.state.positions).toHaveLength(1)
+  })
+
+  it('lets the take-profit win before the pull-back fires', () => {
+    const acc = createAccount(10_000)
+    acc.risk.trailingStop = false
+    acc.risk.profitPullbackPct = 25
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
+      targetProfitUsd: 10,
+    }, rates)
+    // TP at 1.104 is crossed while the position is still well above its lock:
+    // $4 gain, peak $4 — no give-back yet — so it banks as take-profit.
+    const res = markToMarket(opened, { ...rates, 'EUR/USD': 1.104 })
+    expect(res.closed).toHaveLength(1)
+    expect(res.closed[0].closeReason).toBe('take_profit')
+  })
+})

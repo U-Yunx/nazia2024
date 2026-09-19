@@ -530,6 +530,12 @@ export interface RobotPrefs {
   maxPerPair: number
   /** Global cap on open positions across all watchlist pairs. */
   maxOpenTrades: number
+  /**
+   * Profit-pullback lock (%): a position in profit closes once it gives back
+   * this percentage of its best unrealized PnL (e.g. peak $20 @ 25% → lock at
+   * $15). 0 = off. Enforced at mark-to-market via `risk.profitPullbackPct`.
+   */
+  profitPullbackPct: number
 }
 
 /** Result of the auto-tune optimizer. */

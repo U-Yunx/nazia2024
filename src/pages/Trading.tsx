@@ -341,6 +341,7 @@ export function Trading() {
     setOverallMaxProfitUsd,
     setOverallMaxLossUsd,
     setMaxPerPair,
+    setProfitPullbackPct,
   } = useRobotPrefs()
   // Draft copies of the per-trade stops (pips) and session limits (USD) — the
   // robot keeps trading on the committed prefs until "Apply limits" is pressed.
@@ -349,6 +350,7 @@ export function Trading() {
     sl: prefs.perTradeStopLossPips,
     profit: prefs.overallMaxProfitUsd,
     loss: prefs.overallMaxLossUsd,
+    pullback: prefs.profitPullbackPct,
   }))
   const [limitsDirty, setLimitsDirty] = useState(false)
   const [limitsApplied, setLimitsApplied] = useState(false)
@@ -357,6 +359,11 @@ export function Trading() {
     setPerTradeStopLossPips(draftTradeLimits.sl)
     setOverallMaxProfitUsd(draftTradeLimits.profit)
     setOverallMaxLossUsd(draftTradeLimits.loss)
+    setProfitPullbackPct(draftTradeLimits.pullback)
+    // Profit lock-back is enforced by the engine through account.risk — apply
+    // it immediately so open winners get managed right away, not just from the
+    // next run.
+    setRisk({ profitPullbackPct: draftTradeLimits.pullback })
     setLimitsDirty(false)
     setLimitsApplied(true)
   }
@@ -366,6 +373,7 @@ export function Trading() {
       sl: prefs.perTradeStopLossPips,
       profit: prefs.overallMaxProfitUsd,
       loss: prefs.overallMaxLossUsd,
+      pullback: prefs.profitPullbackPct,
     })
     setLimitsDirty(false)
     setLimitsApplied(false)
@@ -537,6 +545,16 @@ export function Trading() {
   }, [rates, account, sync])
 
   const autoTrade = (account?.risk.autoTrade ?? false) && canRunRobot
+
+  // Keep the engine's risk config in line with the saved profit-pull-back
+  // preference — prefs survive reloads (localStorage), account.risk (jsonb)
+  // may predate the setting. Idempotent: no-op once they agree, so it can't
+  // loop.
+  useEffect(() => {
+    if (!account || loading) return
+    if (account.risk.profitPullbackPct === prefs.profitPullbackPct) return
+    setRisk({ profitPullbackPct: prefs.profitPullbackPct })
+  }, [account, loading, account?.risk.profitPullbackPct, prefs.profitPullbackPct, setRisk])
 
   // Values backing the "Trading progress" panel: auto-run countdown and
   // session P&L vs the max-profit / max-loss limits. While the robot runs the
@@ -751,6 +769,7 @@ export function Trading() {
       endsAt,
       sessionStartEquity: sessionStartRef.current ?? sessionStart,
       sizeMultiplier: tune.sizeMultiplier,
+      profitPullbackPct: prefs.profitPullbackPct,
     })
     const id = setInterval(() => void heartbeatRobotRun(uid, accountId), 20_000)
     return () => clearInterval(id)
@@ -1719,6 +1738,59 @@ export function Trading() {
                   Robot stops and closes everything once a run reaches either limit.
                 </p>
               </div>
+            </div>
+            <div className="mt-4 rounded-lg border border-cyan/30 bg-cyan/5 p-3">
+              <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                <Lock className="h-3.5 w-3.5 text-cyan" aria-hidden="true" />
+                Profit pull-back lock (%)
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                {[0, 10, 25, 50].map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    aria-pressed={draftTradeLimits.pullback === v}
+                    onClick={() => {
+                      setDraftTradeLimits((d) => ({ ...d, pullback: v }))
+                      setLimitsDirty(true)
+                      setLimitsApplied(false)
+                    }}
+                    className={cn(
+                      'cursor-pointer rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors duration-150',
+                      draftTradeLimits.pullback === v
+                        ? 'border-cyan/60 bg-cyan/15 text-cyan'
+                        : 'border-border bg-secondary/40 text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    {v === 0 ? 'Off' : `${v}%`}
+                  </button>
+                ))}
+                <Input
+                  type="number"
+                  min={0}
+                  max={90}
+                  value={draftTradeLimits.pullback > 0 ? draftTradeLimits.pullback : ''}
+                  placeholder="Custom"
+                  aria-label="Profit pull-back percent"
+                  className="w-24"
+                  onChange={(e) => {
+                    setDraftTradeLimits((d) => ({ ...d, pullback: Math.min(90, Math.max(0, Number(e.target.value) || 0)) }))
+                    setLimitsDirty(true)
+                    setLimitsApplied(false)
+                  }}
+                />
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                {draftTradeLimits.pullback > 0 ? (
+                  <>
+                    A winner that peaks at $20 in profit closes when it gives back{' '}
+                    {draftTradeLimits.pullback}% — about ${(20 * (1 - draftTradeLimits.pullback / 100)).toFixed(0)} — so the
+                    gain is banked instead of returned to the market.
+                  </>
+                ) : (
+                  'Off — winners run to their take-profit or trailing stop.'
+                )}
+              </p>
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <Button size="sm" onClick={applyTradeLimits} disabled={!limitsDirty}>

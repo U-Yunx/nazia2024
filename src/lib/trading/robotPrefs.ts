@@ -22,6 +22,7 @@ const DEFAULTS: RobotPrefs = {
   tradeMode: 'sequential',
   maxPerPair: 1,
   maxOpenTrades: 0,
+  profitPullbackPct: 0,
 }
 
 function num(v: unknown, fallback: number): number {
@@ -56,6 +57,9 @@ export function loadRobotPrefs(): RobotPrefs {
       maxPerPair: Math.max(1, Math.round(num(p.maxPerPair, DEFAULTS.maxPerPair))),
       // 0 = unlimited (no global cap); any positive number is a hard cap.
       maxOpenTrades: Math.max(0, Math.round(num(p.maxOpenTrades, DEFAULTS.maxOpenTrades))),
+      // Profit-pullback lock % — clamp to a sane 0–90 so a typo can't trap a
+      // winner into closing almost immediately.
+      profitPullbackPct: Math.min(90, Math.max(0, num(p.profitPullbackPct, DEFAULTS.profitPullbackPct))),
     }
   } catch {
     return DEFAULTS
@@ -92,6 +96,7 @@ export function useRobotPrefs() {
     setTradeMode: (tradeMode: 'sequential' | 'concurrent') => update({ tradeMode }),
     setMaxPerPair: (maxPerPair: number) => update({ maxPerPair }),
     setMaxOpenTrades: (maxOpenTrades: number) => update({ maxOpenTrades }),
+    setProfitPullbackPct: (profitPullbackPct: number) => update({ profitPullbackPct }),
   }
 }
 

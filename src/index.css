@@ -1,26 +1,82 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 @import "tailwindcss";
 
-/* THESE ARE PLACEHOLDER FOR EMPTY APP, FEEL FREE TO REPLACE WITH DESIRED DESIGN */
+/* ANA24 — dark fintech terminal. Palette from design-system/MASTER.md
+   (gold trust + violet tech) with vivid cyan/pink accent support and market
+   signal colours. Do not move these @import/@theme lines. */
 
 @theme {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --color-text-muted: oklch(0.9015 0.0154 241.79);
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-heading: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  /* Brand */
+  --color-primary: oklch(0.7686 0.1647 70.08);
+  --color-on-primary: oklch(0.2077 0.0398 265.75);
+  --color-secondary: oklch(0.8369 0.1644 84.43);
+  --color-accent: oklch(0.6056 0.2189 292.72);
+  --color-background: oklch(0.2077 0.0398 265.75);
+  --color-foreground: oklch(0.9842 0.0034 247.86);
+  --color-muted: oklch(0.3065 0.0362 266.64);
+  --color-muted-foreground: oklch(0.6645 0.0456 260.72);
+  --color-border: oklch(0.3717 0.0392 257.29);
+  --color-destructive: oklch(0.6368 0.2078 25.33);
+  --color-ring: oklch(0.7686 0.1647 70.08);
+
+  /* Market signal colours — used as bg-up/10, text-down, border-amber/40 … */
+  --color-up: oklch(0.7007 0.178 156.42);
+  --color-down: oklch(0.6368 0.2078 25.33);
+  --color-amber: oklch(0.8109 0.1394 79.68);
+
+  /* Vivid accent support (user preference: colourful cyan/purple/pink) */
+  --color-cyan: oklch(0.769 0.141 194.97);
+  --color-pink: oklch(0.7034 0.1855 340.68);
+
+  --animate-pulse-dot: pulse-dot 1.6s ease-in-out infinite;
+  --animate-pulse-glow: pulse-glow 2.2s ease-in-out infinite;
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+  @keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-up) 0%, transparent); }
+    50% { box-shadow: 0 0 16px 2px color-mix(in oklab, var(--color-up) 45%, transparent); }
+  }
 }
 
-.bg-dotgrid-glow {
-  background-color: oklch(0.1638 0 0);
-  background-image:
-    radial-gradient(
-      circle at 50% 118%,
-      oklch(0.41 0.14 250 / 45%) 0%,
-      oklch(0.41 0.14 250 / 22%) 22%,
-      oklch(0.41 0.14 250 / 10%) 32%,
-      oklch(0.41 0.14 250 / 4%) 38%,
-      transparent 45%
-    ),
-    radial-gradient(oklch(0.41 0.14 250 / 4%) 1px, transparent 1px);
-  background-size:
-    100% 100%,
-    16px 16px;
-  background-position: center, center;
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  html {
+    color-scheme: dark;
+  }
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection {
+    background-color: color-mix(in oklab, var(--color-accent) 35%, transparent);
+    color: var(--color-foreground);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-muted) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--color-muted);
+    border-radius: 8px;
+  }
+}
+
+@layer utilities {
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
 }

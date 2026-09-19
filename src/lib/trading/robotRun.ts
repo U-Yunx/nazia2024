@@ -38,6 +38,7 @@ export interface RobotRunRow {
   overall_max_profit_usd: number
   overall_max_loss_usd: number
   size_multiplier: number
+  profit_pullback_pct: number
   duration_minutes: number | null
   ends_at: string | null
   session_start_equity: number | null
@@ -58,6 +59,8 @@ export interface RobotRunSyncInput {
   sessionStartEquity: number | null
   /** Manual-tune position-size multiplier (1 when untouched). */
   sizeMultiplier: number
+  /** Profit-pullback lock % — enforced server-side when the page is closed. */
+  profitPullbackPct: number
 }
 
 /** Load the current run row for the account (null when none exists). */
@@ -102,6 +105,7 @@ export async function saveRobotRun(userId: string, accountId: string, input: Rob
     overall_max_profit_usd: input.prefs.overallMaxProfitUsd,
     overall_max_loss_usd: input.prefs.overallMaxLossUsd,
     size_multiplier: input.sizeMultiplier || 1,
+    profit_pullback_pct: input.profitPullbackPct || 0,
     duration_minutes: input.prefs.durationMinutes,
     ends_at: input.endsAt ? new Date(input.endsAt).toISOString() : null,
     session_start_equity: input.sessionStartEquity,

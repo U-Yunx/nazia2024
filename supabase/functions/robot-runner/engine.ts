@@ -10,7 +10,15 @@ export type Side = 'long' | 'short'
 export type Signal = 'buy' | 'sell' | 'neutral'
 export type StrategyType = 'MA' | 'RSI' | 'MACD' | 'BOLLINGER'
 export type Interval = '1min' | '5min' | '15min' | '30min' | '1h' | '4h' | '1day'
-export type CloseReason = 'signal' | 'stop_loss' | 'take_profit' | 'target' | 'manual' | 'risk' | 'robot_stop'
+export type CloseReason =
+  | 'signal'
+  | 'stop_loss'
+  | 'take_profit'
+  | 'target'
+  | 'manual'
+  | 'risk'
+  | 'robot_stop'
+  | 'pullback'
 export type TradingMethod = 'scalping' | 'longterm'
 export type StrategyMode = 'auto' | 'manual'
 
@@ -38,6 +46,8 @@ export interface Position {
   takeProfitPrice: number
   targetProfitUsd?: number
   targetLossUsd?: number
+  /** Best unrealized PnL reached while open — profit-pullback lock. */
+  peakProfitUsd?: number
   entryEquity: number
   strategy?: string
   /** Probability of profit (0–1) estimated when the position was opened. */
@@ -93,6 +103,8 @@ export interface RiskConfig {
   maxConsecutiveLosses: number
   adaptiveRisk: boolean
   volatilityFilter: boolean
+  /** Profit-pullback lock % — close a winner that gives back this % of its peak. */
+  profitPullbackPct: number
 }
 
 export const DEFAULT_RISK: RiskConfig = {
@@ -114,6 +126,7 @@ export const DEFAULT_RISK: RiskConfig = {
   maxConsecutiveLosses: 0,
   adaptiveRisk: true,
   volatilityFilter: false,
+  profitPullbackPct: 0,
 }
 
 export interface AccountState {
@@ -811,6 +824,23 @@ function trailStops(state: AccountState, rates: RatesMap): AccountState {
   return positions === state.positions ? state : { ...state, positions }
 }
 
+/** Track each position's best unrealized PnL for the profit-pullback lock. */
+function trackProfitPeaks(state: AccountState, rates: RatesMap): AccountState {
+  let changed = false
+  const positions = state.positions.map((p) => {
+    const cur = rates[p.symbol]
+    if (cur == null) return p
+    const pnl = pnlUsd(p.side, p.entryPrice, cur, p.units, p.symbol, rates)
+    const peak = p.peakProfitUsd ?? 0
+    if (pnl > peak) {
+      changed = true
+      return { ...p, peakProfitUsd: pnl }
+    }
+    return p
+  })
+  return changed ? { ...state, positions } : state
+}
+
 export function markToMarket(
   state: AccountState,
   rates: RatesMap,
@@ -819,6 +849,10 @@ export function markToMarket(
   const closed: ClosedTrade[] = []
   if (state.risk.trailingStop && state.risk.trailPips > 0) {
     next = trailStops(next, rates)
+  }
+  // Profit-pullback lock — record peaks first so give-back is measured this pass.
+  if (state.risk.profitPullbackPct > 0) {
+    next = trackProfitPeaks(next, rates)
   }
   for (const p of next.positions) {
     const cur = rates[p.symbol]
@@ -845,6 +879,16 @@ export function markToMarket(
     if (!reason) {
       if (p.side === 'long' && cur >= p.takeProfitPrice) reason = 'take_profit'
       else if (p.side === 'short' && cur <= p.takeProfitPrice) reason = 'take_profit'
+    }
+
+    // Profit-pullback lock — close a winner once it retraces X% from its peak
+    // unrealized profit (e.g. peak $20 @ 25% → lock at $15).
+    if (!reason && state.risk.profitPullbackPct > 0) {
+      const pnl = pnlUsd(p.side, p.entryPrice, cur, p.units, p.symbol, rates)
+      const peak = p.peakProfitUsd ?? 0
+      if (peak > 0 && pnl <= peak * (1 - state.risk.profitPullbackPct / 100)) {
+        reason = 'pullback'
+      }
     }
     if (reason) {
       const res = closePosition(next, p.id, { price: cur, reason, rates })

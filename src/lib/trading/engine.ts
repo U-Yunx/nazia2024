@@ -243,6 +243,26 @@ export function closePosition(
   }
 }
 
+/** Track each position's best unrealized PnL so the profit-pullback lock can
+ * measure give-back from the peak. Only runs while the lock is on; returns the
+ * same state reference when nothing moved, so an idling account never churns
+ * re-renders or persistence writes. */
+function trackProfitPeaks(state: AccountState, rates: RatesMap): AccountState {
+  let changed = false
+  const positions = state.positions.map((p) => {
+    const cur = rates[p.symbol]
+    if (cur == null) return p
+    const pnl = pnlUsd(p.side, p.entryPrice, cur, p.units, p.symbol, rates)
+    const peak = p.peakProfitUsd ?? 0
+    if (pnl > peak) {
+      changed = true
+      return { ...p, peakProfitUsd: pnl }
+    }
+    return p
+  })
+  return changed ? { ...state, positions } : state
+}
+
 /** Check SL/TP against the latest rates and close anything that was hit. */
 export function markToMarket(
   state: AccountState,
@@ -253,6 +273,11 @@ export function markToMarket(
   // Ratchet trailing stops first so a profit-protecting stop can trigger below.
   if (state.risk.trailingStop && state.risk.trailPips > 0) {
     next = trailStops(next, rates)
+  }
+  // Profit-pullback lock: with the lock on, record each position's peak
+  // unrealized PnL so give-back can be measured this same pass.
+  if (state.risk.profitPullbackPct > 0) {
+    next = trackProfitPeaks(next, rates)
   }
   for (const p of next.positions) {
     const cur = rates[p.symbol]
@@ -279,6 +304,18 @@ export function markToMarket(
     if (!reason) {
       if (p.side === 'long' && cur >= p.takeProfitPrice) reason = 'take_profit'
       else if (p.side === 'short' && cur <= p.takeProfitPrice) reason = 'take_profit'
+    }
+
+    // Profit-pullback lock — close a winner that has retraced X% from its peak
+    // unrealized profit (e.g. peak $20 @ 25% → lock at $15) to bank the gains.
+    // Only positions that actually went green (peak > 0) can trigger it; a
+    // position at its take-profit already closed as 'take_profit' above.
+    if (!reason && state.risk.profitPullbackPct > 0) {
+      const pnl = pnlUsd(p.side, p.entryPrice, cur, p.units, p.symbol, rates)
+      const peak = p.peakProfitUsd ?? 0
+      if (peak > 0 && pnl <= peak * (1 - state.risk.profitPullbackPct / 100)) {
+        reason = 'pullback'
+      }
     }
     if (reason) {
       const res = closePosition(next, p.id, { price: cur, reason, rates })
