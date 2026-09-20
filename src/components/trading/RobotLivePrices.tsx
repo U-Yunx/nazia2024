@@ -5,19 +5,26 @@
  * whose feed is stale are flagged instead of silently showing an unmoving
  * price, so a weekend FX session reads as "closed", not "broken".
  */
-import { Activity } from 'lucide-react'
+import { useState } from 'react'
+import { Activity, ChevronLeft, ChevronRight } from 'lucide-react'
 import type { Quote } from '../../lib/types'
 import { useQuotes } from '../../hooks/useMarketData'
 import { formatChange, formatPct, formatPrice } from '../../lib/format'
 import { cn } from '../../lib/cn'
+import { Button } from '../ui'
+
+/** How many live pairs fit on one page. */
+const PAGE_SIZE = 6
 
 export function RobotLivePrices({ pairs }: { pairs: string[] }) {
   const { quotes, loading, error } = useQuotes(15_000, pairs)
 
   const rows = (quotes ?? []).filter((q) => pairs.includes(q.symbol))
-  // The panel shows the top 10 priced pairs — with a full watchlist (up to 96
-  // pairs) the rest stay reachable through the scroll.
-  const visibleRows = rows.slice(0, 10)
+  const [page, setPage] = useState(0)
+  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
+  // Clamp in case the watchlist shrinks while the user is on a later page.
+  const currentPage = Math.min(page, pageCount - 1)
+  const visibleRows = rows.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE)
   const anyClosed = rows.some((q) => q.is_market_open === false)
   const anyStale = rows.some((q) => q.stale && q.is_market_open !== false)
 
@@ -46,15 +53,39 @@ export function RobotLivePrices({ pairs }: { pairs: string[] }) {
         <p className="text-sm text-muted-foreground">{error ?? 'Waiting for prices…'}</p>
       ) : (
         <>
-          <ul className="max-h-[18rem] space-y-2 overflow-y-auto pr-1" aria-live="polite">
+          <ul className="space-y-2" aria-live="polite">
             {visibleRows.map((q) => (
               <QuoteRow key={q.symbol} quote={q} />
             ))}
           </ul>
-          {rows.length > visibleRows.length && (
-            <p className="mt-2 text-[11px] text-muted-foreground">
-              Showing the top {visibleRows.length} of {rows.length} pairs — scroll for the rest.
-            </p>
+          {pageCount > 1 && (
+            <div className="mt-3 flex items-center justify-between gap-2 border-t border-border/70 pt-2.5">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="px-2.5"
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={currentPage === 0}
+                aria-label="Previous page of live prices"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                Prev
+              </Button>
+              <span className="tnum text-[11px] text-muted-foreground" aria-live="polite">
+                Page {currentPage + 1} of {pageCount}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="px-2.5"
+                onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+                disabled={currentPage === pageCount - 1}
+                aria-label="Next page of live prices"
+              >
+                Next
+                <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+              </Button>
+            </div>
           )}
           {(anyClosed || anyStale) && (
             <p className="mt-3 border-t border-border/70 pt-2 text-[11px] leading-relaxed text-muted-foreground">
