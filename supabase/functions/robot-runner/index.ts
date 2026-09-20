@@ -21,6 +21,7 @@ import {
   runRobotCycle,
   sma,
   rsi,
+  sizingUnits,
   stopDistanceFromAtr,
   STRATEGY_LABELS,
 } from "./engine.ts";
@@ -373,7 +374,17 @@ interface RobotRunRow {
   per_trade_stop_loss_pips: number;
   overall_max_profit_usd: number;
   overall_max_loss_usd: number;
-  /** Integer lot (≥ 1, 1 lot = 100,000 units) the robot opens EVERY trade at. */
+  /** 'risk' (default, % of equity per trade) or 'fixed' (the picked lot). */
+  sizing_mode: "risk" | "fixed";
+  /** % of equity risked per trade when sizing_mode is 'risk'. */
+  risk_per_trade_pct: number;
+  /** Units per 1.00 lot of the mirrored paper account (e.g. 100,000 Standard). */
+  contract_size: number;
+  /**
+   * Decimal lot (0.01-step micro lots of the account's contract; e.g. 0.05 =
+   * 5,000 units on a Standard account) opened at EVERY trade in 'fixed'
+   * sizing. 0 = not picked yet (fixed mode refuses to start).
+   */
   lot: number;
   size_multiplier: number;
   profit_pullback_pct: number;
@@ -658,13 +669,23 @@ async function tickRun(
         : Math.round(stopPips * account.risk.takeProfitRatio)
     const pipValue = pipValueUsd(target.symbol, rates)
     if (pipValue == null) continue
-    // The picked lot (integer ≥ 1, 1 lot = 100,000 units) is the robot's
-    // position size — the same required pre-start step as in the browser. The
-    // engine's `units` are whole units of the base currency.
-    const lot = Number(run.lot ?? 0)
-    const units = Number.isInteger(lot) && lot >= 1 ? Math.max(1, Math.round(lot * LOT_UNITS)) : 0
-    if (units <= 0) continue
-    const scaledUnits = Math.round(units * Math.max(0.1, run.size_multiplier || 1))
+    // Same per-trade sizing as the browser: 'risk' (default) sizes every trade
+    // from % of current equity and the trade's own stop distance; 'fixed' opens
+    // every trade at the picked fraction of the account's contract (e.g. 0.05 ×
+    // 100,000 = 5,000 units on a Standard account). Legacy runs written before
+    // sizing modes existed are 'fixed' with their integer lot, so behaviour
+    // doesn't change. Whole `units` are what the engine trades.
+    const sizing = sizingUnits({
+      mode: run.sizing_mode === "risk" ? "risk" : "fixed",
+      lot: Number(run.lot ?? 0),
+      riskPct: Number(run.risk_per_trade_pct) > 0 ? Number(run.risk_per_trade_pct) : 1,
+      equityUsd: equity(account, rates),
+      stopPips,
+      pipValuePerUnit: pipValue,
+      contractSize: Number(run.contract_size) > 0 ? Number(run.contract_size) : LOT_UNITS,
+    })
+    if (sizing <= 0) continue
+    const scaledUnits = Math.round(sizing * Math.max(0.1, run.size_multiplier || 1))
     if (scaledUnits <= 0) continue
 
     // Probability-of-profit ingredients: the pair's setup score plus the

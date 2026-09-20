@@ -696,6 +696,84 @@ export function suggestPositionUnits(input: {
   return Math.max(1, units)
 }
 
+/* ----------------------------- position sizing ----------------------------- */
+
+/** Contract size of one standard lot — mirrors src/lib/trading/lots.ts. */
+export const LOT_UNITS = 100_000;
+
+/** Smallest lot a broker-style order can express. */
+export const MIN_LOT = 0.01;
+
+/** Lot granularity — all lot values are multiples of 0.01. */
+export const LOT_STEP = 0.01;
+
+/** Snap a lot to the 0.01 step (and at least one micro-lot when non-zero). */
+export function normalizeLots(lots: number): number {
+  if (!Number.isFinite(lots) || lots <= 0) return 0;
+  const stepped = Math.round(lots / LOT_STEP) * LOT_STEP;
+  return Math.max(MIN_LOT, Number(stepped.toFixed(4)));
+}
+
+/** Lots → whole units at a contract size (rounded; minimum 1 unit). */
+export function lotsToUnits(lots: number, contractSize: number = LOT_UNITS): number {
+  if (!Number.isFinite(lots) || lots <= 0) return 0;
+  if (!Number.isFinite(contractSize) || contractSize <= 0) return 0;
+  if (lots < MIN_LOT) return 0;
+  return Math.max(1, Math.round(lots * contractSize));
+}
+
+/**
+ * Position size (units) that risks exactly `riskPct`% of equity if the trade
+ * is stopped out at `stopPips`, rounded DOWN to the account's 0.01-lot step so
+ * the risk budget is never exceeded. Returns 0 when the maths can't produce a
+ * valid position. Mirrors src/lib/trading/lots.ts `riskUnits`.
+ */
+export function riskUnits(input: {
+  equityUsd: number;
+  riskPct: number;
+  stopPips: number;
+  pipValuePerUnit: number;
+  contractSize?: number;
+}): number {
+  const { equityUsd, riskPct, stopPips, pipValuePerUnit, contractSize = LOT_UNITS } = input;
+  if (!Number.isFinite(equityUsd) || equityUsd <= 0) return 0;
+  if (!Number.isFinite(riskPct) || riskPct <= 0) return 0;
+  if (!Number.isFinite(stopPips) || stopPips <= 0) return 0;
+  if (!Number.isFinite(pipValuePerUnit) || pipValuePerUnit <= 0) return 0;
+  if (!Number.isFinite(contractSize) || contractSize <= 0) return 0;
+  // One micro-lot (0.01 lot) of this account's contract — the floor.
+  const stepUnits = Math.max(1, Math.round(contractSize * MIN_LOT));
+  // USD lost on one unit if the trade hits its stop.
+  const lossPerUnit = stopPips * pipValuePerUnit;
+  const exactUnits = (equityUsd * riskPct) / 100 / lossPerUnit;
+  const stepped = Math.floor(exactUnits / stepUnits) * stepUnits;
+  return Math.max(stepUnits, stepped);
+}
+
+/**
+ * The number of units the robot opens a trade at — the server mirror of
+ * src/lib/lot.ts`s `sizingUnits`:
+ *  - 'risk' → % of equity sized against the trade's own stop (0.01-lot steps);
+ *  - 'fixed' → the picked lot converted at the account's contract size.
+ * Returns 0 when sizing can't produce a valid position (caller skips the trade).
+ */
+export function sizingUnits(input: {
+  mode: 'risk' | 'fixed';
+  lot: number;
+  riskPct: number;
+  equityUsd: number;
+  stopPips: number;
+  pipValuePerUnit: number;
+  contractSize: number;
+}): number {
+  const { mode, lot, riskPct, equityUsd, stopPips, pipValuePerUnit, contractSize } = input;
+  if (!Number.isFinite(contractSize) || contractSize <= 0) return 0;
+  if (mode === 'risk') {
+    return riskUnits({ equityUsd, riskPct, stopPips, pipValuePerUnit, contractSize });
+  }
+  return lotsToUnits(normalizeLots(lot), contractSize);
+}
+
 export function consecutiveLosses(trades: ClosedTrade[]): number {
   let streak = 0
   for (const t of trades) {

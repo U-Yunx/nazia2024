@@ -20,6 +20,8 @@ import type { RiskConfig } from './types'
 const KEY = 'ana24.robot-prefs'
 export const MIN_RISK_PCT = 0.05
 export const MAX_RISK_PCT = 10
+/** Concrete fallback so optional RobotPrefs fields never leak `undefined`. */
+const DEFAULT_RISK_PCT = 1
 
 const DEFAULTS: RobotPrefs = {
   method: 'scalping',
@@ -50,7 +52,7 @@ function num(v: unknown, fallback: number): number {
 
 /** Clamp the per-trade risk % to the sane 0.05–10 band. */
 export function clampRiskPct(pct: number): number {
-  if (!Number.isFinite(pct)) return DEFAULTS.riskPerTradePct
+  if (!Number.isFinite(pct)) return DEFAULT_RISK_PCT
   return Math.min(MAX_RISK_PCT, Math.max(MIN_RISK_PCT, pct))
 }
 
@@ -89,7 +91,7 @@ export function loadRobotPrefs(): RobotPrefs {
       // winner into closing almost immediately.
       profitPullbackPct: Math.min(90, Math.max(0, num(p.profitPullbackPct, DEFAULTS.profitPullbackPct))),
       sizingMode: p.sizingMode === 'fixed' ? 'fixed' : legacyLotPicked ? 'fixed' : 'risk',
-      riskPerTradePct: clampRiskPct(num(p.riskPerTradePct, DEFAULTS.riskPerTradePct)),
+      riskPerTradePct: clampRiskPct(num(p.riskPerTradePct, DEFAULT_RISK_PCT)),
       // Fixed lot: fractional, snapped to the 0.01 step (0 = none picked yet).
       lot: normalizeLots(num(p.lot, DEFAULTS.lot)),
     }

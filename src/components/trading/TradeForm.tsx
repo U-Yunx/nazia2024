@@ -17,6 +17,7 @@ import { cn } from '../../lib/cn'
 import { Button, Input, Select } from '../ui'
 import { CollapsibleCard } from './CollapsibleCard'
 import { formatLots, lotsToUnits, unitsToLots } from '../../lib/trading/lots'
+import { contractSizeForKind } from '../../lib/trading/accountKind'
 
 export function TradeForm({
   account,
@@ -44,6 +45,9 @@ export function TradeForm({
 
   const price = rates[symbol]
   const pipValue = pipValueUsd(symbol, rates)
+  // One lot = a different number of units per account kind (Standard 100,000,
+  // Mini 10,000, Micro 1,000, Nano/Minimal 100) — lots convert at this size.
+  const contractSize = contractSizeForKind(account.risk.kind)
   // Sub-$1 balance: nothing left to risk — the whole form is locked. The
   // engine's canOpen gate refuses entries at the same threshold, so this is
   // purely a UI mirror (and a human explanation instead of a silent disable).
@@ -226,23 +230,23 @@ export function TradeForm({
                 ))}
               </div>
               <span className="text-[11px] text-muted-foreground">
-                1 lot = 100,000 units — the order is always placed in units under the hood.
+                1 lot = {contractSize.toLocaleString('en-US')} units on this account — the order is always placed in units under the hood.
               </span>
             </div>
           </div>
           {sizeUnit === 'lots' ? (
             <Input
-              label={`Lots (suggested ${formatLots(unitsToLots(suggested))})`}
+              label={`Lots (suggested ${formatLots(unitsToLots(suggested, contractSize))})`}
               type="number"
               min={0.01}
               step={0.01}
-              value={units == null ? '' : formatLots(unitsToLots(units))}
+              value={units == null ? '' : formatLots(unitsToLots(units, contractSize))}
               onChange={(e) => {
                 const raw = e.target.value
                 if (raw === '') return setUnits(null)
                 const lots = Number(raw)
                 if (!Number.isFinite(lots) || lots <= 0) return
-                setUnits(lotsToUnits(lots))
+                setUnits(lotsToUnits(lots, contractSize))
               }}
             />
           ) : (

@@ -60,12 +60,13 @@ describe('trading lots', () => {
     })
     expect(units).toBe(50_000)
 
-    // Tiny Nano budget: 1% of $100 with a wide stop → floors at one micro-lot
+    // Tiny Nano budget: 1% of $100 against an ultra-wide stop (=$2.00 loss per
+    // unit, so the $1 budget buys 0.5 units) → the size floors at one micro-lot
     // (0.01 × 100 = 1 unit — brokers never step below 0.01 lot).
     const nano = riskUnits({
       equityUsd: 100,
       riskPct: 1,
-      stopPips: 50,
+      stopPips: 20_000,
       pipValuePerUnit: 0.0001,
       contractSize: 100,
     })
