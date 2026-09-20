@@ -539,9 +539,21 @@ export interface RobotPrefs {
    */
   profitPullbackPct: number
   /**
-   * Lot size (integer ≥ 1) the robot opens EVERY trade at. A lot must be
-   * chosen before the robot can start — it is a required pre-start step
-   * (1 lot = 100,000 units). 0 = none picked yet (start refused).
+   * How the robot sizes EVERY trade:
+   *  - 'risk' (default) — each trade is sized from a % of current equity and
+   *    the trade's own stop distance; no lot pick is required to start.
+   *  - 'fixed' — open every trade at the picked `lot` (0.01-step micro lots
+   *    of the account's contract size); a lot MUST be chosen to start.
+   * Optional so saved settings written before this feature keep loading.
+   */
+  sizingMode?: 'risk' | 'fixed'
+  /** % of equity risked per trade when sizingMode is 'risk' (clamped 0.05–10). */
+  riskPerTradePct?: number
+  /**
+   * Lot size the robot opens EVERY trade at when sizingMode is 'fixed'.
+   * Fractional, stepped at 0.01 (one micro-lot; 1 full lot = the account's
+   * contract size — 100,000 units on a Standard account). 0 = never picked
+   * yet (fixed mode refuses to start).
    */
   lot: number
 }

@@ -27,7 +27,8 @@ import { acceptRisk } from '../lib/platform'
 import { pipValueUsd, stopDistanceFromAtr } from '../lib/trading/risk'
 import { effectiveRobotCaps, robotTier, STARTER_MAX_PAIRS, STARTER_MAX_PER_PAIR, UNLOCK_SUBSCRIPTION_DAYS } from '../lib/trading/tierLimits'
 import { equity, MIN_TRADE_BALANCE_USD } from '../lib/trading/engine'
-import { lotsToUnits } from '../lib/trading/lots'
+import { accountKindLabel, contractSizeForKind, contractUnitsLabel } from '../lib/trading/accountKind'
+import { formatLots, MIN_LOT, normalizeLots, sizingUnits } from '../lib/trading/lots'
 import { INTERVALS, STRATEGY_META, STRATEGY_TYPES, intervalLabel } from '../lib/strategies'
 import { atr, rsi, sma } from '../lib/strategies/indicators'
 import { WATCHLIST } from '../lib/watchlist'
@@ -344,6 +345,8 @@ export function Trading() {
     setOverallMaxLossUsd,
     setMaxPerPair,
     setProfitPullbackPct,
+    setSizingMode,
+    setRiskPerTradePct,
     setLot,
   } = useRobotPrefs()
   // Draft copies of the per-trade stops (pips) and session limits (USD) — the
@@ -556,10 +559,21 @@ export function Trading() {
   // (markToMarket) handles the blown-account end.
   const balanceLocked = (account?.balance ?? 0) < MIN_TRADE_BALANCE_USD
 
-  // Picking a lot is a REQUIRED pre-start step: an integer ≥ 1 (1 lot =
-  // 100,000 units). The robot opens every trade at this size, so it refuses to
-  // start until a valid lot is chosen — the picker sits right above Start.
-  const lotValid = Number.isInteger(prefs.lot) && prefs.lot >= 1
+  // Position sizing for the robot:
+  //   - 'risk' (default) — every trade is sized from a % of current equity and
+  //     the trade's own stop distance; no lot pick is needed to start.
+  //   - 'fixed' — the robot opens EVERY trade at the picked lot (0.01-step
+  //     micro lots of this account's contract size). The lot is a REQUIRED
+  //     pre-start step here, so Start stays locked until one ≥ 0.01 is chosen.
+  const contractSize = contractSizeForKind(account?.risk.kind)
+  const contractLabel = contractUnitsLabel(account?.risk.kind)
+  const sizingMode = prefs.sizingMode ?? 'risk'
+  const riskPct = Math.min(10, Math.max(0.05, prefs.riskPerTradePct ?? 1))
+  const sizingValid = sizingMode === 'fixed' ? normalizeLots(prefs.lot) >= MIN_LOT : true
+  const sizingLabel =
+    sizingMode === 'fixed'
+      ? `${formatLots(normalizeLots(prefs.lot))} lot${normalizeLots(prefs.lot) === 1 ? '' : 's'}`
+      : `≈ ${riskPct}% equity`
 
   // Keep the engine's risk config in line with the saved profit-pull-back
   // preference — prefs survive reloads (localStorage), account.risk (jsonb)
@@ -792,9 +806,12 @@ export function Trading() {
       pairs: robotPairs,
       endsAt,
       sessionStartEquity: sessionStartRef.current ?? sessionStart,
-      // The picked lot is part of the run's config — the background runner
-      // sizes every trade from it too (same engine rules as the browser).
+      // Sizing is part of the run's config — the background runner sizes
+      // every trade the same way (same engine rules as the browser).
       lot: prefs.lot,
+      sizingMode: prefs.sizingMode ?? 'risk',
+      riskPerTradePct: prefs.riskPerTradePct ?? 1,
+      contractSize: contractSizeForKind(account?.risk.kind),
       sizeMultiplier: tune.sizeMultiplier,
       profitPullbackPct: prefs.profitPullbackPct,
     })
@@ -980,15 +997,22 @@ export function Trading() {
               : Math.round(stopPips * account.risk.takeProfitRatio)
           const pipValue = pipValueUsd(target.symbol, rates)
           if (pipValue == null) continue
-          // The robot opens EVERY trade at the lot the user picked before
-          // starting (1 lot = 100,000 units). The lot is a required pre-start
-          // step — `lotValid` gates Start — so by the time we're here it's
-          // always a valid integer ≥ 1. 0 (never picked / localStorage wiped)
-          // still can't open a zero-size position.
-          const units = lotsToUnits(prefs.lot)
+          // Position sizing: 'fixed' → the picked lot converted at this
+          // account's contract size; 'risk' → a % of equity sized against the
+          // trade's own stop. Both round to 0.01-lot steps — the same math the
+          // background runner uses, so browser and server agree.
+          const units = sizingUnits({
+            mode: sizingMode,
+            lot: prefs.lot,
+            riskPct,
+            equityUsd: equity(account, rates),
+            stopPips,
+            pipValuePerUnit: pipValue,
+            contractSize,
+          })
           if (units <= 0) {
             pushLog([
-              `Skipped ${target.symbol}: pick a lot size first (an integer of 1 or more) — the robot opens every trade at the lot you choose.`,
+              `Skipped ${target.symbol}: position sizing produced zero units (check the fixed lot / risk % above Start).`,
             ])
             continue
           }
@@ -1147,9 +1171,9 @@ export function Trading() {
       ])
       return
     }
-    if (patch.autoTrade === true && !lotValid) {
+    if (patch.autoTrade === true && !sizingValid) {
       pushLog([
-        `Pick a lot size first — the robot opens every trade at the lot you choose (an integer of 1 or more; 1 lot = 100,000 units). Choose it above the Start button and Start unlocks.`,
+        `Fix position sizing first — in "Fixed lots" mode choose a lot of 0.01 or more above the Start button; in "Risk %" mode no lot is needed. Start unlocks once sizing is ready.`,
       ])
       return
     }
@@ -1268,57 +1292,115 @@ export function Trading() {
               until an integer lot ≥ 1 is chosen. */}
           <div
             className={cn(
-              'flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between',
-              lotValid ? 'border-border bg-secondary/30' : 'border-amber/40 bg-amber/10',
+              'flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-start sm:justify-between',
+              sizingValid ? 'border-border bg-secondary/30' : 'border-amber/40 bg-amber/10',
             )}
           >
             <div className="min-w-0 flex-1">
               <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
                 <Sliders className="h-4 w-4 text-accent" aria-hidden="true" />
-                Lot size
-                {lotValid ? (
-                  <Badge className="border-up/30 bg-up/15 text-up">{prefs.lot} lot{prefs.lot === 1 ? '' : 's'}</Badge>
+                Position sizing
+                {sizingValid ? (
+                  <Badge className="border-up/30 bg-up/15 text-up">{sizingLabel}</Badge>
                 ) : (
                   <Badge className="border-amber/40 bg-amber/10 text-amber">Required</Badge>
                 )}
               </p>
               <p className="mt-0.5 text-sm text-muted-foreground">
-                {lotValid
-                  ? `The robot opens every trade at ${prefs.lot} lot${prefs.lot === 1 ? '' : 's'} (1 lot = 100,000 units) — set your position size before starting.`
-                  : <span className="font-medium text-amber">Pick a lot size before starting — the robot opens every trade at the lot you choose (an integer of 1 or more; 1 lot = 100,000 units).</span>}
+                {sizingMode === 'risk' ? (
+                  <>
+                    Every trade risks{' '}
+                    <span className="tnum font-medium text-foreground">{riskPct}%</span> of current equity
+                    against its own stop — nothing to pick, Start is ready. On an{' '}
+                    <span className="font-medium text-foreground">{accountKindLabel(account?.risk.kind)}</span>{' '}
+                    account one lot is {contractLabel}, so 0.01 lot is one micro-lot of it.
+                  </>
+                ) : sizingValid ? (
+                  `The robot opens every trade at ${formatLots(normalizeLots(prefs.lot))} lot${normalizeLots(prefs.lot) === 1 ? '' : 's'} (1 lot = ${contractLabel}) — set your position size before starting.`
+                ) : (
+                  <span className="font-medium text-amber">
+                    Pick a fixed lot before starting — the robot opens every trade at the lot you choose (0.01
+                    minimum; 1 lot = {contractLabel} on this account).
+                  </span>
+                )}
               </p>
             </div>
-            <div className="flex items-center gap-1.5">
-              <Button
-                variant="secondary"
-                size="sm"
-                aria-label="Decrease lot size"
-                onClick={() => setLot(Math.max(1, prefs.lot - 1))}
-                disabled={prefs.lot <= 1}
+            <div className="mt-2 flex flex-wrap items-center gap-2 sm:mt-0">
+              <div
+                role="group"
+                aria-label="Position sizing mode"
+                className="flex items-center gap-1 rounded-lg border border-border bg-secondary/40 p-1"
               >
-                −
-              </Button>
-              <Input
-                type="number"
-                min={1}
-                step={1}
-                value={prefs.lot > 0 ? prefs.lot : ''}
-                placeholder="Lot"
-                aria-label="Lot size"
-                className="w-24 text-center tnum"
-                onChange={(e) => {
-                  const v = Math.round(Number(e.target.value))
-                  if (Number.isFinite(v)) setLot(Math.max(1, v))
-                }}
-              />
-              <Button
-                variant="secondary"
-                size="sm"
-                aria-label="Increase lot size"
-                onClick={() => setLot(prefs.lot + 1)}
-              >
-                +
-              </Button>
+                {(['risk', 'fixed'] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setSizingMode(m)}
+                    aria-pressed={sizingMode === m}
+                    className={cn(
+                      'h-8 cursor-pointer rounded-md px-3 text-sm font-medium transition-colors duration-150',
+                      sizingMode === m ? 'bg-accent text-black' : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    {m === 'risk' ? 'Risk %' : 'Fixed lots'}
+                  </button>
+                ))}
+              </div>
+              {sizingMode === 'risk' ? (
+                <div className="flex items-center gap-1.5">
+                  <label htmlFor="robot-risk-pct" className="text-xs text-muted-foreground">
+                    Risk per trade
+                  </label>
+                  <Input
+                    id="robot-risk-pct"
+                    type="number"
+                    min={0.05}
+                    max={10}
+                    step={0.5}
+                    value={riskPct}
+                    aria-label="Risk percent per trade"
+                    className="w-24 text-center tnum"
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      if (Number.isFinite(v)) setRiskPerTradePct(v)
+                    }}
+                  />
+                  <span className="text-xs text-muted-foreground">%</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    aria-label="Decrease lot size"
+                    onClick={() => setLot(prefs.lot - 0.01)}
+                    disabled={!sizingValid}
+                  >
+                    −
+                  </Button>
+                  <Input
+                    type="number"
+                    min={0.01}
+                    step={0.01}
+                    value={prefs.lot > 0 ? formatLots(normalizeLots(prefs.lot)) : ''}
+                    placeholder="0.01"
+                    aria-label="Fixed lot size"
+                    className="w-24 text-center tnum"
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      if (Number.isFinite(v)) setLot(v)
+                    }}
+                  />
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    aria-label="Increase lot size"
+                    onClick={() => setLot(prefs.lot + 0.01)}
+                  >
+                    +
+                  </Button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1365,13 +1447,13 @@ export function Trading() {
               variant={autoTrade ? 'danger' : 'primary'}
               size="lg"
               onClick={() => void (autoTrade ? stopRobotAndFlatten() : guardedSetRisk({ autoTrade: true }))}
-              disabled={!canRunRobot || stopping || (balanceLocked && !autoTrade) || (maxLossHit && !autoTrade) || (!lotValid && !autoTrade)}
+              disabled={!canRunRobot || stopping || (balanceLocked && !autoTrade) || (maxLossHit && !autoTrade) || (!sizingValid && !autoTrade)}
               loading={stopping}
               title={
                 maxLossHit
                   ? 'Session max loss reached — raise the Max loss limit (Apply) or reset the account to start again.'
-                  : !lotValid
-                    ? 'Pick a lot size first — the robot opens every trade at the lot you choose (an integer of 1 or more).'
+                  : !sizingValid
+                    ? 'Pick a fixed lot first — the robot opens every trade at the lot you choose (0.01 or more).'
                     : undefined
               }
               className={cn('w-full shrink-0 sm:w-auto sm:min-w-44', autoTrade && 'animate-pulse-glow')}

@@ -1,12 +1,26 @@
 /**
  * Robot trading-style preferences (scalping vs long-term) plus the mapping
  * from a style to sensible interval + risk defaults. Persisted to localStorage.
+ *
+ * Position sizing has two modes:
+ *  - 'risk' (default) — every trade is sized from `riskPerTradePct` % of
+ *    current equity and the trade's own stop distance; no lot pick is needed
+ *    to start the robot.
+ *  - 'fixed' — the robot opens every trade at the picked `lot` (0.01-step
+ *    micro lots of the account's contract size); `lot` = 0 keeps Start locked.
+ * Older settings written before this feature (integer `lot`, no `sizingMode`)
+ * migrate to 'fixed' when a lot was picked and to 'risk' otherwise, so nothing
+ * already configured changes behaviour.
  */
 import { useCallback, useState } from 'react'
 import type { Interval, RobotPrefs, StrategyMode, StrategyType, TradingMethod } from '../types'
+import { MIN_LOT, normalizeLots } from './lots'
 import type { RiskConfig } from './types'
 
 const KEY = 'ana24.robot-prefs'
+export const MIN_RISK_PCT = 0.05
+export const MAX_RISK_PCT = 10
+
 const DEFAULTS: RobotPrefs = {
   method: 'scalping',
   strategyMode: 'auto',
@@ -23,8 +37,10 @@ const DEFAULTS: RobotPrefs = {
   maxPerPair: 1,
   maxOpenTrades: 0,
   profitPullbackPct: 25,
-  // 0 = no lot picked yet — the robot must not start until the user chooses
-  // an integer lot ≥ 1 (the "pick lot before start" required step).
+  // Risk-based sizing by default — no lot pick required to start.
+  sizingMode: 'risk',
+  riskPerTradePct: 1,
+  // 0 = no fixed lot picked yet (fixed mode refuses to start until ≥ 0.01).
   lot: 0,
 }
 
@@ -32,9 +48,15 @@ function num(v: unknown, fallback: number): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : fallback
 }
 
+/** Clamp the per-trade risk % to the sane 0.05–10 band. */
+export function clampRiskPct(pct: number): number {
+  if (!Number.isFinite(pct)) return DEFAULTS.riskPerTradePct
+  return Math.min(MAX_RISK_PCT, Math.max(MIN_RISK_PCT, pct))
+}
+
 const STRATEGY_TYPES_SET: ReadonlySet<string> = new Set(['MA', 'RSI', 'MACD', 'BOLLINGER'])
 
-/** True when the value is one of the supported strategy types. */
+/** True when the value is one of the switched strategy types. */
 export function isStrategyType(v: unknown): v is StrategyType {
   return typeof v === 'string' && STRATEGY_TYPES_SET.has(v)
 }
@@ -44,6 +66,9 @@ export function loadRobotPrefs(): RobotPrefs {
     const raw = localStorage.getItem(KEY)
     if (!raw) return DEFAULTS
     const p = JSON.parse(raw) as Partial<RobotPrefs>
+    // Legacy save: a previously picked integer lot keeps meaning "fixed lot";
+    // never-picked (0) and brand-new prefs fall back to the risk default.
+    const legacyLotPicked = typeof p.lot === 'number' && p.lot >= 1
     return {
       method: p.method === 'longterm' ? 'longterm' : 'scalping',
       strategyMode: p.strategyMode === 'manual' ? 'manual' : 'auto',
@@ -63,9 +88,10 @@ export function loadRobotPrefs(): RobotPrefs {
       // Profit-pullback lock % — clamp to a sane 0–90 so a typo can't trap a
       // winner into closing almost immediately.
       profitPullbackPct: Math.min(90, Math.max(0, num(p.profitPullbackPct, DEFAULTS.profitPullbackPct))),
-      // Lot size the robot trades at: always an integer ≥ 1 (0 = not picked
-      // yet, the robot refuses to start until one is chosen).
-      lot: Math.max(0, Math.round(num(p.lot, DEFAULTS.lot))),
+      sizingMode: p.sizingMode === 'fixed' ? 'fixed' : legacyLotPicked ? 'fixed' : 'risk',
+      riskPerTradePct: clampRiskPct(num(p.riskPerTradePct, DEFAULTS.riskPerTradePct)),
+      // Fixed lot: fractional, snapped to the 0.01 step (0 = none picked yet).
+      lot: normalizeLots(num(p.lot, DEFAULTS.lot)),
     }
   } catch {
     return DEFAULTS
@@ -105,7 +131,12 @@ export function useRobotPrefs() {
     setMaxPerPair: (maxPerPair: number) => update({ maxPerPair }),
     setMaxOpenTrades: (maxOpenTrades: number) => update({ maxOpenTrades }),
     setProfitPullbackPct: (profitPullbackPct: number) => update({ profitPullbackPct }),
-    setLot: (lot: number) => update({ lot: Math.max(0, Math.round(lot)) }),
+    setSizingMode: (sizingMode: 'risk' | 'fixed') => update({ sizingMode }),
+    setRiskPerTradePct: (riskPerTradePct: number) => update({ riskPerTradePct: clampRiskPct(riskPerTradePct) }),
+    // Fixed lot: snap to the 0.01 step (0 clears it / refuses to start).
+    setLot: (lot: number) => update({ lot: normalizeLots(lot) }),
+    // Keep the minimum visible for UI steppers.
+    minLot: MIN_LOT,
   }
 }
 

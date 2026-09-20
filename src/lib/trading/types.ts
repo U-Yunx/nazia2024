@@ -124,10 +124,12 @@ export interface ClosedTrade {
   status: 'closed'
 }
 
-/** Paper/ledger account flavour — 'micro' = smaller demo balance, micro-lot-scale sizing;
- * 'minimal' = smallest viable paper balance, so a robot can be proven on a minimal deposit;
- * 'custom' = user-chosen starting balance (any amount ≥ MIN_PAPER_DEPOSIT). */
-export type PaperAccountKind = 'standard' | 'micro' | 'minimal' | 'custom'
+/** Paper/ledger account flavour. Each preset maps a starting balance to a
+ * small-broker-style contract size per lot, from full-size Standard (100,000
+ * units/lot) down to Nano (100 units/lot) and the $10 Minimal starter account.
+ * 'custom' = user-chosen starting balance (any amount ≥ MIN_PAPER_DEPOSIT)
+ * with the standard 100,000-unit contract. */
+export type PaperAccountKind = 'standard' | 'mini' | 'micro' | 'nano' | 'minimal' | 'custom'
 
 /** Risk-management knobs the robot enforces. */
 export interface RiskConfig {

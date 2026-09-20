@@ -16,6 +16,7 @@
  */
 import { isSupabaseConfigured, supabase } from '../supabase'
 import type { RobotPrefs, StrategyType, TradingMethod } from '../types'
+import { LOT_UNITS, MIN_LOT } from './lots'
 
 export type RobotRunStatus = 'running' | 'stopped' | 'finished'
 
@@ -37,8 +38,15 @@ export interface RobotRunRow {
   per_trade_stop_loss_pips: number
   overall_max_profit_usd: number
   overall_max_loss_usd: number
-  /** Integer lot (≥ 1, 1 lot = 100,000 units) the robot opens EVERY trade at. */
+  /** Decimal lot size the robot opens EVERY trade at in 'fixed' sizing
+   * (0.01-step micro lots of the account's contract; 0 = sizing by risk). */
   lot: number
+  /** 'risk' (default, % of equity per trade) or 'fixed' (the picked lot). */
+  sizing_mode: 'risk' | 'fixed'
+  /** % of equity risked per trade when sizing_mode is 'risk'. */
+  risk_per_trade_pct: number
+  /** Contract size (units per 1.00 lot) of the mirrored paper account. */
+  contract_size: number
   size_multiplier: number
   profit_pullback_pct: number
   duration_minutes: number | null
@@ -59,8 +67,16 @@ export interface RobotRunSyncInput {
   endsAt: number | null
   /** Equity when the run started (session guard baseline), or null. */
   sessionStartEquity: number | null
-  /** The picked lot (integer ≥ 1) — the robot opens every trade at this size. */
+  /** The picked fixed lot (0.01-step micro lots of the account contract) —
+   * 0 when sizing by risk. */
   lot: number
+  /** 'risk' (default) or 'fixed' — mirrored so the background runner sizes
+   * every trade the same way the browser does. */
+  sizingMode: 'risk' | 'fixed'
+  /** % of equity risked per trade when sizingMode is 'risk'. */
+  riskPerTradePct: number
+  /** Units per 1.00 lot of this account (contract size, e.g. 100,000 Standard). */
+  contractSize: number
   /** Manual-tune position-size multiplier (1 when untouched). */
   sizeMultiplier: number
   /** Profit-pullback lock % — enforced server-side when the page is closed. */
@@ -108,7 +124,10 @@ export async function saveRobotRun(userId: string, accountId: string, input: Rob
     per_trade_stop_loss_pips: input.prefs.perTradeStopLossPips,
     overall_max_profit_usd: input.prefs.overallMaxProfitUsd,
     overall_max_loss_usd: input.prefs.overallMaxLossUsd,
-    lot: Number.isInteger(input.lot) && input.lot >= 1 ? input.lot : 0,
+    lot: Number.isFinite(input.lot) && input.lot >= MIN_LOT ? Math.round(input.lot * 100) / 100 : 0,
+    sizing_mode: input.sizingMode,
+    risk_per_trade_pct: Math.min(10, Math.max(0.05, input.riskPerTradePct || 1)),
+    contract_size: input.contractSize > 0 ? input.contractSize : LOT_UNITS,
     size_multiplier: input.sizeMultiplier || 1,
     profit_pullback_pct: input.profitPullbackPct || 0,
     duration_minutes: input.prefs.durationMinutes,
