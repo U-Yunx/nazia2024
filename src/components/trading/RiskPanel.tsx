@@ -232,6 +232,47 @@ export function RiskPanel({ risk, onChange, onReset, isLive }: Props) {
             then it closes when profit gives back the % above from its highest point.
           </p>
 
+          {/* Peak-return close — "watch it dip, then bank it the moment it
+              returns to the top": profit, give back `peakReturnGivebackPct`,
+              rally back to the last highest profit → close AT the peak. */}
+          <div className="col-span-2 rounded-lg border border-up/30 bg-up/5 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold text-foreground">Return to peak close</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  When a trade profits, dips, then climbs back to its last highest profit — close it
+                  right at the top instead of chasing more. Shares the $ arm floor with pull-back.
+                </p>
+              </div>
+              <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  checked={draft.peakReturnClose}
+                  onChange={(e) => patch({ peakReturnClose: e.target.checked })}
+                  className="h-4 w-4 cursor-pointer rounded border-border bg-background accent-[var(--color-accent)]"
+                />
+                On
+              </label>
+            </div>
+            {draft.peakReturnClose && (
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <Field
+                  label="Arm after give-back"
+                  value={draft.peakReturnGivebackPct ?? DEFAULT_RISK.peakReturnGivebackPct}
+                  onChange={(v) => patch({ peakReturnGivebackPct: Math.min(50, Math.max(1, v)) })}
+                  min={1}
+                  max={50}
+                  step={1}
+                  suffix="%"
+                />
+                <div className="flex items-end pb-1 text-[11px] text-muted-foreground">
+                  The trade must dip this % off its best profit before a return to the peak counts as
+                  a close — keeps noise at the high from closing winners.
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Per-trade profit: pick the unit first (pips or USD) */}
           <div className="col-span-2 rounded-lg border border-border bg-secondary/30 p-3">
             <div className="mb-2 flex items-center justify-between gap-2">

@@ -20,6 +20,13 @@ export type CloseReason =
   | 'robot_stop'
   | 'pullback'
   /**
+   * Peak-return close: the position profited, gave back `peakReturnGivebackPct`
+   * from its best unrealized PnL, then rallied back to that same highest
+   * profit — the robot closed it AT the peak ("trade the profit, watch it
+   * dip, then bank it the moment it returns to the top").
+   */
+  | 'peak_return'
+  /**
    * Drawdown stop: the position bled `risk.drawdownClosePct` from its entry
    * price and was closed at the % level (NOT used for fast crashes — those
    * are held open; see Position.crashHold).
@@ -70,6 +77,15 @@ export interface Position {
    * tracked (lock off, or a position that never went green).
    */
   peakProfitUsd?: number
+  /**
+   * Set by the peak-return rule once a position has given back
+   * `risk.peakReturnGivebackPct` from its best unrealized PnL ("it dipped").
+   * While set, the peak is frozen at the LAST highest profit — the engine no
+   * longer raises it — and markToMarket closes the trade the moment PnL
+   * returns to that frozen peak (reason 'peak_return'): bank it AT the top.
+   * Persisted so the arm survives reloads and server-side takeovers.
+   */
+  peakRetraced?: boolean
   /**
    * Price this position was last marked at (persisted). The drawdown stop
    * uses the gap between two consecutive marks to tell a *fast crash* (one
@@ -229,6 +245,21 @@ export interface RiskConfig {
    */
   profitPullbackActivateUsd: number
   /**
+   * Peak-return close: when a position's unrealized PnL profited, gave back
+   * `peakReturnGivebackPct` from its peak, then rallied BACK to that same
+   * highest profit, markToMarket closes it right there (reason 'peak_return')
+   * — "watch it dip, then bank it the moment it returns to the top". Off by
+   * default; the one-click Pro strategy preset and pro-trader copies enable it.
+   */
+  peakReturnClose: boolean
+  /**
+   * How much a position must give back from its peak unrealized PnL (as a %)
+   * before the peak-return close arms. 10 = the trade dipped 10% off its best
+   * profit before a return to the peak counts as a close signal. Guards
+   * against closing on sub-pip noise right at the high.
+   */
+  peakReturnGivebackPct: number
+  /**
    * Drawdown stop (%): a losing position is closed once it is down this %
    * from its entry price — the slow bleed to -25% case. EXCEPTION: when the
    * whole threshold is crossed in one fast mark (a crash), the position is
@@ -281,6 +312,10 @@ export const DEFAULT_RISK: RiskConfig = {
   volatilityFilter: false,
   profitPullbackPct: 25,
   profitPullbackActivateUsd: 1,
+  // Peak-return close is off by default — the one-click Pro preset and the
+  // pro-trader copies turn it on with a 10% give-back arm.
+  peakReturnClose: false,
+  peakReturnGivebackPct: 10,
   drawdownClosePct: 25,
   costPerTradeUsd: 0,
   // Scale-out exit is off by default — the one-click Pro strategy preset turns

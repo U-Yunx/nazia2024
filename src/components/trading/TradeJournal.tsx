@@ -23,6 +23,7 @@ const REASON_LABEL: Record<string, string> = {
   manual: 'Manual',
   margin: 'Margin call',
   pullback: 'Profit pullback',
+  peak_return: 'Returned to peak',
   drawdown: 'Drawdown stop',
   risk: 'Risk',
   robot_stop: 'Robot stop',

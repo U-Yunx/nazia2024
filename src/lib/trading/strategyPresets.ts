@@ -8,6 +8,8 @@
  *   - ATR-aware stop distance (volatility filter stands aside in spikes).
  *   - Trailing + break-even protection so winners can't round-trip.
  *   - Profit-pullback lock: bank gains when a winner gives back 30% from peak.
+ *   - Peak-return close: when a winner dips then climbs back to its last
+ *     highest profit, close it AT the peak (10% give-back arm).
  *   - Consecutive-loss circuit breaker + adaptive de-risking so a cold streak
  *     shrinks size instead of blowing the account.
  *   - Concurrent multi-pair trading (2 per pair, up to 6 open) for more
@@ -51,8 +53,8 @@ export function proStrategyPreset(method: TradingMethod): StrategyPreset {
     name: 'Pro Scale-Out',
     tagline: scalping ? 'Scalp 2 legs per trade' : 'Ride trends, bank early',
     description: scalping
-      ? 'Banks 50% at 1R, break-even stop, then trails the rest — with ATR-aware stops, a 30% give-back lock and a loss circuit breaker. More pairs, more trades, capped risk.'
-      : 'Banks 50% at 1R, break-even stop, then trails the rest on 1-hour bars — with ATR-aware stops, a 30% give-back lock and a loss circuit breaker. Built for multi-day trends.',
+      ? 'Banks 50% at 1R, break-even stop, then trails the rest — with ATR-aware stops, a 30% give-back lock, return-to-peak close and a loss circuit breaker. More pairs, more trades, capped risk.'
+      : 'Banks 50% at 1R, break-even stop, then trails the rest on 1-hour bars — with ATR-aware stops, a 30% give-back lock, return-to-peak close and a loss circuit breaker. Built for multi-day trends.',
     risk: {
       ...PRO_PARTIAL,
       riskPerTradePct: scalping ? 0.5 : 1,
@@ -65,6 +67,8 @@ export function proStrategyPreset(method: TradingMethod): StrategyPreset {
       trailActivationPips: scalping ? 8 : 20,
       profitPullbackPct: 30,
       profitPullbackActivateUsd: 1,
+      peakReturnClose: true,
+      peakReturnGivebackPct: 10,
       drawdownClosePct: 20,
       maxDailyLossPct: 5,
       maxConsecutiveLosses: 4,

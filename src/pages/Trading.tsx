@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Activity, Check, ListChecks, Lock, Pause, Play, ShieldAlert, Sliders, Sparkles, Target, Timer, Wallet } from 'lucide-react'
+import { Activity, Check, Copy, ListChecks, Lock, Pause, Play, ShieldAlert, Sliders, Sparkles, Target, Timer, Wallet, X } from 'lucide-react'
 import { DEFAULT_PAPER_BALANCE, usePaperAccount } from '../lib/trading/usePaperAccount'
 import { useRobotPrefs, methodInterval, methodLabel, methodRiskDefaults } from '../lib/trading/robotPrefs'
 import { useRobotRecorder } from '../lib/trading/useRobotRecorder'
@@ -17,6 +17,7 @@ import {
 import { heartbeatRobotRun, loadRobotRun, saveRobotRun, stopRobotRun } from '../lib/trading/robotRun'
 import { autoTune } from '../lib/trading/autoTune'
 import { proStrategyPreset, type StrategyPreset } from '../lib/trading/strategyPresets'
+import { PRO_TRADERS, type ProTrader } from '../lib/proTraders'
 import { aggressivenessLabel, guardrailLabel, useManualTune } from '../lib/trading/manualTune'
 import { rankPairs, type RankedPair } from '../lib/trading/pairRanking'
 import { manualTargets } from '../lib/trading/manualMethod'
@@ -301,6 +302,164 @@ function fmtCountdown(totalSeconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
+/**
+ * Start-robot confirmation dialog. Every robot start — paper AND live — goes
+ * through this modal so the user sees exactly what is about to run (mode,
+ * method, pairs, sizing, risk and limits) and must explicitly accept the risk
+ * before the robot can trade. Accessible: role=dialog, aria-modal, focus is
+ * moved in on open and returned to the trigger on close, Escape cancels, and
+ * Tab is trapped inside while it is open.
+ */
+function ConfirmStartDialog({
+  open,
+  onClose,
+  onConfirm,
+  lines,
+  live,
+  liveLabel,
+}: {
+  open: boolean
+  onClose: () => void
+  onConfirm: () => void
+  lines: { label: string; value: string }[]
+  live: boolean
+  liveLabel: string
+}) {
+  const [accepted, setAccepted] = useState(false)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    triggerRef.current = document.activeElement as HTMLElement | null
+    setAccepted(false)
+    // Announce the dialog and move focus inside it.
+    requestAnimationFrame(() => dialogRef.current?.focus())
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        onClose()
+      }
+      // Trap Tab inside the dialog so keyboard users can't reach the page behind.
+      if (e.key === 'Tab' && dialogRef.current) {
+        const focusables = dialogRef.current.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        )
+        if (focusables.length === 0) return
+        const first = focusables[0]
+        const last = focusables[focusables.length - 1]
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault()
+          last.focus()
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault()
+          first.focus()
+        }
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      triggerRef.current?.focus?.()
+    }
+  }, [open, onClose])
+
+  if (!open) return null
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 backdrop-blur-sm sm:items-center"
+      onMouseDown={onClose}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm-start-title"
+        tabIndex={-1}
+        onMouseDown={(e) => e.stopPropagation()}
+        className="w-full max-w-lg rounded-2xl border border-border bg-background p-5 shadow-2xl outline-none"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div
+              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
+                live ? 'bg-amber/20 text-amber' : 'bg-accent/15 text-accent'
+              }`}
+            >
+              {live ? <ShieldAlert className="h-5 w-5" aria-hidden="true" /> : <Play className="h-5 w-5" aria-hidden="true" />}
+            </div>
+            <div>
+              <h2 id="confirm-start-title" className="text-base font-semibold text-foreground">
+                {live ? 'Start the robot on your live account?' : 'Start the trading robot?'}
+              </h2>
+              <p className="mt-0.5 text-sm text-muted-foreground">
+                {live
+                  ? `This will auto-trade your ${liveLabel} ${live ? 'account with REAL money' : 'demo account'}. Review what the robot will do below.`
+                  : 'Review exactly what the robot will do before it starts running.'}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="cursor-pointer rounded-md p-1.5 text-muted-foreground transition-colors duration-150 hover:bg-secondary hover:text-foreground"
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+
+        <dl className="mt-4 grid grid-cols-1 gap-2 rounded-xl border border-border bg-secondary/30 p-4 sm:grid-cols-2">
+          {lines.map((l) => (
+            <div key={l.label} className="min-w-0">
+              <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">{l.label}</dt>
+              <dd className="truncate text-sm font-medium text-foreground" title={l.value}>
+                {l.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+
+        {live && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber/40 bg-amber/10 px-3 py-2">
+            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber" aria-hidden="true" />
+            <p className="text-xs text-amber">
+              Live mode — every signal the robot sees will place a real order. Stops and your risk limits still gate
+              every entry, but losses are real.
+            </p>
+          </div>
+        )}
+
+        <label className="mt-4 flex cursor-pointer items-start gap-2 text-sm text-foreground">
+          <input
+            type="checkbox"
+            checked={accepted}
+            onChange={(e) => setAccepted(e.target.checked)}
+            className="mt-0.5 h-4 w-4 cursor-pointer rounded border-border bg-background accent-[var(--color-accent)]"
+          />
+          <span>
+            <span className="block font-medium">I understand the risk</span>
+            <span className="block text-xs text-muted-foreground">
+              The robot trades automatically and can lose money. I've reviewed the configuration above and accept the
+              risk of running it.
+            </span>
+          </span>
+        </label>
+
+        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant={live ? 'danger' : 'primary'} onClick={onConfirm} disabled={!accepted}>
+            <Play className="h-4 w-4" aria-hidden="true" />
+            {live ? `Start on ${liveLabel}` : 'Start robot'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function Trading() {
   const { user } = useAuth()
   const { profile, refresh: refreshProfile } = useProfile()
@@ -429,6 +588,11 @@ export function Trading() {
   const needsRiskAccept = mode === 'managed' && (profile?.risk_accepted ?? false) !== true
 
   const [seed, setSeed] = useState(DEFAULT_PAPER_BALANCE)
+  // Start-robot confirmation dialog state: `pendingStart` holds the patch that
+  // was requested; the dialog must be confirmed (with the risk checkbox) before
+  // it is applied.
+  const [confirmStart, setConfirmStart] = useState(false)
+  const [pendingStart, setPendingStart] = useState<Parameters<typeof setRisk>[0] | null>(null)
   // The activity feed + "last run" are hydrated from localStorage so a refresh
   // (or returning after closing the tab) keeps showing what the robot has been
   // doing — every entry is timestamped and re-stamped on each update.
@@ -1201,19 +1365,77 @@ export function Trading() {
       return
     }
     if (patch.autoTrade === true && !canRunRobot) return
-    if (patch.autoTrade === true && mode !== 'paper') {
-      let msg: string
-      if (mode === 'managed') {
-        msg = 'You are about to auto-trade on your MANAGED live account — the platform\'s real-size ledger, no external broker. Continue?'
-      } else {
-        const live = liveConn?.account_type === 'live'
-        msg = live
-          ? `WARNING: You are about to auto-trade on your LIVE ${liveLabel} account with REAL money. Every signal will place a real order. Continue?`
-          : `You are about to auto-trade on your ${liveLabel} practice (demo) account. No real money moves. Continue?`
-      }
-      if (!window.confirm(msg)) return
+    if (patch.autoTrade === true) {
+      // Every start — paper AND live — goes through the confirmation dialog so
+      // the user reviews the exact configuration and accepts the risk first.
+      setPendingStart(patch)
+      setConfirmStart(true)
+      return
     }
     setRisk(patch)
+  }
+
+  /** The user confirmed the start dialog — actually turn the robot on. */
+  const confirmRobotStart = () => {
+    if (!pendingStart) return
+    setConfirmStart(false)
+    setRisk(pendingStart)
+    setPendingStart(null)
+  }
+
+  // Summary lines shown in the start-robot confirmation dialog — the exact
+  // configuration being launched, so the acceptance is informed.
+  const confirmLines = useMemo(() => {
+    if (!account) return []
+    const exits = [
+      account.risk.trailingStop && (account.risk.trailPips ?? 0) > 0 ? `trailing ${account.risk.trailPips} pips` : null,
+      (account.risk.profitPullbackPct ?? 0) > 0 ? `${account.risk.profitPullbackPct}% pull-back lock` : null,
+      account.risk.peakReturnClose ? `return-to-peak (${account.risk.peakReturnGivebackPct ?? 10}% give-back)` : null,
+      account.risk.partialTakeProfit ? `scale-out ${account.risk.partialClosePct ?? 50}% at 1R` : null,
+    ].filter(Boolean) as string[]
+    return [
+      { label: 'Mode', value: mode === 'paper' ? 'Paper — simulated money' : mode === 'managed' ? 'Managed live — real-size ledger' : `Live ${liveLabel} — ${liveConn?.account_type === 'live' ? 'REAL money' : 'demo'}` },
+      {
+        label: 'Method',
+        value:
+          prefs.strategyMode === 'manual'
+            ? `${methodLabel(prefs.method)} · ${STRATEGY_META[prefs.manualStrategy].shortLabel} only`
+            : `${methodLabel(prefs.method)} · best method (auto)`,
+      },
+      {
+        label: 'Pairs',
+        value: `${scanPairs.length} pair${scanPairs.length === 1 ? '' : 's'}${prefs.autoPickPairs ? ' (auto-picked)' : ''} · up to ${robotCaps.maxPerPair}/pair`,
+      },
+      { label: 'Position sizing', value: sizingLabel },
+      { label: 'Risk per trade', value: `${riskPct}% of equity` },
+      { label: 'Max open positions', value: String(account.risk.maxOpenPositions) },
+      {
+        label: 'Session limits',
+        value: `profit ${prefs.overallMaxProfitUsd > 0 ? formatUsd(prefs.overallMaxProfitUsd) : 'off'} · loss ${prefs.overallMaxLossUsd > 0 ? formatUsd(prefs.overallMaxLossUsd) : 'off'}`,
+      },
+      { label: 'Daily loss limit', value: `${account.risk.maxDailyLossPct}%` },
+      {
+        label: 'Auto-run duration',
+        value: prefs.durationMinutes == null ? 'Until stopped' : `${prefs.durationMinutes} minute${prefs.durationMinutes === 1 ? '' : 's'}`,
+      },
+      { label: 'Exits', value: exits.length > 0 ? exits.join(' · ') : 'take-profit & stop-loss' },
+    ]
+  }, [account, mode, liveConn, liveLabel, prefs, scanPairs, robotCaps, riskPct, sizingLabel])
+
+  // Copy a pro trader — apply their full configuration (method, pairs, sizing,
+  // exits and risk) to this robot in one click. A 30-day subscriber perk.
+  const proCopyUnlocked =
+    (tier.subscriberDays != null && tier.subscriberDays >= UNLOCK_SUBSCRIPTION_DAYS) || profile?.role === 'admin'
+  const [copiedTrader, setCopiedTrader] = useState<string | null>(null)
+  const copyTrader = (t: ProTrader) => {
+    if (!account) return
+    setRisk(t.config.risk)
+    applyAll({ ...prefs, ...t.config.prefs })
+    setCopiedTrader(t.id)
+    setTuned(null)
+    pushLog([
+      `Copied ${t.name} (${t.handle}) — ${t.style} config applied: ${t.config.prefs.pairCount ?? ''} pairs, ${t.config.risk.riskPerTradePct ?? 1}% risk, ${t.config.risk.profitPullbackPct ?? 0}% pull-back${t.config.risk.peakReturnClose ? ', return-to-peak close' : ''}. Review the Risk panel before starting.`,
+    ])
   }
 
   const acceptRiskNow = async () => {
@@ -1277,6 +1499,26 @@ export function Trading() {
       }
     >
       <div className="flex flex-col gap-5">
+          {/* 3-step beginner guide — the order things matter in: configure the
+              robot first, review its risk, then start it. */}
+          <div className="grid grid-cols-1 gap-2 rounded-xl border border-border bg-secondary/30 p-3 sm:grid-cols-3">
+            {[
+              { n: '1', t: 'Pick method & pairs', d: 'Scalping or long-term, and the pairs the robot scans.' },
+              { n: '2', t: 'Set risk & limits', d: 'Risk per trade, stops, daily and session limits, exits.' },
+              { n: '3', t: 'Review & start', d: 'The start dialog shows the full config — accept the risk and run.' },
+            ].map((s) => (
+              <div key={s.n} className="flex items-start gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent/15 text-xs font-bold text-accent">
+                  {s.n}
+                </span>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-foreground">{s.t}</p>
+                  <p className="text-[11px] leading-snug text-muted-foreground">{s.d}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
           {/* Starter-tier market-open limit notice */}
           {tier.limited ? (
             <div className="flex flex-col gap-2 rounded-xl border border-amber/40 bg-amber/10 p-3 sm:flex-row sm:items-center">
@@ -1340,6 +1582,98 @@ export function Trading() {
               <Sparkles className="h-4 w-4" aria-hidden="true" />
               Apply to robot
             </Button>
+          </div>
+
+          {/* Copy a pro trader — one-click apply of a curated pro's full robot
+              configuration (method, pairs, sizing, exits and risk). A 30-day
+              subscriber perk: free users and starter subscribers see it locked. */}
+          <div className="rounded-xl border border-border bg-secondary/30 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+                  <Copy className="h-4 w-4 text-accent" aria-hidden="true" />
+                  Copy a pro trader
+                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Apply a curated pro's whole configuration — method, pairs, sizing, exits and risk — to your robot in
+                  one click. Review the Risk panel before starting.
+                </p>
+              </div>
+              {!proCopyUnlocked && (
+                <Badge className="border-amber/40 bg-amber/10 text-amber">
+                  <Lock className="h-3 w-3" aria-hidden="true" />
+                  Subscriber perk — {UNLOCK_SUBSCRIPTION_DAYS} days
+                </Badge>
+              )}
+            </div>
+            {proCopyUnlocked ? (
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {PRO_TRADERS.map((t) => {
+                  const copied = copiedTrader === t.id
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => copyTrader(t)}
+                      aria-pressed={copied}
+                      className={cn(
+                        'group cursor-pointer rounded-xl border p-3 text-left transition-colors duration-150',
+                        copied
+                          ? 'border-up/40 bg-up/5'
+                          : 'border-border bg-secondary/40 hover:border-accent/40 hover:bg-accent/5',
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2.5">
+                          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/15 text-xs font-bold text-accent">
+                            {t.initials}
+                          </span>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-foreground">{t.name}</p>
+                            <p className="text-[11px] text-muted-foreground">{t.handle}</p>
+                          </div>
+                        </div>
+                        <Badge className="shrink-0 border-accent/40 bg-accent/10 text-accent">{t.style}</Badge>
+                      </div>
+                      <p className="mt-2 line-clamp-2 text-[11px] leading-snug text-muted-foreground">{t.bio}</p>
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <p className="text-[11px] text-muted-foreground">
+                          <span className="font-semibold text-up">{t.winRate}%</span> win ·{' '}
+                          <span className="font-semibold text-foreground">+{formatUsd(t.avgMonthlyPnlUsd)}</span>/mo ·{' '}
+                          <span className="tnum">{t.followers.toLocaleString()}</span> followers
+                        </p>
+                        <span
+                          className={cn(
+                            'inline-flex shrink-0 items-center gap-1 text-xs font-semibold transition-colors duration-150',
+                            copied ? 'text-up' : 'text-accent group-hover:text-foreground',
+                          )}
+                        >
+                          {copied ? (
+                            <>
+                              <Check className="h-3.5 w-3.5" aria-hidden="true" /> Applied
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="h-3.5 w-3.5" aria-hidden="true" /> Copy
+                            </>
+                          )}
+                        </span>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="mt-3 flex items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
+                <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber" aria-hidden="true" />
+                <p className="text-xs text-muted-foreground">
+                  Copying a pro trader unlocks after {UNLOCK_SUBSCRIPTION_DAYS} days with an active subscription
+                  {tier.subscriberDays != null ? <> — you're at {tier.subscriberDays} day{tier.subscriberDays === 1 ? '' : 's'} now</> : ''}
+                  . It applies the trader's full configuration (method, pairs, sizing, exits and risk) to your robot in
+                  one click.
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Pick lot — REQUIRED pre-start step. The robot opens every trade
@@ -1457,65 +1791,6 @@ export function Trading() {
                 </div>
               )}
             </div>
-          </div>
-
-          {/* Start / stop */}
-          {balanceLocked && !autoTrade && (
-            <div className="flex items-start gap-3 rounded-xl border border-amber/40 bg-amber/10 p-3">
-              <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber" aria-hidden="true" />
-              <p className="text-sm text-muted-foreground">
-                <span className="font-semibold text-amber">Balance is below $1 — trading is locked.</span> The robot
-                won't start and the trade forms are disabled until you reset or top up the account. If balance or
-                equity ever hits $0.01, the robot stops and closes everything automatically.
-              </p>
-            </div>
-          )}
-          <div
-            className={cn(
-              'flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between',
-              autoTrade ? 'border-up/30 bg-up/5' : 'border-border bg-secondary/30',
-            )}
-          >
-            <div>
-              <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                {maxLossHit && <span className="h-2 w-2 shrink-0 rounded-full bg-down" aria-hidden="true" />}
-                {autoTrade && <span className="h-2 w-2 shrink-0 animate-pulse-dot rounded-full bg-up" aria-hidden="true" />}
-                {maxLossHit ? (
-                  <span className="text-down">Max loss reached — robot stopped</span>
-                ) : autoTrade ? (
-                  'Robot is live — trading the strongest setups'
-                ) : (
-                  'Robot is standing by'
-                )}
-              </p>
-              <p className="mt-0.5 text-sm text-muted-foreground">
-                {maxLossHit
-                  ? `The last run lost ${formatUsd(Math.abs(lastSessionPnl ?? 0))} against your ${formatUsd(prefs.overallMaxLossUsd)} max-loss limit, so the robot parked itself. Raise the session Max loss (and press Apply) or reset the account to run again.`
-                  : autoTrade
-                    ? prefs.strategyMode === 'manual'
-                      ? `Scanning ${robotPairs.length} pair${robotPairs.length === 1 ? '' : 's'} · ${STRATEGY_META[prefs.manualStrategy].shortLabel} method only, strongest signals first.`
-                      : `Scanning ${robotPairs.length} pair${robotPairs.length === 1 ? '' : 's'} · every strategy evaluated on each · up to ${robotCaps.maxPerPair} position${robotCaps.maxPerPair === 1 ? '' : 's'} per pair, strongest setups first.`
-                    : 'Start the robot to auto-trade the strongest signal across your selected pairs — always risk-sized with a stop-loss.'}
-              </p>
-            </div>
-            <Button
-              variant={autoTrade ? 'danger' : 'primary'}
-              size="lg"
-              onClick={() => void (autoTrade ? stopRobotAndFlatten() : guardedSetRisk({ autoTrade: true }))}
-              disabled={!canRunRobot || stopping || (balanceLocked && !autoTrade) || (maxLossHit && !autoTrade) || (!sizingValid && !autoTrade)}
-              loading={stopping}
-              title={
-                maxLossHit
-                  ? 'Session max loss reached — raise the Max loss limit (Apply) or reset the account to start again.'
-                  : !sizingValid
-                    ? 'Pick a fixed lot first — the robot opens every trade at the lot you choose (0.01 or more).'
-                    : undefined
-              }
-              className={cn('w-full shrink-0 sm:w-auto sm:min-w-44', autoTrade && 'animate-pulse-glow')}
-            >
-              {autoTrade ? <Pause className="h-4 w-4" aria-hidden="true" /> : <Play className="h-4 w-4" aria-hidden="true" />}
-              {autoTrade ? (stopping ? 'Closing positions…' : 'Stop robot & close all') : 'Start robot'}
-            </Button>
           </div>
 
           {/* Run window — choose how long the robot trades BEFORE starting it. */}
@@ -2119,6 +2394,67 @@ export function Trading() {
             </div>
           </div>
 
+          {/* Start / stop — placed AFTER the configuration sections so the
+              robot is only started once method, pairs, sizing, risk and
+              limits are set. Starting opens the confirmation dialog. */}
+          {balanceLocked && !autoTrade && (
+            <div className="flex items-start gap-3 rounded-xl border border-amber/40 bg-amber/10 p-3">
+              <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber" aria-hidden="true" />
+              <p className="text-sm text-muted-foreground">
+                <span className="font-semibold text-amber">Balance is below $1 — trading is locked.</span> The robot
+                won't start and the trade forms are disabled until you reset or top up the account. If balance or
+                equity ever hits $0.01, the robot stops and closes everything automatically.
+              </p>
+            </div>
+          )}
+          <div
+            className={cn(
+              'flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between',
+              autoTrade ? 'border-up/30 bg-up/5' : 'border-border bg-secondary/30',
+            )}
+          >
+            <div>
+              <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                {maxLossHit && <span className="h-2 w-2 shrink-0 rounded-full bg-down" aria-hidden="true" />}
+                {autoTrade && <span className="h-2 w-2 shrink-0 animate-pulse-dot rounded-full bg-up" aria-hidden="true" />}
+                {maxLossHit ? (
+                  <span className="text-down">Max loss reached — robot stopped</span>
+                ) : autoTrade ? (
+                  'Robot is live — trading the strongest setups'
+                ) : (
+                  'Robot is standing by'
+                )}
+              </p>
+              <p className="mt-0.5 text-sm text-muted-foreground">
+                {maxLossHit
+                  ? `The last run lost ${formatUsd(Math.abs(lastSessionPnl ?? 0))} against your ${formatUsd(prefs.overallMaxLossUsd)} max-loss limit, so the robot parked itself. Raise the session Max loss (and press Apply) or reset the account to run again.`
+                  : autoTrade
+                    ? prefs.strategyMode === 'manual'
+                      ? `Scanning ${robotPairs.length} pair${robotPairs.length === 1 ? '' : 's'} · ${STRATEGY_META[prefs.manualStrategy].shortLabel} method only, strongest signals first.`
+                      : `Scanning ${robotPairs.length} pair${robotPairs.length === 1 ? '' : 's'} · every strategy evaluated on each · up to ${robotCaps.maxPerPair} position${robotCaps.maxPerPair === 1 ? '' : 's'} per pair, strongest setups first.`
+                    : 'Start the robot to auto-trade the strongest signal across your selected pairs — always risk-sized with a stop-loss.'}
+              </p>
+            </div>
+            <Button
+              variant={autoTrade ? 'danger' : 'primary'}
+              size="lg"
+              onClick={() => void (autoTrade ? stopRobotAndFlatten() : guardedSetRisk({ autoTrade: true }))}
+              disabled={!canRunRobot || stopping || (balanceLocked && !autoTrade) || (maxLossHit && !autoTrade) || (!sizingValid && !autoTrade)}
+              loading={stopping}
+              title={
+                maxLossHit
+                  ? 'Session max loss reached — raise the Max loss limit (Apply) or reset the account to start again.'
+                  : !sizingValid
+                    ? 'Pick a fixed lot first — the robot opens every trade at the lot you choose (0.01 or more).'
+                    : undefined
+              }
+              className={cn('w-full shrink-0 sm:w-auto sm:min-w-44', autoTrade && 'animate-pulse-glow')}
+            >
+              {autoTrade ? <Pause className="h-4 w-4" aria-hidden="true" /> : <Play className="h-4 w-4" aria-hidden="true" />}
+              {autoTrade ? (stopping ? 'Closing positions…' : 'Stop robot & close all') : 'Start robot'}
+            </Button>
+          </div>
+
           {/* Strategy profile + chart timeframe (duration moved up next to Start) */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary/40 px-3 py-2">
@@ -2404,6 +2740,18 @@ export function Trading() {
           </CardContent>
         </Card>
       )}
+
+      <ConfirmStartDialog
+        open={confirmStart}
+        onClose={() => {
+          setConfirmStart(false)
+          setPendingStart(null)
+        }}
+        onConfirm={confirmRobotStart}
+        lines={confirmLines}
+        live={mode !== 'paper' && (mode === 'managed' || liveConn?.account_type === 'live')}
+        liveLabel={mode === 'managed' ? 'managed' : liveLabel}
+      />
     </div>
   )
 }

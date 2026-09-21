@@ -12,12 +12,18 @@
  * migrate to 'fixed' when a lot was picked and to 'risk' otherwise, so nothing
  * already configured changes behaviour.
  */
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Interval, RobotPrefs, StrategyMode, StrategyType, TradingMethod } from '../types'
 import { MIN_LOT, normalizeLots } from './lots'
 import type { RiskConfig } from './types'
 
 const KEY = 'ana24.robot-prefs'
+/** Namespaced key for a robot slot: slot 1 keeps the legacy key so existing
+ *  users keep their saved configuration; slots 2..N get their own key so each
+ *  robot can trade with its own method, pairs, sizing and limits. */
+export function prefsKeyForSlot(slot: number): string {
+  return slot > 1 ? `${KEY}.slot-${slot}` : KEY
+}
 export const MIN_RISK_PCT = 0.05
 export const MAX_RISK_PCT = 10
 /** Concrete fallback so optional RobotPrefs fields never leak `undefined`. */
@@ -63,9 +69,9 @@ export function isStrategyType(v: unknown): v is StrategyType {
   return typeof v === 'string' && STRATEGY_TYPES_SET.has(v)
 }
 
-export function loadRobotPrefs(): RobotPrefs {
+export function loadRobotPrefs(slot = 1): RobotPrefs {
   try {
-    const raw = localStorage.getItem(KEY)
+    const raw = localStorage.getItem(prefsKeyForSlot(slot))
     if (!raw) return DEFAULTS
     const p = JSON.parse(raw) as Partial<RobotPrefs>
     // Legacy save: a previously picked integer lot keeps meaning "fixed lot";
@@ -100,19 +106,20 @@ export function loadRobotPrefs(): RobotPrefs {
   }
 }
 
-export function useRobotPrefs() {
-  const [prefs, setPrefs] = useState<RobotPrefs>(loadRobotPrefs)
+export function useRobotPrefs(slot = 1) {
+  const [prefs, setPrefs] = useState<RobotPrefs>(() => loadRobotPrefs(slot))
   const update = useCallback((patch: Partial<RobotPrefs>) => {
     setPrefs((prev) => {
       const next = { ...prev, ...patch }
       try {
-        localStorage.setItem(KEY, JSON.stringify(next))
+        localStorage.setItem(prefsKeyForSlot(slot), JSON.stringify(next))
       } catch {
         /* noop */
       }
       return next
     })
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slot])
   return {
     prefs,
     /** Replace every field at once (used by the one-click settings presets). */

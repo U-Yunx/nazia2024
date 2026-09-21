@@ -19,6 +19,7 @@ export type CloseReason =
   | 'risk'
   | 'robot_stop'
   | 'pullback'
+  | 'peak_return'
   | 'drawdown'
 export type TradingMethod = 'scalping' | 'longterm'
 export type StrategyMode = 'auto' | 'manual'
@@ -49,6 +50,14 @@ export interface Position {
   targetLossUsd?: number
   /** Best unrealized PnL reached while open — profit-pullback lock. */
   peakProfitUsd?: number
+  /**
+   * Set by the peak-return rule once a position gave back
+   * `risk.peakReturnGivebackPct` from its best unrealized PnL ("it dipped").
+   * While set, the peak is frozen at the LAST highest profit and markToMarket
+   * closes the trade the moment PnL returns to it (reason 'peak_return').
+   * Mirrors the client engine so browser and server behave the same.
+   */
+  peakRetraced?: boolean
   /**
    * Price this position was last marked at. The drawdown stop uses the gap
    * between two consecutive marks to tell a fast crash (one giant step that
@@ -138,6 +147,21 @@ export interface RiskConfig {
    *  profit has exceeded this amount (default $1: "active once profit > $1"). */
   profitPullbackActivateUsd: number
   /**
+   * Peak-return close: when a position's unrealized PnL profited, gave back
+   * `peakReturnGivebackPct` from its peak, then rallied BACK to that same
+   * highest profit, markToMarket closes it right there (reason 'peak_return')
+   * — "watch it dip, then bank it the moment it returns to the top".
+   * Mirrors the client engine. Off by default.
+   */
+  peakReturnClose: boolean
+  /**
+   * How much a position must give back from its peak unrealized PnL (as a %)
+   * before the peak-return close arms. 10 = dipped 10% off its best profit
+   * before a return to the peak counts as a close signal. Guards against
+   * closing on sub-pip noise right at the high.
+   */
+  peakReturnGivebackPct: number
+  /**
    * Drawdown stop (%): a losing position is closed once down this % from its
    * entry price — the slow bleed case. EXCEPTION: when the whole band is
    * crossed in one fast mark (crash) the position is held open instead
@@ -179,6 +203,8 @@ export const DEFAULT_RISK: RiskConfig = {
   volatilityFilter: false,
   profitPullbackPct: 25,
   profitPullbackActivateUsd: 1,
+  peakReturnClose: false,
+  peakReturnGivebackPct: 10,
   drawdownClosePct: 25,
   partialTakeProfit: false,
   partialClosePct: 50,
@@ -958,7 +984,10 @@ function trailStops(state: AccountState, rates: RatesMap): AccountState {
   return positions === state.positions ? state : { ...state, positions }
 }
 
-/** Track each position's best unrealized PnL for the profit-pullback lock. */
+/** Track each position's best unrealized PnL for the profit-pullback lock and
+ * the peak-return close. Only runs while either rule is on; returns the same
+ * state reference when nothing moved, so an idling account never churns
+ * persistence writes. */
 function trackProfitPeaks(state: AccountState, rates: RatesMap): AccountState {
   let changed = false
   const positions = state.positions.map((p) => {
@@ -966,7 +995,21 @@ function trackProfitPeaks(state: AccountState, rates: RatesMap): AccountState {
     if (cur == null) return p
     const pnl = pnlUsd(p.side, p.entryPrice, cur, p.units, p.symbol, rates)
     const peak = p.peakProfitUsd ?? 0
-    if (pnl > peak) {
+    // Peak-return arm: once the position gave back `peakReturnGivebackPct`
+    // from its best profit, freeze the peak at the LAST highest and mark it
+    // retraced — a later rally back to that peak is the close signal. The arm
+    // only engages after profit passed the $1 activation floor.
+    if (state.risk.peakReturnClose && !p.peakRetraced) {
+      const activate = state.risk.profitPullbackActivateUsd ?? 1
+      const giveback = (state.risk.peakReturnGivebackPct ?? 10) / 100
+      if (peak > activate && pnl <= peak * (1 - giveback)) {
+        changed = true
+        return { ...p, peakRetraced: true }
+      }
+    }
+    // New high → raise the peak. Frozen (retraced) peaks never move while the
+    // rule is on; if the user turned the rule off, tracking resumes.
+    if (pnl > peak && !(state.risk.peakReturnClose && p.peakRetraced)) {
       changed = true
       return { ...p, peakProfitUsd: pnl }
     }
@@ -1007,8 +1050,9 @@ export function markToMarket(
   if (state.risk.trailingStop && state.risk.trailPips > 0) {
     next = trailStops(next, rates)
   }
-  // Profit-pullback lock — record peaks first so give-back is measured this pass.
-  if (state.risk.profitPullbackPct > 0) {
+  // Profit-pullback lock / peak-return — record peaks first so give-back is
+  // measured this pass.
+  if (state.risk.profitPullbackPct > 0 || state.risk.peakReturnClose) {
     next = trackProfitPeaks(next, rates)
   }
   // Drawdown stop — record each position's last marked price up front so the
@@ -1073,6 +1117,21 @@ export function markToMarket(
       const activate = state.risk.profitPullbackActivateUsd ?? 1
       if (peak > activate && pnl <= peak * (1 - state.risk.profitPullbackPct / 100)) {
         reason = 'pullback'
+      }
+    }
+
+    // Peak-return close — a trade that profited, gave back
+    // `peakReturnGivebackPct` from its peak, then rallied BACK to that same
+    // highest profit is closed right at the peak ("watch it dip, then bank it
+    // the moment it returns to the top"). The arm (`peakRetraced`) is set in
+    // trackProfitPeaks; once armed the peak is frozen, so a return to it is
+    // unambiguous. Mirrors the client engine.
+    if (!reason && state.risk.peakReturnClose && p.peakRetraced) {
+      const pnl = pnlUsd(p.side, p.entryPrice, cur, p.units, p.symbol, rates)
+      const peak = p.peakProfitUsd ?? 0
+      const activate = state.risk.profitPullbackActivateUsd ?? 1
+      if (peak > activate && pnl >= peak - 1e-9) {
+        reason = 'peak_return'
       }
     }
 
@@ -1150,7 +1209,18 @@ function closePartial(
       balance: state.balance + pnl,
       positions: state.positions.map((p) =>
         p.id === position.id
-          ? { ...p, units: position.units - closeUnits, stopPrice: position.entryPrice, partialTaken: true }
+          ? {
+              ...p,
+              units: position.units - closeUnits,
+              stopPrice: position.entryPrice,
+              partialTaken: true,
+              // Fresh leg — reset the pullback peak, peak-return arm and
+              // price-mark history so rules measure from the split.
+              peakProfitUsd: 0,
+              peakRetraced: false,
+              lastMarkPrice: undefined,
+              crashHold: undefined,
+            }
           : p,
       ),
       trades: [trade, ...state.trades],

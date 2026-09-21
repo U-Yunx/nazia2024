@@ -606,6 +606,109 @@ describe('profit pull-back lock', () => {
   })
 })
 
+describe('peak-return close', () => {
+  // 1000 units EUR/USD: pnl = (price − 1.1) × 1000. Profit $2 at 1.102.
+  // 10% give-back arm → peak must dip by ≥ $0.20 before a return to the peak
+  // counts as a close. The pull-back lock is off so only peak-return runs.
+  const open = (acc = createAccount(10_000)) => {
+    acc.risk.trailingStop = false
+    acc.risk.profitPullbackPct = 0
+    acc.risk.peakReturnClose = true
+    acc.risk.peakReturnGivebackPct = 10
+    return openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
+    }, rates).state
+  }
+
+  it('closes AT the peak after a dip and a rally back to the last highest profit', () => {
+    const opened = open()
+    // Price rises to 1.102 → peak $2, nothing closes.
+    const up = markToMarket(opened, { ...rates, 'EUR/USD': 1.102 })
+    expect(up.closed).toHaveLength(0)
+    expect(up.state.positions[0].peakProfitUsd).toBeCloseTo(2, 5)
+
+    // Price dips to 1.1005 → PnL $0.50, a 75% give-back from the $2 peak →
+    // the arm engages (peakRetraced) and the peak freezes at $2.
+    const dipped = markToMarket(up.state, { ...rates, 'EUR/USD': 1.1005 })
+    expect(dipped.closed).toHaveLength(0)
+    expect(dipped.state.positions[0].peakRetraced).toBe(true)
+    expect(dipped.state.positions[0].peakProfitUsd).toBeCloseTo(2, 5)
+
+    // Price climbs back to the peak (1.102) → closed AT the highest profit.
+    const back = markToMarket(dipped.state, { ...rates, 'EUR/USD': 1.102 })
+    expect(back.closed).toHaveLength(1)
+    expect(back.closed[0].closeReason).toBe('peak_return')
+    expect(back.closed[0].pnl).toBeCloseTo(2, 5)
+    expect(back.state.positions).toHaveLength(0)
+  })
+
+  it('stays open while the price never returns to the peak', () => {
+    const opened = open()
+    const up = markToMarket(opened, { ...rates, 'EUR/USD': 1.102 })
+    const dipped = markToMarket(up.state, { ...rates, 'EUR/USD': 1.1005 })
+    expect(dipped.state.positions[0].peakRetraced).toBe(true)
+    // Recovery only part of the way back — still below the frozen peak.
+    const partial = markToMarket(dipped.state, { ...rates, 'EUR/USD': 1.1015 })
+    expect(partial.closed).toHaveLength(0)
+    expect(partial.state.positions).toHaveLength(1)
+  })
+
+  it('is off by default and never arms without peakReturnClose', () => {
+    const acc = createAccount(10_000)
+    acc.risk.trailingStop = false
+    acc.risk.profitPullbackPct = 0 // isolate peak-return from the pull-back lock
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
+    }, rates)
+    const up = markToMarket(opened, { ...rates, 'EUR/USD': 1.102 })
+    const dipped = markToMarket(up.state, { ...rates, 'EUR/USD': 1.1005 })
+    const back = markToMarket(dipped.state, { ...rates, 'EUR/USD': 1.102 })
+    expect(back.closed).toHaveLength(0)
+    expect(back.state.positions[0].peakRetraced).toBeUndefined()
+  })
+
+  it('shares the $1 activation floor — a sub-dollar peak never arms', () => {
+    const acc = createAccount(10_000)
+    acc.risk.trailingStop = false
+    acc.risk.profitPullbackPct = 0
+    acc.risk.peakReturnClose = true
+    acc.risk.peakReturnGivebackPct = 10
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
+    }, rates)
+    // Peak $0.60 — under the $1 arm. A full dip then return to the peak must
+    // NOT close (the rule never armed).
+    const up = markToMarket(opened, { ...rates, 'EUR/USD': 1.1006 })
+    expect(up.state.positions[0].peakProfitUsd).toBeCloseTo(0.6, 5)
+    const dipped = markToMarket(up.state, { ...rates, 'EUR/USD': 1.1001 })
+    const back = markToMarket(dipped.state, { ...rates, 'EUR/USD': 1.1006 })
+    expect(back.closed).toHaveLength(0)
+    expect(back.state.positions).toHaveLength(1)
+  })
+
+  it('works on shorts (peak is the lowest price, return = price back down)', () => {
+    const acc = createAccount(10_000)
+    acc.risk.trailingStop = false
+    acc.risk.profitPullbackPct = 0
+    acc.risk.peakReturnClose = true
+    acc.risk.peakReturnGivebackPct = 10
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'short', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
+    }, rates)
+    // Price falls to 1.098 → peak $2.
+    const down = markToMarket(opened, { ...rates, 'EUR/USD': 1.098 })
+    expect(down.state.positions[0].peakProfitUsd).toBeCloseTo(2, 5)
+    // Price rises to 1.0995 → PnL $0.50, a 75% give-back → armed.
+    const dipped = markToMarket(down.state, { ...rates, 'EUR/USD': 1.0995 })
+    expect(dipped.state.positions[0].peakRetraced).toBe(true)
+    // Price returns to the low (1.098) → closed at the peak profit.
+    const back = markToMarket(dipped.state, { ...rates, 'EUR/USD': 1.098 })
+    expect(back.closed).toHaveLength(1)
+    expect(back.closed[0].closeReason).toBe('peak_return')
+    expect(back.closed[0].pnl).toBeCloseTo(2, 5)
+  })
+})
+
 describe('drawdown stop (25%) with fast-crash hold', () => {
   // 6000-pip stop on EUR/USD = stop at 0.50, far below any price these tests
   // visit, so the % drawdown rule (not the raw stop) is what's under test.
