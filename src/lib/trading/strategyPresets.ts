@@ -16,7 +16,7 @@
  * Applying a preset is a pure patch: the UI calls `setRisk(preset.risk)` and
  * `applyAll(preset.prefs)` and the robot picks it up on the next cycle.
  */
-import type { RobotPrefs, TradingMethod } from '../../types'
+import type { RobotPrefs, TradingMethod } from '../types'
 import type { RiskConfig } from './types'
 
 export interface StrategyPreset {

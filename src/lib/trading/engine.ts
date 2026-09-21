@@ -218,8 +218,8 @@ export function openPosition(
   const tp1Price =
     risk.partialTakeProfit && (risk.partialTpRatio ?? 1) > 0
       ? input.side === 'long'
-        ? input.entryPrice + (risk.partialTpRatio ?? 1) * Math.abs(entryPrice - stopPrice)
-        : input.entryPrice - (risk.partialTpRatio ?? 1) * Math.abs(entryPrice - stopPrice)
+        ? input.entryPrice + (risk.partialTpRatio ?? 1) * Math.abs(input.entryPrice - stopPrice)
+        : input.entryPrice - (risk.partialTpRatio ?? 1) * Math.abs(input.entryPrice - stopPrice)
       : undefined
 
   const position = {
@@ -344,7 +344,19 @@ function closePartial(
       balance: state.balance + pnl,
       positions: state.positions.map((p) =>
         p.id === position.id
-          ? { ...p, units: position.units - closeUnits, stopPrice: position.entryPrice, partialTaken: true }
+          ? {
+              ...p,
+              units: position.units - closeUnits,
+              stopPrice: position.entryPrice,
+              partialTaken: true,
+              // The remainder is a fresh leg — reset the profit-pullback peak
+              // and price-mark history so the give-back / drawdown rules
+              // measure from the split, not from the pre-split position
+              // (whose peak was recorded against the FULL unit count).
+              peakProfitUsd: 0,
+              lastMarkPrice: undefined,
+              crashHold: undefined,
+            }
           : p,
       ),
       trades: [trade, ...state.trades],
