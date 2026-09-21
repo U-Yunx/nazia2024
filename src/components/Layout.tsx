@@ -32,6 +32,7 @@ const PUBLIC_NAV: NavItem[] = [
 
 const APP_NAV: NavItem[] = [
   { to: '/trading', label: 'Trading' },
+  { to: '/robots', label: 'Robots' },
   { to: '/performance', label: 'Performance' },
   { to: '/signals', label: 'Signals' },
   { to: '/backtester', label: 'Backtester' },

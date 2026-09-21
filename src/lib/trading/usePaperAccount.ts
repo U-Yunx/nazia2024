@@ -31,6 +31,13 @@ function initialMode(): BrokerMode {
   }
 }
 
+/** Robot on/off flag key: slot 1 keeps the legacy per-user key; other slots are
+ *  namespaced so a refresh on robot 2 can't turn robot 1 back on. */
+function stateKey(userId: string | undefined, robot: number): string | undefined {
+  if (!userId) return undefined
+  return robot > 1 ? `${userId}:slot-${robot}` : userId
+}
+
 export const DEFAULT_PAPER_BALANCE = 10_000
 
 /**
@@ -39,8 +46,11 @@ export const DEFAULT_PAPER_BALANCE = 10_000
  * UI never talks to the engine directly. `connectionIds` maps each live platform
  * to the broker_connections row it should trade (one per connected broker) —
  * when omitted the bridges fall back to the user's default robot slot.
+ * `robot` selects which robot slot this ledger belongs to (1 = first/default);
+ * each slot gets its own balance, trades and saved settings so several robots
+ * can run side by side.
  */
-export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string }) {
+export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string }, robot = 1) {
   const { user } = useAuth()
   const [account, setAccount] = useState<AccountState | null>(null)
   const [loading, setLoading] = useState(true)
@@ -50,7 +60,7 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string })
   stateRef.current = account
   const userRef = useRef(user)
   userRef.current = user
-  /** Serialized signature of the last remotely-saved state, per user. */
+  /** Serialized signature of the last remotely-saved state, per user + slot. */
   const lastSavedRef = useRef<string | null>(null)
 
   useEffect(() => {
@@ -59,15 +69,15 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string })
     void (async () => {
       const u = userRef.current
       let next: AccountState | null = null
-      if (u) next = await loadRemote(u)
-      if (!next) next = loadLocal()
+      if (u) next = await loadRemote(u, robot)
+      if (!next) next = loadLocal(robot)
       if (!next) next = createAccount(DEFAULT_PAPER_BALANCE)
       // Restore the robot's on/off state across refreshes / tab closes. Live
       // OANDA / MetaTrader mirrors are never saved (the broker is the source of
       // truth), so the flag written on every start/stop is the only record of
       // whether the robot was running. Paper / managed already carry it on the
       // account — the flag is applied uniformly so every mode behaves the same.
-      if (next && loadRobotRunning(u?.id)) {
+      if (next && loadRobotRunning(stateKey(u?.id, robot))) {
         next = { ...next, risk: { ...next.risk, autoTrade: true } }
       }
       if (active) {
@@ -78,7 +88,7 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string })
     return () => {
       active = false
     }
-  }, [user?.id])
+  }, [user?.id, robot])
 
   useEffect(() => {
     if (!account || loading) return
@@ -86,17 +96,17 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string })
     // "managed live" ledger). Live OANDA / MetaTrader mirrors are never saved —
     // their authoritative state is always re-fetched from the broker.
     if (account.broker === 'oanda' || account.broker === 'mt') return
-    saveLocal(account)
+    saveLocal(account, robot)
     const u = userRef.current
     if (!u) return
     // Skip the remote rewrite when nothing changed since the last save — e.g.
     // the mount-time echo of an account that's already on the server. Without
     // this, every page load deleted and re-inserted the whole trade ledger.
-    const signature = u.id + ':' + JSON.stringify({ b: account.balance, r: account.risk, p: account.positions, t: account.trades })
+    const signature = u.id + ':' + robot + ':' + JSON.stringify({ b: account.balance, r: account.risk, p: account.positions, t: account.trades })
     if (lastSavedRef.current === signature) return
     lastSavedRef.current = signature
     const id = setTimeout(() => {
-      void saveRemote(u, account)
+      void saveRemote(u, account, robot)
     }, 400)
     return () => {
       clearTimeout(id)
@@ -104,7 +114,7 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string })
       // freshly created account is still written on the next effect run.
       if (lastSavedRef.current === signature) lastSavedRef.current = null
     }
-  }, [account, loading])
+  }, [account, loading, robot])
 
   const commit = useCallback((next: AccountState) => setAccount(next), [])
 
@@ -208,9 +218,9 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string })
     // every mode — live broker mirrors are never persisted, so this flag is
     // their only record of whether the robot was running.
     if (typeof patch.autoTrade === 'boolean') {
-      saveRobotRunning(patch.autoTrade, userRef.current?.id)
+      saveRobotRunning(patch.autoTrade, stateKey(userRef.current?.id, robot))
     }
-  }, [])
+  }, [robot])
 
   /** Emergency stop: disable auto-trading. */
   const stopRobot = useCallback(() => {
@@ -218,8 +228,8 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string })
     if (!cur) return
     if (!cur.risk.autoTrade) return
     setAccount({ ...cur, risk: { ...cur.risk, autoTrade: false } })
-    saveRobotRunning(false, userRef.current?.id)
-  }, [])
+    saveRobotRunning(false, stateKey(userRef.current?.id, robot))
+  }, [robot])
 
   /** Close every open position at the current market price (stop-loss button). */
   const closeAll = useCallback(
@@ -315,17 +325,17 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string })
 
   const reset = useCallback(
     (initialBalance: number) => {
-      clearLocal()
+      clearLocal(robot)
       setAccount(createAccount(initialBalance))
       // A fresh account starts with the robot off — forget any saved running
       // flag so a reload doesn't bring it back on.
-      clearRobotRunning(userRef.current?.id)
+      clearRobotRunning(stateKey(userRef.current?.id, robot))
       // Wipe the Supabase mirror too, otherwise a signed-in user's reload loads
       // the old account + trades back from the server (see resetRemote).
       const u = userRef.current
-      if (u) void resetRemote(u, initialBalance)
+      if (u) void resetRemote(u, initialBalance, robot)
     },
-    [],
+    [robot],
   )
 
   /**
@@ -337,17 +347,17 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string })
    * position sizes stay honest, like opening a real micro account.
    */
   const setAccountKind = useCallback((kind: PaperAccountKind, customBalance?: number) => {
-    clearLocal()
+    clearLocal(robot)
     const balance =
       kind === 'custom'
         ? Math.max(MIN_PAPER_DEPOSIT, Math.round(customBalance ?? MIN_PAPER_DEPOSIT))
         : startingBalanceForKind(kind)
     const fresh = createAccount(balance)
     setAccount({ ...fresh, risk: { ...fresh.risk, kind } })
-    clearRobotRunning(userRef.current?.id)
+    clearRobotRunning(stateKey(userRef.current?.id, robot))
     const u = userRef.current
-    if (u) void resetRemote(u, balance)
-  }, [])
+    if (u) void resetRemote(u, balance, robot)
+  }, [robot])
 
   const setBrokerMode = useCallback((m: BrokerMode) => {
     setMode(m)

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { Activity, Check, Copy, ListChecks, Lock, Pause, Play, ShieldAlert, Sliders, Sparkles, Target, Timer, Wallet, X } from 'lucide-react'
 import { DEFAULT_PAPER_BALANCE, usePaperAccount } from '../lib/trading/usePaperAccount'
 import { useRobotPrefs, methodInterval, methodLabel, methodRiskDefaults } from '../lib/trading/robotPrefs'
@@ -111,6 +111,31 @@ function MethodToggle({ method, onChange }: { method: TradingMethod; onChange: (
         >
           {methodLabel(m)}
         </button>
+      ))}
+    </div>
+  )
+}
+
+/** Robot-slot switcher — /trading?robot=N. Each slot has its own account,
+ *  settings and history, so switching swaps the whole page to that robot. */
+function SlotSwitcher({ slot }: { slot: number }) {
+  const slots = [1, 2, 3]
+  return (
+    <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-secondary/40 p-1" role="group" aria-label="Robot slot">
+      {slots.map((n) => (
+        <Link
+          key={n}
+          to={n === 1 ? '/trading' : `/trading?robot=${n}`}
+          aria-pressed={slot === n}
+          aria-label={`Robot ${n}`}
+          title={slot === n ? `Robot ${n} — the slot you're viewing` : `Open Robot ${n}`}
+          className={cn(
+            'h-8 cursor-pointer rounded-md px-3 text-sm font-medium transition-colors duration-150',
+            slot === n ? 'bg-accent text-black' : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {n}
+        </Link>
       ))}
     </div>
   )
@@ -462,6 +487,13 @@ function ConfirmStartDialog({
 
 export function Trading() {
   const { user } = useAuth()
+  const [searchParams] = useSearchParams()
+  // Which robot slot this page controls: /trading?robot=2 → slot 2 (1 default).
+  const robot = Math.min(3, Math.max(1, Number(searchParams.get('robot')) || 1))
+  // localStorage/Supabase scope id: slot 1 keeps the legacy per-user keys so
+  // existing users keep their saved settings, feed and run state; slots 2..N
+  // are namespaced so every robot keeps its own balance, prefs and history.
+  const scopeId = robot > 1 ? (user?.id ? `${user.id}:slot-${robot}` : `slot-${robot}`) : user?.id
   const { profile, refresh: refreshProfile } = useProfile()
   const { subscriptions } = useSubscriptions(user?.id)
   const access = useAccess(profile, subscriptions)
@@ -487,7 +519,7 @@ export function Trading() {
     flattenAll,
     reset,
     setAccountKind,
-  } = usePaperAccount({ oanda: oandaConn?.id, mt: mtConn?.id })
+  } = usePaperAccount({ oanda: oandaConn?.id, mt: mtConn?.id }, robot)
   const [strategy, updateStrategy] = useSelectedStrategy()
   const {
     prefs,
@@ -509,7 +541,7 @@ export function Trading() {
     setSizingMode,
     setRiskPerTradePct,
     setLot,
-  } = useRobotPrefs()
+  } = useRobotPrefs(robot)
   // Draft copies of the per-trade stops (pips) and session limits (USD) — the
   // robot keeps trading on the committed prefs until "Apply limits" is pressed.
   const [draftTradeLimits, setDraftTradeLimits] = useState(() => ({
@@ -596,8 +628,8 @@ export function Trading() {
   // The activity feed + "last run" are hydrated from localStorage so a refresh
   // (or returning after closing the tab) keeps showing what the robot has been
   // doing — every entry is timestamped and re-stamped on each update.
-  const [robotLog, setRobotLog] = useState<ActivityEntry[]>(() => loadActivityLog(user?.id))
-  const [lastRun, setLastRun] = useState<number | null>(() => loadLastRun(user?.id))
+  const [robotLog, setRobotLog] = useState<ActivityEntry[]>(() => loadActivityLog(scopeId))
+  const [lastRun, setLastRun] = useState<number | null>(() => loadLastRun(scopeId))
   const [endsAt, setEndsAt] = useState<number | null>(null)
   const [remaining, setRemaining] = useState<number | null>(null)
   const [tuning, setTuning] = useState(false)
@@ -641,15 +673,15 @@ export function Trading() {
   }, [quotes])
 
   // Re-hydrate the feed when the signed-in identity becomes known (auth loads
-  // asynchronously) — the feed is scoped per user, so switching users swaps it.
+  // asynchronously) — the feed is scoped per user + robot slot, so switching
+  // either swaps it.
   const activityUidRef = useRef<string | null | undefined>(undefined)
   useEffect(() => {
-    const uid = user?.id
-    if (activityUidRef.current === uid) return
-    activityUidRef.current = uid
-    setRobotLog(loadActivityLog(uid))
-    setLastRun(loadLastRun(uid))
-  }, [user?.id])
+    if (activityUidRef.current === scopeId) return
+    activityUidRef.current = scopeId
+    setRobotLog(loadActivityLog(scopeId))
+    setLastRun(loadLastRun(scopeId))
+  }, [scopeId])
 
   // Append timestamped entries to the activity feed and mirror it to
   // localStorage so it survives refreshes and tab closes.
@@ -659,31 +691,31 @@ export function Trading() {
       const stamped = lines.map((m) => ({ t: Date.now(), m }))
       setRobotLog((prev) => {
         const next = [...stamped, ...prev].slice(0, MAX_ACTIVITY)
-        saveActivityLog(next, user?.id)
+        saveActivityLog(next, scopeId)
         return next
       })
     },
-    [user?.id],
+    [scopeId],
   )
 
   // Record + persist when the robot last ran a successful cycle.
   const noteRun = useCallback(() => {
     const t = Date.now()
     setLastRun(t)
-    saveLastRun(t, user?.id)
-  }, [user?.id])
+    saveLastRun(t, scopeId)
+  }, [scopeId])
 
   // Reset also wipes the persisted activity feed so a fresh account starts clean.
   const handleReset = useCallback(
     (initialBalance: number) => {
-      clearActivity(user?.id)
+      clearActivity(scopeId)
       setRobotLog([])
       setLastRun(null)
       setLastSessionPnl(null)
       settledBaselineRef.current = null
       reset(initialBalance)
     },
-    [reset, user?.id],
+    [reset, scopeId],
   )
 
   // Stopping the robot also closes EVERY open trade — robot and manual — so
@@ -801,7 +833,7 @@ export function Trading() {
   // to now.
   useEffect(() => {
     if (!account || loading) return
-    const uid = user?.id
+    const uid = scopeId
     if (autoTrade && prefs.durationMinutes) {
       if (endsAt == null) {
         const persisted = loadRunEnd(uid)
@@ -840,7 +872,7 @@ export function Trading() {
     prefs.durationMinutes,
     endsAt,
     account?.risk.autoTrade,
-    user?.id,
+    scopeId,
     setRisk,
     closeRobotPositions,
   ])
@@ -882,11 +914,11 @@ export function Trading() {
   useEffect(() => {
     if (!account || loading) return
     if (!account.risk.autoTrade || sessionStartRef.current != null) return
-    const saved = loadSessionStart(user?.id)
+    const saved = loadSessionStart(scopeId)
     if (saved == null) return
     sessionStartRef.current = saved
     setSessionStart(saved)
-  }, [account, loading, account?.risk.autoTrade, user?.id])
+  }, [account, loading, account?.risk.autoTrade, scopeId])
 
   /**
    * Session profit / loss guard. While the robot runs it tracks the equity
@@ -904,7 +936,7 @@ export function Trading() {
         settledBaselineRef.current = sessionStartRef.current
         setLastSessionPnl(equity(account, rates) - sessionStartRef.current)
       }
-      if (sessionStartRef.current != null) clearSessionStart(user?.id)
+      if (sessionStartRef.current != null) clearSessionStart(scopeId)
       sessionStartRef.current = null
       setSessionStart(null)
       return
@@ -913,7 +945,7 @@ export function Trading() {
     if (sessionStartRef.current == null) {
       sessionStartRef.current = currentEquity
       setSessionStart(currentEquity)
-      saveSessionStart(currentEquity, user?.id)
+      saveSessionStart(currentEquity, scopeId)
       settledBaselineRef.current = null
       setLastSessionPnl(null)
       return
@@ -1007,9 +1039,9 @@ export function Trading() {
         // The server stopped/finished it while we were away.
         if (account.risk.autoTrade) {
           setRisk({ autoTrade: false })
-          clearRobotRunning(uid)
-          clearRunEnd(uid)
-          clearSessionStart(uid)
+          clearRobotRunning(scopeId)
+          clearRunEnd(scopeId)
+          clearSessionStart(scopeId)
           setEndsAt(null)
           setRemaining(null)
         }
@@ -1041,14 +1073,14 @@ export function Trading() {
         if (end > Date.now() && endsAt == null) {
           setEndsAt(end)
           setRemaining(Math.max(0, Math.round((end - Date.now()) / 1000)))
-          saveRunEnd(end, uid)
+          saveRunEnd(end, scopeId)
         }
       }
       if (run.session_start_equity != null && sessionStartRef.current == null) {
         const baseline = Number(run.session_start_equity)
         sessionStartRef.current = baseline
         setSessionStart(baseline)
-        saveSessionStart(baseline, uid)
+        saveSessionStart(baseline, scopeId)
       }
     })()
     return () => {

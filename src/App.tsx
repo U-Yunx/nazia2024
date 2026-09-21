@@ -31,6 +31,7 @@ const Brokers = page(() => import('./pages/Brokers'), 'Brokers')
 const Help = page(() => import('./pages/Help'), 'Help')
 const Contact = page(() => import('./pages/Contact'), 'Contact')
 const Trading = page(() => import('./pages/Trading'), 'Trading')
+const Robots = page(() => import('./pages/Robots'), 'Robots')
 const Performance = page(() => import('./pages/Performance'), 'Performance')
 const Signals = page(() => import('./pages/Signals'), 'Signals')
 const Backtester = page(() => import('./pages/Backtester'), 'Backtester')
@@ -68,6 +69,7 @@ export default function App() {
               <Route path="/help" element={<Help />} />
               <Route path="/contact" element={<Contact />} />
               <Route path="/trading" element={<Trading />} />
+              <Route path="/robots" element={<Robots />} />
               <Route path="/performance" element={<Performance />} />
               <Route path="/signals" element={<Signals />} />
               <Route path="/backtester" element={<Backtester />} />

@@ -108,6 +108,15 @@ export function loadRobotPrefs(slot = 1): RobotPrefs {
 
 export function useRobotPrefs(slot = 1) {
   const [prefs, setPrefs] = useState<RobotPrefs>(() => loadRobotPrefs(slot))
+  // Re-load the slot's saved config if the active robot slot changes (e.g. the
+  // user navigates between /trading?robot=1 and ?robot=2 without a remount).
+  const mountedSlot = useRef(slot)
+  useEffect(() => {
+    if (mountedSlot.current !== slot) {
+      mountedSlot.current = slot
+      setPrefs(loadRobotPrefs(slot))
+    }
+  }, [slot])
   const update = useCallback((patch: Partial<RobotPrefs>) => {
     setPrefs((prev) => {
       const next = { ...prev, ...patch }

@@ -165,6 +165,8 @@ async function fetchBars(symbol: string, interval: Interval): Promise<Bar[]> {
 interface PaperAccountRow {
   id: string;
   user_id: string;
+  /** Robot slot this ledger belongs to (1 = first/default robot). */
+  robot_number: number;
   broker: string;
   currency: string;
   initial_balance: number;
@@ -177,6 +179,8 @@ interface PaperAccountRow {
 interface PaperTradeRow {
   id: string;
   user_id: string;
+  /** Robot slot this trade belongs to (mirrors the owning account row). */
+  robot_number: number;
   symbol: string;
   side: "long" | "short";
   status: "open" | "closed";
@@ -262,7 +266,7 @@ function fromRows(row: PaperAccountRow, trades: PaperTradeRow[]): AccountState {
   };
 }
 
-function toRows(account: AccountState, userId: string): {
+function toRows(account: AccountState, userId: string, robotNumber = 1): {
   account: Omit<PaperAccountRow, "id" | "created_at" | "updated_at">;
   trades: PaperTradeRow[];
 } {
@@ -270,6 +274,7 @@ function toRows(account: AccountState, userId: string): {
     ...account.positions.map<PaperTradeRow>((p) => ({
       id: p.id,
       user_id: userId,
+      robot_number: robotNumber,
       symbol: p.symbol,
       side: p.side,
       status: "open",
@@ -294,6 +299,7 @@ function toRows(account: AccountState, userId: string): {
     ...account.trades.map<PaperTradeRow>((t) => ({
       id: t.id,
       user_id: userId,
+      robot_number: robotNumber,
       symbol: t.symbol,
       side: t.side,
       status: "closed",
@@ -319,6 +325,7 @@ function toRows(account: AccountState, userId: string): {
   return {
     account: {
       user_id: userId,
+      robot_number: robotNumber,
       broker: account.broker,
       currency: account.currency,
       initial_balance: account.initialBalance,
@@ -329,7 +336,10 @@ function toRows(account: AccountState, userId: string): {
   };
 }
 
-async function loadAccount(admin: AdminClient, run: RobotRunRow): Promise<AccountState | null> {
+async function loadAccount(
+  admin: AdminClient,
+  run: RobotRunRow,
+): Promise<{ account: AccountState; robotNumber: number } | null> {
   const { data: acct } = await admin
     .from("paper_accounts")
     .select("*")
@@ -337,17 +347,27 @@ async function loadAccount(admin: AdminClient, run: RobotRunRow): Promise<Accoun
     .maybeSingle();
   if (!acct) return null;
   if (acct.broker !== "paper" && acct.broker !== "managed") return null; // ledger-backed only
+  const robotNumber = Number(acct.robot_number ?? 1);
   const { data: trades } = await admin
     .from("paper_trades")
     .select("*")
     .eq("user_id", run.user_id)
+    .eq("robot_number", robotNumber)
     .order("created_at", { ascending: true });
-  return fromRows(acct as unknown as PaperAccountRow, (trades as unknown as PaperTradeRow[]) ?? []);
+  return {
+    account: fromRows(acct as unknown as PaperAccountRow, (trades as unknown as PaperTradeRow[]) ?? []),
+    robotNumber,
+  };
 }
 
-async function saveAccount(admin: AdminClient, userId: string, account: AccountState): Promise<void> {
-  const { account: accRow, trades } = toRows(account, userId);
-  await admin.from("paper_accounts").upsert(accRow, { onConflict: "user_id" });
+async function saveAccount(
+  admin: AdminClient,
+  userId: string,
+  account: AccountState,
+  robotNumber = 1,
+): Promise<void> {
+  const { account: accRow, trades } = toRows(account, userId, robotNumber);
+  await admin.from("paper_accounts").upsert(accRow, { onConflict: "user_id,robot_number" });
   if (trades.length > 0) {
     // Upsert by primary key instead of delete-all + re-insert. Every row
     // carries its own id, so a single bad row can never wipe the journal,
@@ -358,9 +378,14 @@ async function saveAccount(admin: AdminClient, userId: string, account: AccountS
     // position the browser closed locally while the server stood down).
     const ids = trades.map((t) => t.id);
     const idList = `(${ids.map((id) => `"${id}"`).join(",")})`;
-    await admin.from("paper_trades").delete().eq("user_id", userId).not("id", "in", idList);
+    await admin
+      .from("paper_trades")
+      .delete()
+      .eq("user_id", userId)
+      .eq("robot_number", robotNumber)
+      .not("id", "in", idList);
   } else {
-    await admin.from("paper_trades").delete().eq("user_id", userId);
+    await admin.from("paper_trades").delete().eq("user_id", userId).eq("robot_number", robotNumber);
   }
 }
 
@@ -590,11 +615,13 @@ async function tickRun(
   const tier = await robotTierFor(admin, run.user_id);
 
   // 5) Load the authoritative account state.
-  const account = await loadAccount(admin, run);
-  if (!account) {
+  const loaded = await loadAccount(admin, run);
+  if (!loaded) {
     await admin.from("robot_runs").update({ last_error: "Account not found." }).eq("id", run.id);
     return { action: "error" };
   }
+  const account = loaded.account;
+  const robotNumber = loaded.robotNumber;
 
   // 5b) Profit-pullback lock mirrored from the browser — the server enforces
   //     the same give-back rule while the page is closed.
@@ -750,7 +777,7 @@ async function tickRun(
   //     history point every tick either way so the Performance curve stays
   //     complete while the page is closed.
   if (next !== account) {
-    await saveAccount(admin, run.user_id, next)
+    await saveAccount(admin, run.user_id, next, robotNumber)
   }
   const sessionId = await ensureSession(admin, run, next.initialBalance)
   await recordHistory(admin, run, sessionId, next, rates)
@@ -767,14 +794,15 @@ async function finishRun(
   reason: string,
 ): Promise<void> {
   try {
-    const account = await loadAccount(admin, run)
-    if (account) {
+    const loaded = await loadAccount(admin, run)
+    if (loaded) {
+      const { account, robotNumber } = loaded
       const stopped = { ...account, risk: { ...account.risk, autoTrade: false } }
       const quotes = await fetchQuotes(run.pairs ?? [])
       const rates: RatesMap = {}
       for (const q of quotes) if (q.price != null) rates[q.symbol] = q.price
       const { state } = closeRobotPositions(stopped, rates)
-      await saveAccount(admin, run.user_id, state)
+      await saveAccount(admin, run.user_id, state, robotNumber)
       await closeSessions(admin, run, state)
     }
   } catch (err) {

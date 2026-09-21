@@ -14,11 +14,18 @@ import type { AccountState, ClosedTrade, Position, RiskConfig } from './types'
 
 const LOCAL_KEY = 'fx-toolkit.paper-account'
 
+/** localStorage key for a robot slot's ledger: slot 1 keeps the legacy key so
+ *  existing users keep their saved paper account; slots 2..N get a namespaced
+ *  key so every robot runs on its own balance. */
+export function localKeyForSlot(slot: number): string {
+  return slot > 1 ? `${LOCAL_KEY}.slot-${slot}` : LOCAL_KEY
+}
+
 /* --------------------------------- local --------------------------------- */
 
-export function loadLocal(): AccountState | null {
+export function loadLocal(slot = 1): AccountState | null {
   try {
-    const raw = localStorage.getItem(LOCAL_KEY)
+    const raw = localStorage.getItem(localKeyForSlot(slot))
     if (!raw) return null
     const parsed = JSON.parse(raw) as AccountState
     if (!parsed || typeof parsed.balance !== 'number' || !Array.isArray(parsed.positions)) return null
@@ -28,17 +35,17 @@ export function loadLocal(): AccountState | null {
   }
 }
 
-export function saveLocal(account: AccountState): void {
+export function saveLocal(account: AccountState, slot = 1): void {
   try {
-    localStorage.setItem(LOCAL_KEY, JSON.stringify(account))
+    localStorage.setItem(localKeyForSlot(slot), JSON.stringify(account))
   } catch {
     /* storage full / blocked — non-fatal */
   }
 }
 
-export function clearLocal(): void {
+export function clearLocal(slot = 1): void {
   try {
-    localStorage.removeItem(LOCAL_KEY)
+    localStorage.removeItem(localKeyForSlot(slot))
   } catch {
     /* noop */
   }
@@ -49,6 +56,8 @@ export function clearLocal(): void {
 interface PaperAccountRow {
   id: string
   user_id: string
+  /** Robot slot this ledger belongs to (1 = first/default robot). */
+  robot_number: number
   broker: string
   currency: string
   initial_balance: number
@@ -61,6 +70,8 @@ interface PaperAccountRow {
 interface PaperTradeRow {
   id: string
   user_id: string
+  /** Robot slot this trade belongs to (mirrors the owning account row). */
+  robot_number: number
   symbol: string
   side: 'long' | 'short'
   status: 'open' | 'closed'
@@ -87,7 +98,7 @@ interface PaperTradeRow {
   created_at: string | null
 }
 
-function toRow(account: AccountState, userId: string): {
+function toRow(account: AccountState, userId: string, robotNumber = 1): {
   account: Omit<PaperAccountRow, 'id' | 'created_at' | 'updated_at'>
   trades: PaperTradeRow[]
 } {
@@ -95,6 +106,7 @@ function toRow(account: AccountState, userId: string): {
     ...account.positions.map<PaperTradeRow>((p) => ({
       id: p.id,
       user_id: userId,
+      robot_number: robotNumber,
       symbol: p.symbol,
       side: p.side,
       status: 'open',
@@ -120,6 +132,7 @@ function toRow(account: AccountState, userId: string): {
     ...account.trades.map<PaperTradeRow>((t) => ({
       id: t.id,
       user_id: userId,
+      robot_number: robotNumber,
       symbol: t.symbol,
       side: t.side,
       status: 'closed',
@@ -146,6 +159,7 @@ function toRow(account: AccountState, userId: string): {
   return {
     account: {
       user_id: userId,
+      robot_number: robotNumber,
       broker: account.broker,
       currency: account.currency,
       initial_balance: account.initialBalance,
@@ -214,8 +228,8 @@ function fromRows(row: PaperAccountRow, trades: PaperTradeRow[]): AccountState {
   }
 }
 
-/** Load the signed-in user's account from Supabase (null when none exists). */
-export async function loadRemote(user: User): Promise<AccountState | null> {
+/** Load a robot slot's account from Supabase (null when none exists yet). */
+export async function loadRemote(user: User, robotNumber = 1): Promise<AccountState | null> {
   try {
     // Fetch the account row and its trade ledger in parallel — the trades query
     // previously waited on the account query, adding ~150-250ms of latency to
@@ -225,11 +239,13 @@ export async function loadRemote(user: User): Promise<AccountState | null> {
         .from('paper_accounts')
         .select('*')
         .eq('user_id', user.id)
+        .eq('robot_number', robotNumber)
         .maybeSingle(),
       supabase
         .from('paper_trades')
         .select('*')
         .eq('user_id', user.id)
+        .eq('robot_number', robotNumber)
         .order('created_at', { ascending: true }),
     ])
     const acct = acctRes.data
@@ -240,12 +256,12 @@ export async function loadRemote(user: User): Promise<AccountState | null> {
   }
 }
 
-/** Replace the signed-in user's account (and all its trades) in Supabase. */
-export async function saveRemote(user: User, account: AccountState): Promise<void> {
+/** Replace a robot slot's account (and all its trades) in Supabase. */
+export async function saveRemote(user: User, account: AccountState, robotNumber = 1): Promise<void> {
   try {
-    const { account: accRow, trades } = toRow(account, user.id)
-    await supabase.from('paper_accounts').upsert(accRow, { onConflict: 'user_id' })
-    await supabase.from('paper_trades').delete().eq('user_id', user.id)
+    const { account: accRow, trades } = toRow(account, user.id, robotNumber)
+    await supabase.from('paper_accounts').upsert(accRow, { onConflict: 'user_id,robot_number' })
+    await supabase.from('paper_trades').delete().eq('user_id', user.id).eq('robot_number', robotNumber)
     if (trades.length > 0) {
       await supabase.from('paper_trades').insert(trades)
     }
@@ -254,14 +270,15 @@ export async function saveRemote(user: User, account: AccountState): Promise<voi
   }
 }
 
-/** Wipe the Supabase mirror and seed a fresh account at the given balance. */
-export async function resetRemote(user: User, initialBalance: number): Promise<void> {
+/** Wipe a robot slot's Supabase mirror and seed a fresh account. */
+export async function resetRemote(user: User, initialBalance: number, robotNumber = 1): Promise<void> {
   try {
-    await supabase.from('paper_trades').delete().eq('user_id', user.id)
-    await supabase.from('paper_accounts').delete().eq('user_id', user.id)
+    await supabase.from('paper_trades').delete().eq('user_id', user.id).eq('robot_number', robotNumber)
+    await supabase.from('paper_accounts').delete().eq('user_id', user.id).eq('robot_number', robotNumber)
     const fresh = createAccount(initialBalance)
     await supabase.from('paper_accounts').insert({
       user_id: user.id,
+      robot_number: robotNumber,
       broker: fresh.broker,
       currency: fresh.currency,
       initial_balance: fresh.initialBalance,
