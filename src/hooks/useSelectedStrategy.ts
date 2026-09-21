@@ -1,12 +1,23 @@
 /**
- * The strategy the trading page is currently configured with (pair, interval,
- * type, params). Persisted to localStorage so the choice survives reloads.
+ * The strategy a trading workspace is currently configured with (pair,
+ * interval, type, params). Persisted to localStorage so the choice survives
+ * reloads.
+ *
+ * `useSelectedStrategy` is scoped: pass a scope key ('manual', 'robot-2', …)
+ * so manual trading and every robot keep their own independent strategy
+ * settings. With no scope the legacy key is used, so Robot 1 (and any caller
+ * that predates scoping) keeps its saved strategy.
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { StrategyConfig } from '../lib/types'
 import { defaultParams } from '../lib/strategies'
 
 const KEY = 'ana24.selected-strategy'
+
+/** localStorage key for a scope's selected strategy (undefined = legacy key). */
+export function strategyKeyFor(scope?: string): string {
+  return scope ? `${KEY}.${scope}` : KEY
+}
 
 export const DEFAULT_STRATEGY: StrategyConfig = {
   pair: 'EUR/USD',
@@ -15,9 +26,9 @@ export const DEFAULT_STRATEGY: StrategyConfig = {
   params: defaultParams('RSI'),
 }
 
-function loadStrategy(): StrategyConfig {
+function loadStrategy(key: string): StrategyConfig {
   try {
-    const raw = localStorage.getItem(KEY)
+    const raw = localStorage.getItem(key)
     if (!raw) return DEFAULT_STRATEGY
     const p = JSON.parse(raw) as Partial<StrategyConfig>
     const type = p.type === 'MA' || p.type === 'RSI' || p.type === 'MACD' || p.type === 'BOLLINGER' ? p.type : 'RSI'
@@ -35,16 +46,17 @@ function loadStrategy(): StrategyConfig {
   }
 }
 
-export function useSelectedStrategy() {
-  const [strategy, setStrategy] = useState<StrategyConfig>(loadStrategy)
+export function useSelectedStrategy(scope?: string) {
+  const key = strategyKeyFor(scope)
+  const [strategy, setStrategy] = useState<StrategyConfig>(() => loadStrategy(key))
 
   useEffect(() => {
     try {
-      localStorage.setItem(KEY, JSON.stringify(strategy))
+      localStorage.setItem(key, JSON.stringify(strategy))
     } catch {
       /* noop */
     }
-  }, [strategy])
+  }, [strategy, key])
 
   const updateStrategy = useCallback((next: Partial<StrategyConfig>) => {
     setStrategy((prev) => {

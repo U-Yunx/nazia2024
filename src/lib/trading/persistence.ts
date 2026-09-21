@@ -14,10 +14,12 @@ import type { AccountState, ClosedTrade, Position, RiskConfig } from './types'
 
 const LOCAL_KEY = 'fx-toolkit.paper-account'
 
-/** localStorage key for a robot slot's ledger: slot 1 keeps the legacy key so
- *  existing users keep their saved paper account; slots 2..N get a namespaced
- *  key so every robot runs on its own balance. */
+/** localStorage key for a scope's ledger: slot 0 is the MANUAL trading ledger
+ *  (its own key so manual trades never share a balance with any robot); slot 1
+ *  keeps the legacy key so existing users keep their saved paper account; slots
+ *  2..N get a namespaced key so every robot runs on its own balance. */
 export function localKeyForSlot(slot: number): string {
+  if (slot === 0) return `${LOCAL_KEY}.manual`
   return slot > 1 ? `${LOCAL_KEY}.slot-${slot}` : LOCAL_KEY
 }
 

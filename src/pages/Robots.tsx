@@ -63,7 +63,7 @@ function scopeIdFor(userId: string | undefined, slot: number): string | undefine
 }
 
 function robotTarget(slot: number): string {
-  return slot === 1 ? '/trading' : `/trading?robot=${slot}`
+  return `/trading?robot=${slot}`
 }
 
 /** Server-side ledger row for a slot (authoritative balance when this browser

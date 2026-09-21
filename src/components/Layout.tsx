@@ -207,7 +207,7 @@ const FOOTER_COLUMNS: { title: string; links: { to: string; label: string }[] }[
       { to: '/markets', label: 'Market pairs' },
       { to: '/signals', label: 'Signals' },
       { to: '/performance', label: 'Performance' },
-      { to: '/trading', label: 'Trading robot' },
+      { to: '/trading', label: 'Trading & robots' },
     ],
   },
   {

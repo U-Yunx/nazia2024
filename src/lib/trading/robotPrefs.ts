@@ -18,10 +18,13 @@ import { MIN_LOT, normalizeLots } from './lots'
 import type { RiskConfig } from './types'
 
 const KEY = 'ana24.robot-prefs'
-/** Namespaced key for a robot slot: slot 1 keeps the legacy key so existing
- *  users keep their saved configuration; slots 2..N get their own key so each
- *  robot can trade with its own method, pairs, sizing and limits. */
+/** Namespaced key for a scope: slot 0 is the MANUAL trading workspace (its own
+ *  method/strategy settings, separate from every robot); slot 1 keeps the
+ *  legacy key so existing users keep their saved configuration; slots 2..N get
+ *  their own key so each robot can trade with its own method, pairs, sizing
+ *  and limits. */
 export function prefsKeyForSlot(slot: number): string {
+  if (slot === 0) return `${KEY}.manual`
   return slot > 1 ? `${KEY}.slot-${slot}` : KEY
 }
 export const MIN_RISK_PCT = 0.05

@@ -21,9 +21,17 @@ import type { PaperAccountKind } from './types'
 
 const MODE_KEY = 'fx-toolkit.broker-mode'
 
-function initialMode(): BrokerMode {
+/** localStorage key for a scope's broker mode: slot 0 (manual trading) and
+ *  slots 2..N get their own key so each workspace keeps its own paper/live
+ *  mode; slot 1 keeps the legacy key so existing users keep their mode. */
+export function modeKeyForRobot(robot: number): string {
+  if (robot === 0) return `${MODE_KEY}.manual`
+  return robot > 1 ? `${MODE_KEY}.slot-${robot}` : MODE_KEY
+}
+
+function initialMode(robot: number): BrokerMode {
   try {
-    const saved = localStorage.getItem(MODE_KEY)
+    const saved = localStorage.getItem(modeKeyForRobot(robot))
     if (saved === 'oanda' || saved === 'mt' || saved === 'managed') return saved
     return 'paper'
   } catch {
@@ -31,10 +39,12 @@ function initialMode(): BrokerMode {
   }
 }
 
-/** Robot on/off flag key: slot 1 keeps the legacy per-user key; other slots are
- *  namespaced so a refresh on robot 2 can't turn robot 1 back on. */
+/** Robot on/off flag key: slot 0 (manual trading) and slots 2..N are
+ *  namespaced so a refresh on one workspace can't turn another back on; slot 1
+ *  keeps the legacy per-user key. */
 function stateKey(userId: string | undefined, robot: number): string | undefined {
   if (!userId) return undefined
+  if (robot === 0) return `${userId}:manual`
   return robot > 1 ? `${userId}:slot-${robot}` : userId
 }
 
@@ -54,7 +64,7 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string },
   const { user } = useAuth()
   const [account, setAccount] = useState<AccountState | null>(null)
   const [loading, setLoading] = useState(true)
-  const [mode, setMode] = useState<BrokerMode>(initialMode)
+  const [mode, setMode] = useState<BrokerMode>(() => initialMode(robot))
 
   const stateRef = useRef<AccountState | null>(null)
   stateRef.current = account
@@ -362,7 +372,7 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string },
   const setBrokerMode = useCallback((m: BrokerMode) => {
     setMode(m)
     try {
-      localStorage.setItem(MODE_KEY, m)
+      localStorage.setItem(modeKeyForRobot(robot), m)
     } catch {
       /* noop */
     }
@@ -372,7 +382,7 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string },
     if (m === 'paper' || m === 'managed') {
       setAccount((cur) => (cur ? { ...cur, broker: m } : cur))
     }
-  }, [])
+  }, [robot])
 
   return {
     account,
