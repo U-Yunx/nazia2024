@@ -243,8 +243,12 @@ export interface AdRow {
   reviewed_by: string | null
 }
 
-/** What an add-on grants: more robot slots, more MT4/5 account slots, or ad slots. */
-export type AddonKind = 'robot' | 'mt_account' | 'ads'
+/**
+ * What an add-on grants. The active catalog only sells bundled slots
+ * ('slot'): 1 slot = 1 robot + 1 trading account. The legacy kinds
+ * ('robot' / 'mt_account' / 'ads') are kept only for historical rows.
+ */
+export type AddonKind = 'slot' | 'robot' | 'mt_account' | 'ads'
 
 /** A purchasable add-on (admin-managed catalog). */
 export interface AddonRow {

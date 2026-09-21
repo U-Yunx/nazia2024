@@ -431,7 +431,7 @@ function AddonsTab() {
   const emailOf = (id: string) => users.find((u) => u.id === id)?.email ?? '—'
 
   const startNew = () =>
-    setEditing({ name: '', description: '', kind: 'robot', amount: 1, price: 0, currency: 'USDT', duration_days: 30, active: true, sort: 99 })
+    setEditing({ name: '', description: '', kind: 'slot', amount: 1, price: 0, currency: 'USDT', duration_days: 30, active: true, sort: 99 })
 
   const save = async (e: FormEvent) => {
     e.preventDefault()
@@ -495,7 +495,8 @@ function AddonsTab() {
           {msg && <p className="mb-3 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-red-200">{msg}</p>}
           {purchases.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">
-              No add-on purchases yet. Users buy extra robot/MT4/5 slots from the Packages page.
+              No add-on purchases yet. Users buy extra slots (1 slot = 1 robot + 1 trading account) from the Packages
+              page.
             </p>
           ) : (
             <div className="overflow-x-auto">
@@ -563,9 +564,8 @@ function AddonsTab() {
           <CardContent>
             <form onSubmit={save} className="grid gap-3 sm:grid-cols-2">
               <Input label="Name" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} required />
-              <Select label="Kind" value={editing.kind ?? 'robot'} onChange={(e) => setEditing({ ...editing, kind: e.target.value as AddonRow['kind'] })}>
-                <option value="robot">Robot slot</option>
-                <option value="mt_account">MT4/5 account</option>
+              <Select label="Kind" value={editing.kind ?? 'slot'} onChange={(e) => setEditing({ ...editing, kind: e.target.value as AddonRow['kind'] })}>
+                <option value="slot">Extra slot (1 robot + 1 trading account)</option>
               </Select>
               <Input
                 label="Slots granted (amount)"
@@ -639,7 +639,12 @@ function AddonsTab() {
                     <p className="font-medium">
                       {a.name}{' '}
                       <Badge className="border-accent/40 bg-accent/15 text-accent">
-                        +{a.amount} {a.kind === 'robot' ? 'robot' : 'MT4/5'}
+                        +{a.amount}{' '}
+                        {a.kind === 'slot'
+                          ? `slot${a.amount === 1 ? '' : 's'} (1 slot = 1 robot + 1 account)`
+                          : a.kind === 'robot'
+                            ? 'robot'
+                            : 'MT4/5'}
                       </Badge>
                     </p>
                     <p className="text-xs text-muted-foreground">
