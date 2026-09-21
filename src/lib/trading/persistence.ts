@@ -80,6 +80,10 @@ interface PaperTradeRow {
   target_loss_usd: number | null
   /** Best unrealized PnL (USD) the position reached — profit-pullback lock. */
   peak_profit_usd: number | null
+  /** Scale-out first-target price (open-time stamp) — partial take-profit. */
+  tp1_price: number | null
+  /** Whether the position already banked its partial take-profit. */
+  partial_taken: boolean | null
   created_at: string | null
 }
 
@@ -109,6 +113,8 @@ function toRow(account: AccountState, userId: string): {
       target_profit_usd: p.targetProfitUsd ?? null,
       target_loss_usd: p.targetLossUsd ?? null,
       peak_profit_usd: p.peakProfitUsd ?? null,
+      tp1_price: p.tp1Price ?? null,
+      partial_taken: p.partialTaken ?? false,
       created_at: null,
     })),
     ...account.trades.map<PaperTradeRow>((t) => ({
@@ -132,6 +138,8 @@ function toRow(account: AccountState, userId: string): {
       target_profit_usd: null,
       target_loss_usd: null,
       peak_profit_usd: null,
+      tp1_price: null,
+      partial_taken: null,
       created_at: null,
     })),
   ]
@@ -167,6 +175,8 @@ function fromRows(row: PaperAccountRow, trades: PaperTradeRow[]): AccountState {
         targetProfitUsd: t.target_profit_usd ?? undefined,
         targetLossUsd: t.target_loss_usd ?? undefined,
         peakProfitUsd: t.peak_profit_usd ?? undefined,
+        tp1Price: t.tp1_price ?? undefined,
+        partialTaken: t.partial_taken === true,
         status: 'open',
       })
     } else {

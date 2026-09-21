@@ -16,6 +16,7 @@ import {
 } from '../lib/trading/robotActivity'
 import { heartbeatRobotRun, loadRobotRun, saveRobotRun, stopRobotRun } from '../lib/trading/robotRun'
 import { autoTune } from '../lib/trading/autoTune'
+import { proStrategyPreset, type StrategyPreset } from '../lib/trading/strategyPresets'
 import { aggressivenessLabel, guardrailLabel, useManualTune } from '../lib/trading/manualTune'
 import { rankPairs, type RankedPair } from '../lib/trading/pairRanking'
 import { manualTargets } from '../lib/trading/manualMethod'
@@ -331,6 +332,7 @@ export function Trading() {
   const [strategy, updateStrategy] = useSelectedStrategy()
   const {
     prefs,
+    applyAll,
     setMethod,
     setStrategyMode,
     setManualStrategy,
@@ -1160,6 +1162,23 @@ export function Trading() {
     setShowManualTune(false)
   }
 
+  // One-click "Pro strategy" apply: pushes the battle-tested scale-out exit
+  // (50% at 1R → break-even → trail the rest) plus its risk guardrails onto
+  // the account's risk config AND the robot prefs, so the very next robot
+  // cycle trades with it. User pair selection and duration are preserved.
+  const [presetApplied, setPresetApplied] = useState(false)
+  const applyProStrategy = () => {
+    if (!account) return
+    const preset: StrategyPreset = proStrategyPreset(prefs.method)
+    setRisk(preset.risk)
+    applyAll({ ...prefs, ...preset.prefs })
+    setPresetApplied(true)
+    setTuned(null)
+    pushLog([
+      `${preset.name} applied — ${preset.tagline}. Now banking 50% at 1R, moving to break-even and trailing the rest, with a 30% give-back lock, ATR-aware stops and a ${preset.risk.maxConsecutiveLosses}-loss circuit breaker.`,
+    ])
+  }
+
   const guardedSetRisk = (patch: Parameters<typeof setRisk>[0]) => {
     if (patch.autoTrade === true && balanceLocked) {
       pushLog([`Balance is below $${MIN_TRADE_BALANCE_USD} — trading is locked. Reset the account to trade again.`])
@@ -1286,6 +1305,42 @@ export function Trading() {
               Subscribed {tier.subscriberDays} day{tier.subscriberDays === 1 ? '' : 's'} — full market limits unlocked.
             </p>
           ) : null}
+
+          {/* One-click Pro strategy — apply the battle-tested scale-out
+              take-profit config to the robot with a single click. */}
+          <div
+            className={cn(
+              'flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center',
+              presetApplied ? 'border-up/30 bg-up/5' : 'border-accent/40 bg-accent/5',
+            )}
+          >
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent/15 text-accent">
+              <Target className="h-5 w-5" aria-hidden="true" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="flex flex-wrap items-center gap-2 text-sm font-semibold text-foreground">
+                Pro strategy — {proStrategyPreset(prefs.method).tagline}
+                {presetApplied && (
+                  <Badge className="border-up/30 bg-up/15 text-up">
+                    <Check className="h-3 w-3" aria-hidden="true" />
+                    Applied
+                  </Badge>
+                )}
+              </p>
+              <p className="mt-0.5 text-sm text-muted-foreground">
+                {proStrategyPreset(prefs.method).description}
+              </p>
+            </div>
+            <Button
+              size="sm"
+              onClick={applyProStrategy}
+              disabled={!account}
+              className="shrink-0"
+            >
+              <Sparkles className="h-4 w-4" aria-hidden="true" />
+              Apply to robot
+            </Button>
+          </div>
 
           {/* Pick lot — REQUIRED pre-start step. The robot opens every trade
               at this size (1 lot = 100,000 units), so Start stays locked

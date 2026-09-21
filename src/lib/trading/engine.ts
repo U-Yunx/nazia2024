@@ -9,6 +9,7 @@ import type {
   ClosedTrade,
   CloseReason,
   OpenPositionRequest,
+  Position,
   RatesMap,
   RobotConfig,
   RobotCycleInput,
@@ -210,6 +211,17 @@ export function openPosition(
     Math.max(0, input.takeProfitPips),
   )
 
+  // Stamp the scale-out first target at OPEN time (entry ± partialTpRatio ×
+  // the stop distance) — a fixed price the trailing/break-even ratchet can't
+  // move, so the "bank half at 1R" level stays exactly where it was planned.
+  // Positions opened while scale-out is off get no stamp and never fire it.
+  const tp1Price =
+    risk.partialTakeProfit && (risk.partialTpRatio ?? 1) > 0
+      ? input.side === 'long'
+        ? input.entryPrice + (risk.partialTpRatio ?? 1) * Math.abs(entryPrice - stopPrice)
+        : input.entryPrice - (risk.partialTpRatio ?? 1) * Math.abs(entryPrice - stopPrice)
+      : undefined
+
   const position = {
     id: crypto.randomUUID(),
     symbol: input.symbol,
@@ -224,6 +236,7 @@ export function openPosition(
     targetProfitUsd: input.targetProfitUsd ?? undefined,
     targetLossUsd: input.targetLossUsd ?? undefined,
     entryProbability: input.profitProbability,
+    tp1Price,
     status: 'open' as const,
   }
 
@@ -268,6 +281,72 @@ export function closePosition(
       ...state,
       balance: state.balance + pnl,
       positions: state.positions.filter((p) => p.id !== positionId),
+      trades: [trade, ...state.trades],
+      updatedAt: now,
+    },
+    trade,
+  }
+}
+
+/**
+ * Close a portion of an open position (scale-out): books a ClosedTrade for the
+ * closed units, shrinks the position, moves its stop to break-even and marks it
+ * `partialTaken` so the first target is never banked twice. When the portion
+ * covers the whole position it degrades to a full closePosition (no zero-unit
+ * ghosts left on the book). Used by the partial take-profit exit — the
+ * "bank half at the first target, let the rest run" pattern that long-running
+ * stable trading robots rely on to lock profit early while keeping upside.
+ */
+function closePartial(
+  state: AccountState,
+  position: Position,
+  opts: { price: number; units: number; reason: CloseReason; rates: RatesMap; time?: string },
+): { state: AccountState; trade: ClosedTrade | null } {
+  const closeUnits = Math.max(0, Math.min(opts.units, position.units))
+  if (closeUnits <= 0) return { state, trade: null }
+  if (closeUnits >= position.units) {
+    return closePosition(state, position.id, {
+      price: opts.price,
+      reason: opts.reason,
+      rates: opts.rates,
+      time: opts.time,
+    })
+  }
+  const now = opts.time ?? new Date().toISOString()
+  const gross = pnlUsd(position.side, position.entryPrice, opts.price, closeUnits, position.symbol, opts.rates)
+  // Trading costs are shared pro-rata across the scale-out legs — the round
+  // trip isn't charged in full on the first half and free on the second.
+  const costShare = Math.max(0, state.risk.costPerTradeUsd ?? 0) * (closeUnits / position.units)
+  const pnl = gross - costShare
+  const pnlPct = position.entryEquity > 0 ? (pnl / position.entryEquity) * 100 : 0
+  const trade: ClosedTrade = {
+    id: `${position.id}-part`,
+    symbol: position.symbol,
+    side: position.side,
+    units: closeUnits,
+    entryPrice: position.entryPrice,
+    entryTime: position.entryTime,
+    exitPrice: opts.price,
+    exitTime: now,
+    stopPrice: position.stopPrice,
+    takeProfitPrice: position.takeProfitPrice,
+    entryEquity: position.entryEquity,
+    pnl,
+    pnlPct,
+    closeReason: opts.reason,
+    strategy: position.strategy,
+    entryProbability: position.entryProbability,
+    status: 'closed',
+  }
+  return {
+    state: {
+      ...state,
+      balance: state.balance + pnl,
+      positions: state.positions.map((p) =>
+        p.id === position.id
+          ? { ...p, units: position.units - closeUnits, stopPrice: position.entryPrice, partialTaken: true }
+          : p,
+      ),
       trades: [trade, ...state.trades],
       updatedAt: now,
     },
@@ -387,6 +466,31 @@ export function markToMarket(
     if (!reason) {
       if (p.side === 'long' && cur >= p.takeProfitPrice) reason = 'take_profit'
       else if (p.side === 'short' && cur <= p.takeProfitPrice) reason = 'take_profit'
+    }
+
+    // Partial take-profit / scale-out: with the exit enabled, the FIRST target
+    // (stamped on the position at open — `partialTpRatio` × the stop distance,
+    // e.g. 1 = one R) banks `partialClosePct`% of the position at market, moves
+    // the stop to break-even and marks the position `partialTaken` so the
+    // remaining units ride to the full target / trailing stop. Using the
+    // open-time stamp (not the CURRENT stop) keeps the level fixed even after
+    // the trailing/break-even ratchet has moved the stop toward price. Only
+    // fires once per position; when the % covers the whole position it degrades
+    // to a full close. This is the "bank half at 1R, let the rest run" exit
+    // long-running stable robots use to lock profit early.
+    if (!reason && state.risk.partialTakeProfit && !p.partialTaken && p.tp1Price != null && p.units > 1) {
+      const hitFirstTarget = p.side === 'long' ? cur >= p.tp1Price : cur <= p.tp1Price
+      if (hitFirstTarget) {
+        const closePct = Math.min(100, Math.max(1, state.risk.partialClosePct ?? 50)) / 100
+        const closeUnits = Math.max(1, Math.round(p.units * closePct))
+        const res = closePartial(next, p, { price: cur, units: closeUnits, reason: 'take_profit', rates })
+        if (res.trade) closed.push(res.trade)
+        next = res.state
+        // The position was just modified (units shrunk, stop → break-even) —
+        // re-evaluate it fresh on the next mark instead of stacking the
+        // pullback / drawdown rules onto the stale snapshot this pass.
+        continue
+      }
     }
 
     // Profit-pullback lock — close a winner that has retraced X% from its peak

@@ -689,3 +689,132 @@ describe('drawdown stop (25%) with fast-crash hold', () => {
     expect(r.positions[0].crashHold).toBeUndefined()
   })
 })
+
+describe('partial take-profit / scale-out', () => {
+  // EUR/USD long @ 1.1, 20-pip stop → stop 1.098, stop distance 0.002.
+  // partialTpRatio 1 → first target 1.102; full TP (40 pips) at 1.104.
+  const open = (acc = createAccount(10_000), units = 1000) => {
+    acc.risk.trailingStop = false // isolate the scale-out from the trail
+    acc.risk.partialTakeProfit = true
+    acc.risk.partialClosePct = 50
+    acc.risk.partialTpRatio = 1
+    return openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units,
+    }, rates).state
+  }
+
+  it('banks half at the first target and keeps the rest open at break-even', () => {
+    const opened = open()
+    // First target (1.102 = 1R) → close 500 of 1000 units, stop → 1.1.
+    const first = markToMarket(opened, { ...rates, 'EUR/USD': 1.102 })
+    expect(first.closed).toHaveLength(1)
+    expect(first.closed[0].closeReason).toBe('take_profit')
+    expect(first.closed[0].units).toBe(500)
+    expect(first.closed[0].pnl).toBeCloseTo(1, 5) // (1.102−1.1) × 500 × 1
+    expect(first.state.balance).toBeCloseTo(10_001, 5)
+    expect(first.state.positions).toHaveLength(1)
+    const rest = first.state.positions[0]
+    expect(rest.units).toBe(500)
+    expect(rest.partialTaken).toBe(true)
+    expect(rest.stopPrice).toBeCloseTo(1.1, 6) // moved to break-even
+    expect(rest.takeProfitPrice).toBeCloseTo(1.104, 6) // full target kept
+  })
+
+  it('the remaining units ride to the full take-profit', () => {
+    const opened = open()
+    const first = markToMarket(opened, { ...rates, 'EUR/USD': 1.102 })
+    expect(first.closed).toHaveLength(1)
+    // Remainder closes at the full TP (1.104): (1.104−1.1) × 500 × 1 = $2.
+    const second = markToMarket(first.state, { ...rates, 'EUR/USD': 1.104 })
+    expect(second.closed).toHaveLength(1)
+    expect(second.closed[0].closeReason).toBe('take_profit')
+    expect(second.closed[0].units).toBe(500)
+    expect(second.closed[0].pnl).toBeCloseTo(2, 5)
+    expect(second.state.positions).toHaveLength(0)
+    expect(second.state.trades).toHaveLength(2) // partial + full, both banked
+  })
+
+  it('only banks the first target once', () => {
+    const opened = open()
+    const first = markToMarket(opened, { ...rates, 'EUR/USD': 1.102 })
+    expect(first.closed).toHaveLength(1)
+    // Price stays at/above the first target — no second partial close.
+    const again = markToMarket(first.state, { ...rates, 'EUR/USD': 1.103 })
+    expect(again.closed).toHaveLength(0)
+    expect(again.state.positions[0].partialTaken).toBe(true)
+    expect(again.state.positions[0].units).toBe(500)
+    // …but the full target still closes the remainder normally.
+    const full = markToMarket(again.state, { ...rates, 'EUR/USD': 1.104 })
+    expect(full.closed).toHaveLength(1)
+    expect(full.closed[0].closeReason).toBe('take_profit')
+  })
+
+  it('is off by default — the whole position rides to one take-profit', () => {
+    const acc = createAccount(10_000)
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
+    }, rates)
+    // At the would-be first target nothing closes…
+    const mid = markToMarket(opened, { ...rates, 'EUR/USD': 1.102 })
+    expect(mid.closed).toHaveLength(0)
+    expect(mid.state.positions).toHaveLength(1)
+    // …and the full target closes all 1000 units.
+    const full = markToMarket(opened, { ...rates, 'EUR/USD': 1.104 })
+    expect(full.closed).toHaveLength(1)
+    expect(full.closed[0].units).toBe(1000)
+    expect(full.closed[0].pnl).toBeCloseTo(4, 5)
+  })
+
+  it('closes the whole position when the partial % is 100', () => {
+    const acc = createAccount(10_000)
+    acc.risk.trailingStop = false
+    acc.risk.partialTakeProfit = true
+    acc.risk.partialClosePct = 100
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
+    }, rates)
+    const res = markToMarket(opened, { ...rates, 'EUR/USD': 1.102 })
+    expect(res.closed).toHaveLength(1)
+    expect(res.closed[0].units).toBe(1000)
+    expect(res.state.positions).toHaveLength(0)
+  })
+
+  it('scale-out works on the short side (first target below entry)', () => {
+    const acc = createAccount(10_000)
+    acc.risk.trailingStop = false
+    acc.risk.partialTakeProfit = true
+    acc.risk.partialClosePct = 50
+    acc.risk.partialTpRatio = 1
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'short', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
+    }, rates)
+    // Short @ 1.1, stop 1.102, first target 1.098, full TP 1.096.
+    const first = markToMarket(opened, { ...rates, 'EUR/USD': 1.098 })
+    expect(first.closed).toHaveLength(1)
+    expect(first.closed[0].closeReason).toBe('take_profit')
+    expect(first.closed[0].pnl).toBeCloseTo(1, 5) // (1.1−1.098) × 500 × 1
+    const rest = first.state.positions[0]
+    expect(rest.units).toBe(500)
+    expect(rest.partialTaken).toBe(true)
+    expect(rest.stopPrice).toBeCloseTo(1.1, 6) // break-even
+    const full = markToMarket(first.state, { ...rates, 'EUR/USD': 1.096 })
+    expect(full.closed).toHaveLength(1)
+    expect(full.closed[0].pnl).toBeCloseTo(2, 5)
+    expect(full.state.positions).toHaveLength(0)
+  })
+
+  it('keeps a 1-unit position intact — the rule needs units to split', () => {
+    const acc = createAccount(10_000)
+    acc.risk.trailingStop = false
+    acc.risk.partialTakeProfit = true
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1,
+    }, rates)
+    // No split possible at 1 unit — the position just rides to the full TP.
+    const mid = markToMarket(opened, { ...rates, 'EUR/USD': 1.102 })
+    expect(mid.closed).toHaveLength(0)
+    const full = markToMarket(opened, { ...rates, 'EUR/USD': 1.104 })
+    expect(full.closed).toHaveLength(1)
+    expect(full.closed[0].units).toBe(1)
+  })
+})

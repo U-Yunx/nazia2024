@@ -97,6 +97,23 @@ export interface Position {
    * entries carry it; manual orders are unrated.
    */
   entryProbability?: number
+  /**
+   * Set when this position already banked its partial take-profit (scale-out):
+   * part of the units were closed at the first target, the stop was moved to
+   * break-even and the remaining units ride to the full target / trailing stop.
+   * The scale-out rule only fires once per position. Persisted so a reload or
+   * server-side takeover doesn't re-bank the first target.
+   */
+  partialTaken?: boolean
+  /**
+   * The scale-out first-target price, stamped at OPEN time (entry ±
+   * `partialTpRatio` × the stop distance) when partial take-profit is enabled.
+   * Stamping it at open — instead of recomputing it from the CURRENT stop each
+   * mark — is what keeps the first target fixed even after the trailing stop /
+   * break-even logic has ratcheted the stop toward price. Absent on positions
+   * opened while scale-out was off (they never fire the rule).
+   */
+  tp1Price?: number
   status: 'open'
 }
 
@@ -226,6 +243,20 @@ export interface RiskConfig {
    * 0 = cost-free simulation (default).
    */
   costPerTradeUsd: number
+  /**
+   * Partial take-profit / scale-out: when enabled, a winning position closes
+   * `partialClosePct`% of its units at the first target (`partialTpRatio` ×
+   * the stop distance — 1 = one R), banks that win, then moves the stop to
+   * break-even and lets the remaining units run to the full take-profit with
+   * trailing. This is the scale-out exit style used by long-running,
+   * stable professional trading robots: lock profit early, keep upside.
+   * 0/off (default) = the whole position rides to one take-profit.
+   */
+  partialTakeProfit: boolean
+  /** % of a position's units closed at the first (partial) target. 50 = half. */
+  partialClosePct: number
+  /** First target as a multiple of the stop distance (1 = one R / risk unit). */
+  partialTpRatio: number
 }
 
 export const DEFAULT_RISK: RiskConfig = {
@@ -252,6 +283,11 @@ export const DEFAULT_RISK: RiskConfig = {
   profitPullbackActivateUsd: 1,
   drawdownClosePct: 25,
   costPerTradeUsd: 0,
+  // Scale-out exit is off by default — the one-click Pro strategy preset turns
+  // it on with battle-tested 50%-at-1R + break-even + trail values.
+  partialTakeProfit: false,
+  partialClosePct: 50,
+  partialTpRatio: 1,
 }
 
 /** The full persisted state of a paper account. */

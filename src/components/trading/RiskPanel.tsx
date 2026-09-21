@@ -146,6 +146,49 @@ export function RiskPanel({ risk, onChange, onReset, isLive }: Props) {
             step={0.1}
             suffix="×"
           />
+          {/* Scale-out / partial take-profit — the "bank half at 1R, let the
+              rest run" exit used by long-running stable trading robots. */}
+          <div className="col-span-2 rounded-lg border border-cyan/30 bg-cyan/5 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold text-foreground">Partial take-profit (scale-out)</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  Banks part of the position at the first target, moves the stop to break-even and lets the rest ride
+                  to the full take-profit with trailing — lock profit early, keep upside.
+                </p>
+              </div>
+              <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  checked={draft.partialTakeProfit}
+                  onChange={(e) => patch({ partialTakeProfit: e.target.checked })}
+                  className="h-4 w-4 cursor-pointer rounded border-border bg-background accent-[var(--color-accent)]"
+                />
+                On
+              </label>
+            </div>
+            {draft.partialTakeProfit && (
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <Field
+                  label="Close at first target"
+                  value={draft.partialClosePct ?? DEFAULT_RISK.partialClosePct}
+                  onChange={(v) => patch({ partialClosePct: Math.min(100, Math.max(1, v)) })}
+                  min={1}
+                  max={100}
+                  step={5}
+                  suffix="%"
+                />
+                <Field
+                  label="First target"
+                  value={draft.partialTpRatio ?? DEFAULT_RISK.partialTpRatio}
+                  onChange={(v) => patch({ partialTpRatio: Math.max(0.5, v) })}
+                  min={0.5}
+                  step={0.5}
+                  suffix="× stop"
+                />
+              </div>
+            )}
+          </div>
           <Field
             label="Daily loss limit"
             value={draft.maxDailyLossPct}

@@ -69,6 +69,17 @@ export interface Position {
   strategy?: string
   /** Probability of profit (0–1) estimated when the position was opened. */
   entryProbability?: number
+  /** Set once the position banked its partial take-profit (scale-out): the
+   *  stop moved to break-even and the remaining units ride to the full target.
+   *  The scale-out rule only fires once per position (persisted, so a takeover
+   *  doesn't re-bank the first target). */
+  partialTaken?: boolean
+  /**
+   * Scale-out first-target price stamped at OPEN time (entry ± partialTpRatio ×
+   * the stop distance). Fixed even after the trailing/break-even ratchet moves
+   * the stop. Absent on positions opened while scale-out was off.
+   */
+  tp1Price?: number
   status: 'open'
 }
 
@@ -133,6 +144,18 @@ export interface RiskConfig {
    * (Position.crashHold). 0 = off.
    */
   drawdownClosePct: number
+  /**
+   * Partial take-profit / scale-out: when enabled, a winning position closes
+   * `partialClosePct`% of its units at the first target (`partialTpRatio` ×
+   * the stop distance — 1 = one R), banks that win, then moves the stop to
+   * break-even and lets the remaining units run to the full take-profit with
+   * trailing. Mirrors the client engine so browser and server behave the same.
+   */
+  partialTakeProfit: boolean
+  /** % of a position's units closed at the first (partial) target. 50 = half. */
+  partialClosePct: number
+  /** First target as a multiple of the stop distance (1 = one R / risk unit). */
+  partialTpRatio: number
 }
 
 export const DEFAULT_RISK: RiskConfig = {
@@ -157,6 +180,9 @@ export const DEFAULT_RISK: RiskConfig = {
   profitPullbackPct: 25,
   profitPullbackActivateUsd: 1,
   drawdownClosePct: 25,
+  partialTakeProfit: false,
+  partialClosePct: 50,
+  partialTpRatio: 1,
 }
 
 export interface AccountState {
@@ -1017,6 +1043,25 @@ export function markToMarket(
       else if (p.side === 'short' && cur <= p.takeProfitPrice) reason = 'take_profit'
     }
 
+    // Partial take-profit / scale-out — mirrors the client engine: the FIRST
+    // target (stamped on the position at open — `partialTpRatio` × the stop
+    // distance) banks `partialClosePct`% of the units, moves the stop to
+    // break-even and marks the position `partialTaken` so the remainder rides
+    // to the full target / trailing stop. Only fires once; a % covering the
+    // whole position degrades to a full close.
+    if (!reason && state.risk.partialTakeProfit && !p.partialTaken && p.tp1Price != null && p.units > 1) {
+      const hitFirstTarget = p.side === 'long' ? cur >= p.tp1Price : cur <= p.tp1Price
+      if (hitFirstTarget) {
+        const closePct = Math.min(100, Math.max(1, state.risk.partialClosePct ?? 50)) / 100
+        const closeUnits = Math.max(1, Math.round(p.units * closePct))
+        const res = closePartial(next, p, { price: cur, units: closeUnits, reason: 'take_profit', rates })
+        if (res.trade) closed.push(res.trade)
+        next = res.state
+        // The position was just modified — re-evaluate fresh on the next mark.
+        continue
+      }
+    }
+
     // Profit-pullback lock — close a winner once it retraces X% from its peak
     // unrealized profit (e.g. peak $20 @ 25% → lock at $15). The lock only
     // ARMS once the position's profit exceeded `profitPullbackActivateUsd`
@@ -1050,6 +1095,69 @@ export function markToMarket(
     }
   }
   return { state: next, closed }
+}
+
+/**
+ * Close a portion of an open position (scale-out): books a ClosedTrade for the
+ * closed units, shrinks the position, moves its stop to break-even and marks it
+ * `partialTaken` so the first target is never banked twice. When the portion
+ * covers the whole position it degrades to a full closePosition. Mirrors the
+ * client engine's `closePartial`.
+ */
+function closePartial(
+  state: AccountState,
+  position: Position,
+  opts: { price: number; units: number; reason: CloseReason; rates: RatesMap; time?: string },
+): { state: AccountState; trade: ClosedTrade | null } {
+  const closeUnits = Math.max(0, Math.min(opts.units, position.units))
+  if (closeUnits <= 0) return { state, trade: null }
+  if (closeUnits >= position.units) {
+    return closePosition(state, position.id, {
+      price: opts.price,
+      reason: opts.reason,
+      rates: opts.rates,
+      time: opts.time,
+    })
+  }
+  const now = opts.time ?? new Date().toISOString()
+  const gross = pnlUsd(position.side, position.entryPrice, opts.price, closeUnits, position.symbol, opts.rates)
+  const costPerTrade = (state.risk as { costPerTradeUsd?: number }).costPerTradeUsd ?? 0
+  const costShare = Math.max(0, costPerTrade) * (closeUnits / position.units)
+  const pnl = gross - costShare
+  const pnlPct = position.entryEquity > 0 ? (pnl / position.entryEquity) * 100 : 0
+  const trade: ClosedTrade = {
+    id: `${position.id}-part`,
+    symbol: position.symbol,
+    side: position.side,
+    units: closeUnits,
+    entryPrice: position.entryPrice,
+    entryTime: position.entryTime,
+    exitPrice: opts.price,
+    exitTime: now,
+    stopPrice: position.stopPrice,
+    takeProfitPrice: position.takeProfitPrice,
+    entryEquity: position.entryEquity,
+    pnl,
+    pnlPct,
+    closeReason: opts.reason,
+    strategy: position.strategy,
+    entryProbability: position.entryProbability,
+    status: 'closed',
+  }
+  return {
+    state: {
+      ...state,
+      balance: state.balance + pnl,
+      positions: state.positions.map((p) =>
+        p.id === position.id
+          ? { ...p, units: position.units - closeUnits, stopPrice: position.entryPrice, partialTaken: true }
+          : p,
+      ),
+      trades: [trade, ...state.trades],
+      updatedAt: now,
+    },
+    trade,
+  }
 }
 
 export function closePosition(
@@ -1138,6 +1246,14 @@ export function openPosition(
     Math.max(0, input.takeProfitPips),
   )
 
+  // Stamp the scale-out first target at OPEN time — mirrors the client engine.
+  const tp1Price =
+    risk.partialTakeProfit && (risk.partialTpRatio ?? 1) > 0
+      ? input.side === 'long'
+        ? input.entryPrice + (risk.partialTpRatio ?? 1) * Math.abs(entryPrice - stopPrice)
+        : input.entryPrice - (risk.partialTpRatio ?? 1) * Math.abs(entryPrice - stopPrice)
+      : undefined
+
   const position: Position = {
     id: crypto.randomUUID(),
     symbol: input.symbol,
@@ -1152,6 +1268,7 @@ export function openPosition(
     targetProfitUsd: input.targetProfitUsd ?? undefined,
     targetLossUsd: input.targetLossUsd ?? undefined,
     entryProbability: input.profitProbability,
+    tp1Price,
     status: 'open',
   }
 
