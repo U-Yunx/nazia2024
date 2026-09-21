@@ -48,7 +48,7 @@ export const MAX_ROBOT_SLOTS = 3
 const SLOTS = [1, 2, 3] as const
 
 /** The slots a signed-in user may run (slot 1 is always available). */
-export function robotSlots(owned: number[]): number[] {
+export function robotSlots(): number[] {
   const slots: number[] = []
   for (let n = 1; n <= MAX_ROBOT_SLOTS; n++) slots.push(n)
   return slots
@@ -200,7 +200,7 @@ export function Robots() {
       />
 
       {/* Fleet summary */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" role="list" aria-label="Fleet summary">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Fleet summary">
         {[
           {
             label: 'Active robots',
@@ -212,7 +212,7 @@ export function Robots() {
           { label: 'Combined balance', value: formatUsd(fleet.totalBalance), icon: Wallet, tone: 'text-accent' },
           { label: 'Total trades', value: String(fleet.totalTrades), icon: Activity, tone: 'text-accent' },
         ].map((s) => (
-          <Card key={s.label} role="listitem">
+          <Card key={s.label}>
             <CardContent>
               <div className="flex items-center gap-3">
                 <div className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-secondary/60', s.tone)}>
