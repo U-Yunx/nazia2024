@@ -1,5 +1,5 @@
 /**
- * Robots — the robot-slot manager.
+ * Robots — the robot-slot command center.
  *
  * Every user gets up to three robot slots. Each slot owns its own paper /
  * managed ledger, its own saved configuration (method, pairs, sizing, risk,
@@ -8,27 +8,44 @@
  * each other's trades. Slot 1 keeps the classic single-robot behaviour (and
  * all existing saved data); slots 2 and 3 are namespaced copies.
  *
- * This page lists the slots with their live ledger balance and takes you to
- * the Trading screen with the right slot selected (/trading?robot=N).
+ * Unlike a plain list of links, this page IS the control surface: every slot
+ * card shows live state (running / standby, balance, open positions, last
+ * run, auto-run countdown) and the active slot embeds the full control room
+ * right below the fleet — the same start confirmation, risk panel, positions
+ * table and journal as /trading, so you can configure and run a robot without
+ * leaving the page.
  */
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowRight, Bot, CheckCircle2, Circle, Lock, PlusCircle } from 'lucide-react'
+import {
+  Activity,
+  Bot,
+  ChevronRight,
+  Clock,
+  Layers,
+  Loader2,
+  Lock,
+  Pause,
+  Play,
+  Plus,
+  RefreshCw,
+  Wallet,
+  X,
+} from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
-import { formatUsd } from '../lib/format'
+import { loadLocal } from '../lib/trading/persistence'
+import { loadRobotPrefs, methodLabel } from '../lib/trading/robotPrefs'
+import { loadActivityLog, loadLastRun, type ActivityEntry } from '../lib/trading/robotActivity'
+import { loadRobotRunning, loadRunEnd } from '../lib/trading/robotState'
+import { WATCHLIST } from '../lib/watchlist'
+import { timeAgo, formatUsd } from '../lib/format'
 import { cn } from '../lib/cn'
 import { Badge, Button, Card, CardContent, PageHeader, Skeleton } from '../components/ui'
+import type { AccountState } from '../lib/trading/types'
 
 export const MAX_ROBOT_SLOTS = 3
-
-interface SlotRow {
-  robot_number: number
-  broker: string
-  balance: number
-  initial_balance: number
-  updated_at: string | null
-}
+const SLOTS = [1, 2, 3] as const
 
 /** The slots a signed-in user may run (slot 1 is always available). */
 export function robotSlots(owned: number[]): number[] {
@@ -37,171 +54,403 @@ export function robotSlots(owned: number[]): number[] {
   return slots
 }
 
+/** The localStorage/Supabase scope id for a robot slot — must match the
+ *  control room (src/pages/Trading.tsx): slot 1 keeps the legacy per-user
+ *  keys, slots 2..N are namespaced per user. */
+function scopeIdFor(userId: string | undefined, slot: number): string | undefined {
+  if (slot === 1) return userId
+  return userId ? `${userId}:slot-${slot}` : `slot-${slot}`
+}
+
+function robotTarget(slot: number): string {
+  return slot === 1 ? '/trading' : `/trading?robot=${slot}`
+}
+
+/** Server-side ledger row for a slot (authoritative balance when this browser
+ *  has never opened the slot — e.g. it was started on another device). */
+interface SlotRow {
+  robot_number: number
+  broker: string
+  balance: number
+  initial_balance: number
+  updated_at: string | null
+}
+
+/** Live, per-slot snapshot merged from local state + the server ledger. */
+interface SlotView {
+  slot: number
+  account: AccountState | null
+  row: SlotRow | null
+  running: boolean
+  lastRun: number | null
+  activity: ActivityEntry[]
+  runEnd: number | null
+}
+
+function buildSlot(userId: string | undefined, slot: number, row: SlotRow | null): SlotView {
+  const scope = scopeIdFor(userId, slot)
+  const account = loadLocal(slot)
+  return {
+    slot,
+    account,
+    row,
+    running: account?.risk.autoTrade === true || loadRobotRunning(scope),
+    lastRun: loadLastRun(scope),
+    activity: loadActivityLog(scope),
+    runEnd: loadRunEnd(scope),
+  }
+}
+
+function fmtDuration(minutes: number | null): string {
+  if (minutes == null) return 'Until stopped'
+  if (minutes < 60) return `${minutes} min`
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  return m > 0 ? `${h}h ${m}m` : `${h}h`
+}
+
+// The control room is heavy (charts, engine, brokers), so it loads lazily only
+// when a slot is expanded — the fleet itself stays light.
+const TradingRoom = lazy(() => import('./Trading').then((m) => ({ default: m.Trading })))
+
 export function Robots() {
   const { user } = useAuth()
   const [rows, setRows] = useState<SlotRow[] | null>(null)
+  // The slot whose full control room is embedded below the fleet (null = none).
+  const [activeSlot, setActiveSlot] = useState<number | null>(null)
 
-  useEffect(() => {
-    let active = true
-    setRows(null)
-    if (!user) return
+  // Authoritative server ledger rows (signed-in users only).
+  const loadRows = () => {
+    if (!user) {
+      setRows([])
+      return
+    }
     void (async () => {
       const { data } = await supabase
         .from('paper_accounts')
         .select('robot_number, broker, balance, initial_balance, updated_at')
         .eq('user_id', user.id)
         .order('robot_number', { ascending: true })
-      if (active) setRows((data as unknown as SlotRow[] | null) ?? [])
+      setRows((data as unknown as SlotRow[] | null) ?? [])
     })()
-    return () => {
-      active = false
-    }
-  }, [user?.id])
-
-  if (!user) {
-    return (
-      <div className="space-y-6">
-        <PageHeader
-          title="Your robots"
-          description="Run up to three trading robots side by side — each with its own account, settings and history."
-        />
-        <Card>
-          <CardContent>
-            <div className="flex flex-col items-center gap-4 py-10 text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-accent/15 text-accent">
-                <Bot className="h-6 w-6" aria-hidden="true" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold">Sign in to manage your robots</h2>
-                <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-                  Create a free account and every robot slot — its balance, settings and history — is backed up to
-                  your profile automatically.
-                </p>
-              </div>
-              <Link to="/auth">
-                <Button>
-                  Sign in / create account
-                  <ArrowRight className="h-4 w-4" aria-hidden="true" />
-                </Button>
-              </Link>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    )
   }
+  useEffect(loadRows, [user?.id])
+  // Fresh snapshot every 10s + manual refresh — a robot can start or stop on
+  // the control room (or in another tab), so the fleet should keep up.
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 10_000)
+    return () => clearInterval(id)
+  }, [])
+
+  const bySlot = useMemo(() => {
+    const m = new Map<number, SlotRow>()
+    for (const r of rows ?? []) m.set(r.robot_number, r)
+    return m
+  }, [rows])
+
+  const slots = useMemo<SlotView[]>(
+    () => SLOTS.map((n) => buildSlot(user?.id, n, bySlot.get(n) ?? null)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [user?.id, bySlot, tick],
+  )
+
+  const fleet = useMemo(() => {
+    const active = slots.filter((s) => s.running).length
+    const openPositions = slots.reduce((sum, s) => sum + (s.account?.positions.length ?? 0), 0)
+    const totalBalance = slots.reduce(
+      (sum, s) => sum + (s.account?.balance ?? s.row?.balance ?? 0),
+      0,
+    )
+    const totalTrades = slots.reduce((sum, s) => sum + (s.account?.trades.length ?? 0), 0)
+    return { active, openPositions, totalBalance, totalTrades }
+  }, [slots])
+
+  // Newest entries across all slots, newest first.
+  const recentActivity = useMemo(
+    () =>
+      slots
+        .flatMap((s) => s.activity.map((e) => ({ ...e, slot: s.slot })))
+        .sort((a, b) => b.t - a.t)
+        .slice(0, 12),
+    [slots],
+  )
 
   const loading = rows == null
-  const bySlot = new Map<number, SlotRow>()
-  for (const r of rows ?? []) bySlot.set(r.robot_number, r)
-  const owned = [...bySlot.keys()]
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Your robots"
-        description="Every slot is a fully independent trading robot — its own paper or managed ledger, its own method, pairs, sizing, risk and limits. A scalper on slot 1 and a long-term swing robot on slot 2 never share a balance or touch each other's trades."
+        description="Every slot is a fully independent trading robot — its own paper or managed ledger, its own method, pairs, sizing, risk and limits. A scalper on slot 1 and a long-term swing robot on slot 2 never share a balance or touch each other's trades. Pick a slot below to run it right here."
+        actions={
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              setTick((t) => t + 1)
+              loadRows()
+            }}
+            aria-label="Refresh robot statuses"
+          >
+            <RefreshCw className="h-4 w-4" aria-hidden="true" />
+            Refresh
+          </Button>
+        }
       />
 
+      {/* Fleet summary */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" role="list" aria-label="Fleet summary">
+        {[
+          {
+            label: 'Active robots',
+            value: `${fleet.active} / ${SLOTS.length}`,
+            icon: Play,
+            tone: fleet.active > 0 ? 'text-up' : 'text-muted-foreground',
+          },
+          { label: 'Open positions', value: String(fleet.openPositions), icon: Layers, tone: 'text-accent' },
+          { label: 'Combined balance', value: formatUsd(fleet.totalBalance), icon: Wallet, tone: 'text-accent' },
+          { label: 'Total trades', value: String(fleet.totalTrades), icon: Activity, tone: 'text-accent' },
+        ].map((s) => (
+          <Card key={s.label} role="listitem">
+            <CardContent>
+              <div className="flex items-center gap-3">
+                <div className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-secondary/60', s.tone)}>
+                  <s.icon className="h-4 w-4" aria-hidden="true" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{s.label}</p>
+                  <p className="truncate text-lg font-bold tnum">{s.value}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {loading && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Skeleton key={i} className="h-64 rounded-2xl" />
+          ))}
+        </div>
+      )}
+
+      {/* Robot slot cards */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {robotSlots(owned).map((n) => {
-          const row = bySlot.get(n)
-          const active = row != null
-          const started = active && row.robot_number === n
+        {slots.map((s) => {
+          const account = s.account
+          const serverRow = s.row
+          const prefs = loadRobotPrefs(s.slot)
+          const hasAccount = Boolean(account) || Boolean(serverRow)
+          const balance = account?.balance ?? serverRow?.balance
+          const openPositions = account?.positions.length ?? 0
+          const tradesCount = account?.trades.length ?? 0
+          const expanded = activeSlot === s.slot
+          const autoEndsSoon = s.running && s.runEnd != null && s.runEnd > Date.now()
           return (
-            <Card key={n} className={cn(active && 'border-accent/40')}>
-              <CardContent>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3">
+            <Card
+              key={s.slot}
+              className={cn(
+                'relative overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:border-accent/40 hover:shadow-lg',
+                s.running && 'border-up/30',
+                expanded && 'border-accent/60 ring-1 ring-accent/30',
+              )}
+            >
+              {/* Slot accent rail */}
+              <span
+                aria-hidden="true"
+                className={cn(
+                  'absolute inset-y-0 left-0 w-1',
+                  s.running ? 'bg-up' : hasAccount ? 'bg-accent/50' : 'bg-border',
+                )}
+              />
+              <CardContent className="space-y-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
                     <span
                       className={cn(
-                        'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-lg font-bold',
-                        active ? 'bg-accent/15 text-accent' : 'bg-secondary text-muted-foreground',
+                        'flex h-9 w-9 shrink-0 items-center justify-center rounded-full',
+                        s.running ? 'bg-up/15 text-up' : 'bg-secondary/60 text-accent',
                       )}
                     >
-                      {n}
+                      <Bot className="h-4 w-4" aria-hidden="true" />
                     </span>
                     <div>
-                      <p className="text-sm font-semibold text-foreground">
-                        Robot {n}
-                        {n === 1 && <span className="ml-2 text-xs font-normal text-muted-foreground">(classic)</span>}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {started ? 'Active ledger' : 'Empty slot — open it to start'}
+                      <h2 className="text-sm font-semibold text-foreground">
+                        Robot {s.slot}
+                        {s.slot === 1 && <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">(classic)</span>}
+                      </h2>
+                      <p className="text-[11px] text-muted-foreground">
+                        {hasAccount ? `${methodLabel(prefs.method)} · ${prefs.tradeMode} mode` : 'Empty slot — open it to start'}
                       </p>
                     </div>
                   </div>
-                  {active ? (
+                  {s.running ? (
                     <Badge className="border-up/30 bg-up/15 text-up">
-                      <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
-                      In use
+                      <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-up" aria-hidden="true" />
+                      Active
+                    </Badge>
+                  ) : hasAccount ? (
+                    <Badge className="border-border bg-muted text-muted-foreground">
+                      <Pause className="h-3 w-3" aria-hidden="true" />
+                      Standby
                     </Badge>
                   ) : (
-                    <Badge className="border-border bg-muted text-muted-foreground">
-                      <Circle className="h-3.5 w-3.5" aria-hidden="true" />
-                      Free
-                    </Badge>
+                    <Badge className="border-border bg-muted text-muted-foreground">Free</Badge>
                   )}
                 </div>
 
-                {active && row ? (
-                  <dl className="mt-4 grid grid-cols-2 gap-3">
-                    <div>
-                      <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Balance</dt>
-                      <dd className="mt-0.5 text-xl font-bold tnum text-foreground">{formatUsd(row.balance)}</dd>
+                {hasAccount ? (
+                  <>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="rounded-lg border border-border bg-secondary/30 px-2.5 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Balance</p>
+                        <p className="mt-0.5 truncate text-sm font-bold tnum text-foreground">{formatUsd(balance ?? 0)}</p>
+                      </div>
+                      <div className="rounded-lg border border-border bg-secondary/30 px-2.5 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Open</p>
+                        <p className="mt-0.5 truncate text-sm font-bold tnum text-foreground">{openPositions}</p>
+                      </div>
+                      <div className="rounded-lg border border-border bg-secondary/30 px-2.5 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Trades</p>
+                        <p className="mt-0.5 truncate text-sm font-bold tnum text-foreground">{tradesCount}</p>
+                      </div>
                     </div>
-                    <div>
-                      <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Started from</dt>
-                      <dd className="mt-0.5 text-sm font-medium tnum text-foreground">{formatUsd(row.initial_balance)}</dd>
+
+                    <ul className="space-y-1.5 text-xs text-muted-foreground">
+                      <li className="flex items-center justify-between gap-2">
+                        <span>Strategy</span>
+                        <span className="font-medium text-foreground">
+                          {prefs.strategyMode === 'manual' ? 'Manual (one method)' : 'Auto — best method'}
+                        </span>
+                      </li>
+                      <li className="flex items-center justify-between gap-2">
+                        <span>Pairs</span>
+                        <span className="font-medium text-foreground">
+                          {prefs.autoPickPairs
+                            ? `Top ${Math.min(prefs.pairCount, 10)} of ${WATCHLIST.length} (auto)`
+                            : `${prefs.pairs.length > 0 ? prefs.pairs.length : 2} selected`}
+                        </span>
+                      </li>
+                      <li className="flex items-center justify-between gap-2">
+                        <span>Auto-run</span>
+                        <span className="font-medium text-foreground">{fmtDuration(prefs.durationMinutes)}</span>
+                      </li>
+                    </ul>
+
+                    <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
+                      <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                        <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+                        {s.lastRun ? `Last run ${timeAgo(s.lastRun)}` : 'Never run'}
+                      </span>
+                      {autoEndsSoon && (
+                        <span className="text-[11px] text-amber">
+                          Ends {new Date(s.runEnd ?? 0).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      )}
                     </div>
-                    <div>
-                      <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Ledger</dt>
-                      <dd className="mt-0.5 text-sm capitalize text-foreground">{row.broker === 'managed' ? 'Managed live' : 'Paper'}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Account</dt>
-                      <dd className="mt-0.5 text-sm text-foreground">Slot {n}</dd>
-                    </div>
-                  </dl>
+                  </>
                 ) : (
-                  <p className="mt-4 text-sm text-muted-foreground">
-                    Open this slot and it gets its own starting balance, saved settings and trade journal — completely
-                    independent of your other robots.
-                  </p>
+                  <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border bg-secondary/20 px-4 py-6 text-center">
+                    <Plus className="h-5 w-5 text-accent" aria-hidden="true" />
+                    <p className="text-xs text-muted-foreground">
+                      This slot is free. Open it to create its own paper or managed account — the robot starts from
+                      your chosen balance and keeps a separate journal and settings.
+                    </p>
+                  </div>
                 )}
 
-                <div className="mt-5">
-                  <Link to={n === 1 ? '/trading' : `/trading?robot=${n}`} className="block">
-                    <Button variant={active ? 'secondary' : 'primary'} className="w-full">
-                      {active ? (
-                        <>
-                          <Bot className="h-4 w-4" aria-hidden="true" />
-                          Open Robot {n}
-                        </>
-                      ) : (
-                        <>
-                          <PlusCircle className="h-4 w-4" aria-hidden="true" />
-                          Create Robot {n}
-                        </>
-                      )}
-                      <ArrowRight className="h-4 w-4" aria-hidden="true" />
-                    </Button>
-                  </Link>
-                </div>
+                {/* In-page control — expands the full control room for this slot. */}
+                <Button variant={expanded ? 'secondary' : 'primary'} size="sm" className="w-full" onClick={() => setActiveSlot(expanded ? null : s.slot)}>
+                  {expanded ? (
+                    <>
+                      <X className="h-4 w-4" aria-hidden="true" />
+                      Collapse control room
+                    </>
+                  ) : hasAccount ? (
+                    <>
+                      <Play className="h-4 w-4" aria-hidden="true" />
+                      Open &amp; control
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="h-4 w-4" aria-hidden="true" />
+                      Create this robot
+                    </>
+                  )}
+                </Button>
               </CardContent>
             </Card>
           )
         })}
       </div>
 
-      {loading && (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-56 rounded-2xl" />
-          ))}
-        </div>
+      {/* Embedded control room for the active slot — the real Trading UI, no
+          navigation needed. Collapsed by default so the fleet stays light. */}
+      {activeSlot != null && (
+        <section aria-label={`Robot ${activeSlot} control room`} className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              <ChevronRight className="mr-1 inline h-4 w-4 text-accent" aria-hidden="true" />
+              Controlling <span className="font-semibold text-foreground">Robot {activeSlot}</span> — every change
+              saves to this slot only. For a distraction-free view, open it full-screen:
+            </p>
+            <Link to={robotTarget(activeSlot)} className="shrink-0">
+              <Button variant="secondary" size="sm">
+                Full screen
+                <ChevronRight className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            </Link>
+          </div>
+          <Suspense
+            fallback={
+              <div className="flex min-h-[40vh] items-center justify-center" role="status" aria-label="Loading control room">
+                <Loader2 className="h-6 w-6 animate-spin text-accent" aria-hidden="true" />
+              </div>
+            }
+          >
+            <TradingRoom slot={activeSlot} />
+          </Suspense>
+        </section>
       )}
 
+      {/* Recent fleet activity */}
+      <Card>
+        <CardContent>
+          <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-foreground">
+            <Activity className="h-4 w-4 text-accent" aria-hidden="true" />
+            Recent fleet activity
+          </h2>
+          {recentActivity.length > 0 ? (
+            <ul className="max-h-56 space-y-1.5 overflow-y-auto pr-1">
+              {recentActivity.map((e, i) => (
+                <li
+                  key={`${i}-${e.t}-${e.slot}`}
+                  className="flex items-start gap-2 rounded-md bg-muted/40 px-3 py-1.5 font-mono text-xs tnum"
+                >
+                  <Badge className="shrink-0 border-accent/40 bg-accent/10 px-1.5 text-[10px] text-accent">
+                    R{e.slot}
+                  </Badge>
+                  <span className="shrink-0 whitespace-nowrap text-muted-foreground">{timeAgo(e.t)}</span>
+                  <span>{e.m}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border bg-secondary/20 px-4 py-8 text-center">
+              <Bot className="h-6 w-6 text-muted-foreground" aria-hidden="true" />
+              <p className="text-sm font-medium text-foreground">No robot activity yet</p>
+              <p className="max-w-sm text-xs text-muted-foreground">
+                Start any robot from its slot above and every signal, trade and stop will land here — plus in the
+                slot's own activity feed inside its control room.
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* How slots work */}
       <div className="rounded-xl border border-border bg-secondary/30 p-4">
         <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
           <Lock className="h-4 w-4 text-accent" aria-hidden="true" />

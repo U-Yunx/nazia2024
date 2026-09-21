@@ -485,11 +485,13 @@ function ConfirmStartDialog({
   )
 }
 
-export function Trading() {
+export function Trading({ slot: slotProp }: { slot?: number } = {}) {
   const { user } = useAuth()
   const [searchParams] = useSearchParams()
-  // Which robot slot this page controls: /trading?robot=2 → slot 2 (1 default).
-  const robot = Math.min(3, Math.max(1, Number(searchParams.get('robot')) || 1))
+  // Which robot slot this page controls: an explicit `slot` prop wins (the
+  // Robots page embeds this control room per slot); otherwise /trading?robot=2
+  // → slot 2 (1 default).
+  const robot = slotProp ?? Math.min(3, Math.max(1, Number(searchParams.get('robot')) || 1))
   // localStorage/Supabase scope id: slot 1 keeps the legacy per-user keys so
   // existing users keep their saved settings, feed and run state; slots 2..N
   // are namespaced so every robot keeps its own balance, prefs and history.
@@ -2616,16 +2618,17 @@ export function Trading() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Trading robot"
+        title={robot > 1 ? `Trading robot · Slot ${robot}` : 'Trading robot'}
         description={
           <>
             Every trade is sized to your risk, always carries a stop-loss, and lands in your journal. Pick a method
             (scalping or long-term), let the robot run for a set duration, and auto-tune your strategy against
-            recent prices.
+            recent prices. Each slot keeps its own account, settings and history.
           </>
         }
         actions={
           <>
+            <SlotSwitcher slot={robot} />
             <MethodToggle method={prefs.method} onChange={applyMethod} />
             <ModeToggle mode={mode} onChange={setBrokerMode} />
           </>
