@@ -7,8 +7,14 @@
  * volatility filter (stand aside when the market is wild) and a
  * consecutive-loss circuit breaker. The more aggressive the preset, the fewer
  * guardrails stay on.
+ *
+ * The profile is PERSISTED per robot slot — localStorage for a fast local
+ * restore and the Supabase `robot_state.tune` mirror for a cross-device one.
+ * It used to live in component state only, so a refresh silently threw away
+ * the whole tuning (including the position-size multiplier the robot trades
+ * at). Values read back from either store go through `sanitizeTune`.
  */
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 export type Aggressiveness = 1 | 2 | 3 | 4 | 5
 
@@ -41,6 +47,15 @@ export const MANUAL_TUNE_DEFAULTS: ManualTune = {
   adaptiveRisk: true,
   volatilityFilter: false,
   maxConsecutiveLosses: 5,
+}
+
+const KEY = 'ana24.robot-tune'
+
+/** Namespaced localStorage key for a scope's tune profile. Slot 1 keeps the
+ *  legacy key, slot 0 is the manual workspace, slots 2..N are robot slots. */
+export function manualTuneKeyForSlot(slot: number): string {
+  if (slot === 0) return `${KEY}.manual`
+  return slot > 1 ? `${KEY}.slot-${slot}` : KEY
 }
 
 /** Presets by aggressiveness level (1 = conservative … 5 = extreme). */
@@ -78,20 +93,88 @@ export function guardrailLabel(
   return parts.length > 0 ? parts.join(' · ') : 'no guardrails'
 }
 
-export function useManualTune() {
-  const [tune, setTune] = useState<ManualTune>(MANUAL_TUNE_DEFAULTS)
+/** Coerce a stored knob into a finite number inside its sane band. */
+function tuneNum(v: unknown, fallback: number, min: number, max: number): number {
+  const n = typeof v === 'number' ? v : Number(v)
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(max, Math.max(min, n))
+}
 
-  const update = useCallback((patch: Partial<ManualTune>) => {
-    setTune((prev) => ({ ...prev, ...patch }))
-  }, [])
+export function sanitizeTune(input: unknown): ManualTune {
+  const t = (input && typeof input === 'object' ? input : {}) as Partial<ManualTune>
+  const level = Math.round(tuneNum(t.aggressiveness, MANUAL_TUNE_DEFAULTS.aggressiveness, 1, 5)) as Aggressiveness
+  return {
+    aggressiveness: level,
+    targetProfitPct: tuneNum(t.targetProfitPct, MANUAL_TUNE_DEFAULTS.targetProfitPct, 0, 50),
+    // A multiplier of 0 (or a typo'd negative) would scale every position to
+    // zero, so it is floored above zero and capped at 5× the risk-based size.
+    sizeMultiplier: tuneNum(t.sizeMultiplier, MANUAL_TUNE_DEFAULTS.sizeMultiplier, 0.05, 5),
+    riskPerTradePct: tuneNum(t.riskPerTradePct, MANUAL_TUNE_DEFAULTS.riskPerTradePct, 0.05, 10),
+    takeProfitRatio: tuneNum(t.takeProfitRatio, MANUAL_TUNE_DEFAULTS.takeProfitRatio, 0.5, 10),
+    maxOpenPositions: Math.round(tuneNum(t.maxOpenPositions, MANUAL_TUNE_DEFAULTS.maxOpenPositions, 1, 50)),
+    maxDailyLossPct: tuneNum(t.maxDailyLossPct, MANUAL_TUNE_DEFAULTS.maxDailyLossPct, 0, 50),
+    adaptiveRisk: t.adaptiveRisk !== false,
+    volatilityFilter: t.volatilityFilter === true,
+    maxConsecutiveLosses: Math.round(
+      tuneNum(t.maxConsecutiveLosses, MANUAL_TUNE_DEFAULTS.maxConsecutiveLosses, 0, 30),
+    ),
+  }
+}
 
-  const applyPreset = useCallback((level: Aggressiveness) => {
-    setTune({ aggressiveness: level, ...MANUAL_TUNE_PRESETS[level] })
-  }, [])
+export function loadManualTune(slot = 1): ManualTune {
+  try {
+    const raw = localStorage.getItem(manualTuneKeyForSlot(slot))
+    if (!raw) return MANUAL_TUNE_DEFAULTS
+    return sanitizeTune(JSON.parse(raw))
+  } catch {
+    return MANUAL_TUNE_DEFAULTS
+  }
+}
+
+export function saveManualTune(tune: ManualTune, slot = 1): void {
+  try {
+    localStorage.setItem(manualTuneKeyForSlot(slot), JSON.stringify(tune))
+  } catch {
+    /* storage full / blocked — non-fatal */
+  }
+}
+
+export function useManualTune(slot = 1) {
+  const [tune, setTune] = useState<ManualTune>(() => loadManualTune(slot))
+  // Re-load the slot's saved profile when the active robot slot changes (e.g.
+  // navigating between /trading?robot=1 and ?robot=2 without a remount).
+  const mountedSlot = useRef(slot)
+  useEffect(() => {
+    if (mountedSlot.current !== slot) {
+      mountedSlot.current = slot
+      setTune(loadManualTune(slot))
+    }
+  }, [slot])
+
+  const update = useCallback(
+    (patch: Partial<ManualTune>) => {
+      setTune((prev) => {
+        const next = { ...prev, ...patch }
+        saveManualTune(next, slot)
+        return next
+      })
+    },
+    [slot],
+  )
+
+  const applyPreset = useCallback(
+    (level: Aggressiveness) => {
+      const next: ManualTune = { aggressiveness: level, ...MANUAL_TUNE_PRESETS[level] }
+      setTune(next)
+      saveManualTune(next, slot)
+    },
+    [slot],
+  )
 
   const reset = useCallback(() => {
     setTune(MANUAL_TUNE_DEFAULTS)
-  }, [])
+    saveManualTune(MANUAL_TUNE_DEFAULTS, slot)
+  }, [slot])
 
   return { tune, update, applyPreset, reset }
 }

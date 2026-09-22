@@ -30,7 +30,7 @@ import { heartbeatRobotRun, loadRobotRun, saveRobotRun, stopRobotRun } from '../
 import { autoTune } from '../lib/trading/autoTune'
 import { proStrategyPreset, type StrategyPreset } from '../lib/trading/strategyPresets'
 import { PRO_TRADERS, type ProTrader } from '../lib/proTraders'
-import { aggressivenessLabel, guardrailLabel, useManualTune } from '../lib/trading/manualTune'
+import { aggressivenessLabel, guardrailLabel, MANUAL_TUNE_DEFAULTS, useManualTune } from '../lib/trading/manualTune'
 import { rankPairs, type RankedPair } from '../lib/trading/pairRanking'
 import { manualTargets } from '../lib/trading/manualMethod'
 import { fetchTimeSeries, useQuotes } from '../hooks/useMarketData'
@@ -309,6 +309,8 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
     setOverallMaxLossUsd,
     setMaxPerPair,
     setMaxPairsPerTrade,
+    setTradeMode,
+    setMaxOpenTrades,
     setProfitPullbackPct,
     setSizingMode,
     setRiskPerTradePct,
@@ -380,7 +382,7 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
   // robot still requires an active subscription.
   const { quotes, kind: marketKind, error: marketError } = useQuotes(15_000, scanPairs)
   const canRunRobot = access.hasAccess || (mode === 'paper' && access.paperTrading)
-  const { tune, update: updateTune, applyPreset, reset: resetTune } = useManualTune()
+  const { tune, update: updateTune, applyPreset, reset: resetTune } = useManualTune(robot)
   // External-broker live (OANDA / MT) — managed live runs on the platform's own
   // ledger and needs no broker connection, so it never depends on these.
   const isBrokerLive = mode === 'oanda' || mode === 'mt'
@@ -1035,6 +1037,43 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
           setOverallMaxLossUsd(lim.maxLossUsd)
           setProfitPullbackPct(lim.pullbackPct)
         }
+        // The remaining autopilot config — auto-run duration, trade mode, pair
+        // count and the position caps. The sections above cover WHAT the robot
+        // trades; these decide HOW LONG and HOW WIDE it runs. Without them a run
+        // restored on another device came back "until stopped", one position per
+        // pair and no cycle cap while the header claimed to be the same run.
+        if (row.prefs) {
+          const p = row.prefs
+          const duration = p.durationMinutes ?? null
+          const tradeMode = p.tradeMode ?? 'sequential'
+          const autopilotChanged =
+            duration !== (prefs.durationMinutes ?? null) ||
+            tradeMode !== (prefs.tradeMode ?? 'sequential') ||
+            (p.pairCount ?? 5) !== (prefs.pairCount ?? 5) ||
+            (p.maxPerPair ?? 1) !== (prefs.maxPerPair ?? 1) ||
+            (p.maxOpenTrades ?? 0) !== (prefs.maxOpenTrades ?? 0) ||
+            (p.maxPairsPerTrade ?? 0) !== (prefs.maxPairsPerTrade ?? 0)
+          if (autopilotChanged) restored.push('autopilot settings')
+          setDuration(duration)
+          setTradeMode(tradeMode)
+          setPairCount(p.pairCount ?? 5)
+          setMaxPerPair(p.maxPerPair ?? 1)
+          setMaxOpenTrades(p.maxOpenTrades ?? 0)
+          setMaxPairsPerTrade(p.maxPairsPerTrade ?? 0)
+        }
+        // The manual-tune profile — the aggressiveness preset and, above all,
+        // the position-size multiplier the robot scales every trade by. Its
+        // risk side already travels with the account (paper_accounts.risk), so
+        // the knobs have to come back with it or the panel would show one
+        // profile while the account trades another.
+        if (row.tune) {
+          const t = row.tune
+          if (JSON.stringify(t) !== JSON.stringify(tune)) restored.push('manual tune')
+          updateTune(t)
+          // Only badge it as applied when the restored profile is a real
+          // tuning — a never-touched panel keeps its untouched state.
+          if (JSON.stringify(t) !== JSON.stringify(MANUAL_TUNE_DEFAULTS)) setTuneApplied(true)
+        }
         // Keep the "Apply limits" form in step with the committed values — its
         // draft was seeded at mount from this device's own (maybe different)
         // prefs, so a restore must re-sync the visible inputs too, or the form
@@ -1103,6 +1142,15 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
       mp: prefs.overallMaxProfitUsd,
       ml: prefs.overallMaxLossUsd,
       pb: prefs.profitPullbackPct,
+      // The remaining autopilot prefs + the manual-tune profile — part of the
+      // run's configuration, so a restore on another device keeps them too.
+      dm: prefs.durationMinutes,
+      tm: prefs.tradeMode,
+      pc: prefs.pairCount,
+      mpp: prefs.maxPerPair,
+      mot: prefs.maxOpenTrades,
+      mpt: prefs.maxPairsPerTrade,
+      tu: tune,
     })
     if (durableWriteRef.current?.key === key && durableWriteRef.current.sig === sig) return
     durableWriteRef.current = { key, sig }
@@ -1134,6 +1182,12 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
         maxLossUsd: prefs.overallMaxLossUsd,
         pullbackPct: prefs.profitPullbackPct,
       },
+      // The complete autopilot config + manual-tune profile (auto-run
+      // duration, trade mode, pair caps, aggressiveness, size multiplier and
+      // its guardrails) — so a reload on another device resumes the SAME run
+      // configuration instead of that device's defaults.
+      prefs: { ...prefs },
+      tune: { ...tune },
       activity: robotLog,
     })
   }, [
@@ -1161,6 +1215,13 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
     prefs.overallMaxProfitUsd,
     prefs.overallMaxLossUsd,
     prefs.profitPullbackPct,
+    prefs.durationMinutes,
+    prefs.tradeMode,
+    prefs.pairCount,
+    prefs.maxPerPair,
+    prefs.maxOpenTrades,
+    prefs.maxPairsPerTrade,
+    tune,
   ])
   /**
    * The multi-pair / multi-strategy robot. On every quote tick it fetches fresh

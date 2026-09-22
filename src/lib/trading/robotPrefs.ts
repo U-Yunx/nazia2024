@@ -77,44 +77,61 @@ export function isStrategyType(v: unknown): v is StrategyType {
   return typeof v === 'string' && STRATEGY_TYPES_SET.has(v)
 }
 
+/**
+ * Validate + clamp a raw preferences blob into a complete RobotPrefs.
+ *
+ * One validator serves BOTH stores: the localStorage copy and the Supabase
+ * `robot_state.prefs` mirror. A config restored from another device is
+ * therefore held to exactly the same rules as a locally saved one — an
+ * out-of-band or hand-edited row can never arrive with a negative duration, a
+ * 40%-per-trade risk or a stale lot pick.
+ */
+export function sanitizePrefs(raw: Partial<RobotPrefs> | null | undefined): RobotPrefs {
+  if (!raw || typeof raw !== 'object') return DEFAULTS
+  const p = raw
+  // Legacy save: a previously picked integer lot keeps meaning "fixed lot";
+  // never-picked (0) and brand-new prefs fall back to the risk default.
+  const legacyLotPicked = typeof p.lot === 'number' && p.lot >= 1
+  const duration = num(p.durationMinutes, NaN)
+  return {
+    method: p.method === 'longterm' ? 'longterm' : 'scalping',
+    strategyMode: p.strategyMode === 'manual' ? 'manual' : 'auto',
+    manualStrategy: isStrategyType(p.manualStrategy) ? p.manualStrategy : 'MA',
+    // null = run until stopped; anything else must be a positive minute count
+    // (0/negative/NaN would start a run window that is already expired).
+    durationMinutes: Number.isFinite(duration) && duration > 0 ? duration : null,
+    pairs: Array.isArray(p.pairs) ? p.pairs.filter((s): s is string => typeof s === 'string') : [],
+    autoPickPairs: p.autoPickPairs === true,
+    pairCount: Math.min(10, Math.max(1, num(p.pairCount, DEFAULTS.pairCount))),
+    perTradeTakeProfitPips: Math.max(0, num(p.perTradeTakeProfitPips, 0)),
+    perTradeStopLossPips: Math.max(0, num(p.perTradeStopLossPips, 0)),
+    overallMaxProfitUsd: Math.max(0, num(p.overallMaxProfitUsd, 0)),
+    overallMaxLossUsd: Math.max(0, num(p.overallMaxLossUsd, 0)),
+    tradeMode: p.tradeMode === 'concurrent' ? 'concurrent' : 'sequential',
+    maxPerPair: Math.max(1, Math.round(num(p.maxPerPair, DEFAULTS.maxPerPair))),
+    // 0 = unlimited (no global cap); any positive number is a hard cap.
+    maxOpenTrades: Math.max(0, Math.round(num(p.maxOpenTrades, DEFAULTS.maxOpenTrades))),
+    // 0 = no cap; positive = at most N distinct pairs per cycle (clamped to
+    // the watchlist size so a stale pref can never freeze the robot).
+    maxPairsPerTrade: Math.min(
+      MAX_PAIRS_CAP,
+      Math.max(0, Math.round(num(p.maxPairsPerTrade, DEFAULTS.maxPairsPerTrade))),
+    ),
+    // Profit-pullback lock % — clamp to a sane 0–90 so a typo can't trap a
+    // winner into closing almost immediately.
+    profitPullbackPct: Math.min(90, Math.max(0, num(p.profitPullbackPct, DEFAULTS.profitPullbackPct))),
+    sizingMode: p.sizingMode === 'fixed' ? 'fixed' : legacyLotPicked ? 'fixed' : 'risk',
+    riskPerTradePct: clampRiskPct(num(p.riskPerTradePct, DEFAULT_RISK_PCT)),
+    // Fixed lot: fractional, snapped to the 0.01 step (0 = none picked yet).
+    lot: normalizeLots(num(p.lot, DEFAULTS.lot)),
+  }
+}
+
 export function loadRobotPrefs(slot = 1): RobotPrefs {
   try {
     const raw = localStorage.getItem(prefsKeyForSlot(slot))
     if (!raw) return DEFAULTS
-    const p = JSON.parse(raw) as Partial<RobotPrefs>
-    // Legacy save: a previously picked integer lot keeps meaning "fixed lot";
-    // never-picked (0) and brand-new prefs fall back to the risk default.
-    const legacyLotPicked = typeof p.lot === 'number' && p.lot >= 1
-    return {
-      method: p.method === 'longterm' ? 'longterm' : 'scalping',
-      strategyMode: p.strategyMode === 'manual' ? 'manual' : 'auto',
-      manualStrategy: isStrategyType(p.manualStrategy) ? p.manualStrategy : 'MA',
-      durationMinutes: typeof p.durationMinutes === 'number' ? p.durationMinutes : null,
-      pairs: Array.isArray(p.pairs) ? p.pairs : [],
-      autoPickPairs: p.autoPickPairs === true,
-      pairCount: Math.min(10, Math.max(1, num(p.pairCount, DEFAULTS.pairCount))),
-      perTradeTakeProfitPips: Math.max(0, num(p.perTradeTakeProfitPips, 0)),
-      perTradeStopLossPips: Math.max(0, num(p.perTradeStopLossPips, 0)),
-      overallMaxProfitUsd: Math.max(0, num(p.overallMaxProfitUsd, 0)),
-      overallMaxLossUsd: Math.max(0, num(p.overallMaxLossUsd, 0)),
-      tradeMode: p.tradeMode === 'concurrent' ? 'concurrent' : 'sequential',
-      maxPerPair: Math.max(1, Math.round(num(p.maxPerPair, DEFAULTS.maxPerPair))),
-      // 0 = unlimited (no global cap); any positive number is a hard cap.
-      maxOpenTrades: Math.max(0, Math.round(num(p.maxOpenTrades, DEFAULTS.maxOpenTrades))),
-      // 0 = no cap; positive = at most N distinct pairs per cycle (clamped to
-      // the watchlist size so a stale pref can never freeze the robot).
-      maxPairsPerTrade: Math.min(
-        MAX_PAIRS_CAP,
-        Math.max(0, Math.round(num(p.maxPairsPerTrade, DEFAULTS.maxPairsPerTrade))),
-      ),
-      // Profit-pullback lock % — clamp to a sane 0–90 so a typo can't trap a
-      // winner into closing almost immediately.
-      profitPullbackPct: Math.min(90, Math.max(0, num(p.profitPullbackPct, DEFAULTS.profitPullbackPct))),
-      sizingMode: p.sizingMode === 'fixed' ? 'fixed' : legacyLotPicked ? 'fixed' : 'risk',
-      riskPerTradePct: clampRiskPct(num(p.riskPerTradePct, DEFAULT_RISK_PCT)),
-      // Fixed lot: fractional, snapped to the 0.01 step (0 = none picked yet).
-      lot: normalizeLots(num(p.lot, DEFAULTS.lot)),
-    }
+    return sanitizePrefs(JSON.parse(raw) as Partial<RobotPrefs>)
   } catch {
     return DEFAULTS
   }

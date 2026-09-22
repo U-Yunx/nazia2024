@@ -2,10 +2,11 @@
  * Durable robot state — the Supabase copy of what the browser keeps locally.
  *
  * The robot's running flag, auto-run window, session-guard baseline, last-run
- * stamp, trading config (pairs + strategy) and activity feed are written to
- * `robot_state` (one row per user + robot slot) and read back on load, so a
- * refresh — or moving to another tab, device or browser — restores what the
- * robot was doing instead of starting blank.
+ * stamp, trading config (pairs + strategy + sizing + stops + session limits),
+ * autopilot prefs (duration, trade mode, pair caps) + manual-tune profile and
+ * activity feed are written to `robot_state` (one row per user + robot slot)
+ * and read back on load, so a refresh — or moving to another tab, device or
+ * browser — restores what the robot was doing instead of starting blank.
  *
  * localStorage stays the fast path: every call here is best-effort and guarded,
  * so anonymous visitors (no user id) and offline runs keep working exactly as
@@ -13,8 +14,10 @@
  */
 import { isSupabaseConfigured, supabase } from '../supabase'
 import { defaultParams } from '../strategies'
-import type { Interval, StrategyConfig, StrategyParams, StrategyType, TradingMethod } from '../types'
+import type { Interval, RobotPrefs, StrategyConfig, StrategyParams, StrategyType, TradingMethod } from '../types'
 import { normalizeLots } from './lots'
+import { sanitizePrefs } from './robotPrefs'
+import { sanitizeTune, type ManualTune } from './manualTune'
 import type { ActivityEntry } from './robotActivity'
 
 export interface RobotStateRow {
@@ -40,6 +43,16 @@ export interface RobotStateRow {
   stops: RobotStopsState | null
   /** The robot's session guardrails (max profit/loss USD, pull-back %). */
   limits: RobotLimitsState | null
+  /**
+   * The robot's full autopilot configuration (auto-run duration, trade mode,
+   * pair count, per-pair / max-open / per-cycle caps …), captured so a restore
+   * on another device keeps the COMPLETE run configuration. Without it a
+   * resumed robot ran "until stopped" with a single position per pair and no
+   * cycle cap, whatever this device happened to have saved.
+   */
+  prefs: RobotPrefs | null
+  /** The manual-tune profile (aggressiveness knobs + guardrails). */
+  tune: ManualTune | null
   /** Persisted activity feed, newest first. */
   activity: ActivityEntry[]
   updated_at: string | null
@@ -114,6 +127,8 @@ export interface RobotStatePatch {
   sizing?: RobotSizingState | null
   stops?: RobotStopsState | null
   limits?: RobotLimitsState | null
+  prefs?: RobotPrefs | null
+  tune?: ManualTune | null
   activity?: ActivityEntry[]
 }
 
@@ -203,6 +218,23 @@ export function limitsFrom(v: unknown): RobotLimitsState | null {
   }
 }
 
+/** Coerce the stored jsonb autopilot config into a complete RobotPrefs (or
+ *  null when the blob isn't an object at all). Reuses the same validator as
+ *  the localStorage copy, so a restored config obeys exactly the rules a
+ *  locally saved one does. */
+export function prefsFrom(v: unknown): RobotPrefs | null {
+  if (!v || typeof v !== 'object') return null
+  return sanitizePrefs(v as Partial<RobotPrefs>)
+}
+
+/** Coerce the stored jsonb manual-tune profile into a typed ManualTune (or
+ *  null when the blob isn't an object at all). Every knob is clamped to its
+ *  sane band — a corrupt row can never size a trade 10×, or zero, the default. */
+export function tuneFrom(v: unknown): ManualTune | null {
+  if (!v || typeof v !== 'object') return null
+  return sanitizeTune(v)
+}
+
 /** Postgres bigint comes back as a string in some drivers — normalise to a number. */
 function numOrNull(v: unknown): number | null {
   if (v == null) return null
@@ -249,6 +281,8 @@ export async function loadRobotState(userId: string, robotNumber = 1): Promise<R
       sizing: sizingFrom(row.sizing),
       stops: stopsFrom(row.stops),
       limits: limitsFrom(row.limits),
+      prefs: prefsFrom(row.prefs),
+      tune: tuneFrom(row.tune),
       activity: activityFrom(row.activity),
     }
   } catch {
