@@ -1,3 +1,7 @@
-# SPA fallback — every unknown route serves index.html so client-side routing
-# works on /trading, /admin, /profile, etc.
+# Cloudflare Pages redirects — /_redirects
+# SPA fallback: unknown paths serve index.html as a 200 rewrite (no 30x hop),
+# so client-side routing works for /trading, /admin, /profile, /strategies, etc.
+# Existing static files always win over this rule (e.g. /assets/*, /favicon).
+# The custom /404.html covers the rare case a request can't be served at all.
+
 /*  /index.html  200

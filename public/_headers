@@ -1,4 +1,11 @@
-# Static-host response headers — harden the SPA for a finance app.
+# Cloudflare Pages response headers — /_headers
+# Applied at the edge on every response. Format: URL pattern on its own line,
+# followed by indented "Header: value" lines. Rules merge — the most specific
+# match wins on conflict. Vite copies this file verbatim into dist/.
+#
+# Security hardening for a finance app: no framing, strict referrer, a tight
+# CSP that only allows Supabase as an external origin, and HSTS.
+
 /*
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
@@ -6,3 +13,22 @@
   Permissions-Policy: camera=(), microphone=(), geolocation=()
   Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://xopygzpepikerwqxzqzu.supabase.co wss://xopygzpepikerwqxzqzu.supabase.co; frame-ancestors 'none'; base-uri 'self'; form-action 'self'
   Strict-Transport-Security: max-age=31536000; includeSubDomains
+
+# Hashed build assets (dist/assets/*) never change between deploys — cache at the edge.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Never serve a stale app shell — the bundle changes on every deploy.
+/index.html
+  Cache-Control: no-cache
+
+# Same for the custom error page.
+/404.html
+  Cache-Control: no-cache
+
+# Crawler metadata refreshes on a short TTL.
+/robots.txt
+  Cache-Control: public, max-age=3600
+
+/sitemap.xml
+  Cache-Control: public, max-age=3600

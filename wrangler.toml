@@ -1,0 +1,17 @@
+# Cloudflare Pages configuration — wrangler.toml
+# Fresh setup for deploying the built SPA (dist/) to Cloudflare Pages.
+# Reference: https://developers.cloudflare.com/pages/configuration/wrangler-configuration/
+#
+# Quick start:
+#   npx wrangler@latest login
+#   npx wrangler@latest pages project create ana24 --production-branch main
+#   npm run build
+#   npx wrangler@latest pages deploy dist --project-name ana24
+
+name = "ana24"                     # Pages project name — rename to match your dashboard project
+pages_build_output_dir = "./dist"  # Vite build output (what gets uploaded)
+compatibility_date = "2024-11-01"  # Runtime compatibility date for Pages/Functions
+
+# NOTE: SPA fallback and security headers live in /public/_redirects and
+# /public/_headers — Vite copies them into dist/, so Pages applies them at the edge.
+# No Cloudflare Functions are used; all backend logic runs in Supabase Edge Functions.
