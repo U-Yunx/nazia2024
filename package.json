@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "deploy": "node scripts/check-deploy-env.mjs && vite build"
+    "deploy": "node scripts/check-deploy-env.mjs && vite build",
+    "deploy:pages": "npm run deploy && npx wrangler@latest pages deploy dist --project-name ana24"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4",
