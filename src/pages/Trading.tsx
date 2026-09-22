@@ -1042,6 +1042,7 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
     prefs.tradeMode,
     prefs.maxPerPair,
     prefs.maxOpenTrades,
+    prefs.maxPairsPerTrade,
     rates,
     staleSymbols,
     marketKind,
@@ -1579,11 +1580,13 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
                   </Button>
                 </div>
               )}
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                {sizingValid
-                  ? `Every trade opens at ${formatLots(normalizeLots(prefs.lot))} lot = ${Math.max(1, Math.round(normalizeLots(prefs.lot) * contractSize)).toLocaleString('en-US')} units on this ${accountKindLabel(account?.risk.kind)} account.`
-                  : `0.01 lot = ${Math.max(1, Math.round(contractSize * MIN_LOT))} unit${Math.max(1, Math.round(contractSize * MIN_LOT)) === 1 ? '' : 's'} on this ${accountKindLabel(account?.risk.kind)} account — pick a lot of 0.01 or more.`}
-              </p>
+              {sizingMode === 'fixed' && (
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  {sizingValid
+                    ? `Every trade opens at ${formatLots(normalizeLots(prefs.lot))} lot = ${Math.max(1, Math.round(normalizeLots(prefs.lot) * contractSize)).toLocaleString('en-US')} units on this ${accountKindLabel(account?.risk.kind)} account.`
+                    : `0.01 lot = ${Math.max(1, Math.round(contractSize * MIN_LOT)).toLocaleString('en-US')} unit${Math.max(1, Math.round(contractSize * MIN_LOT)) === 1 ? '' : 's'} on this ${accountKindLabel(account?.risk.kind)} account — pick a lot of 0.01 or more.`}
+                </p>
+              )}
             </div>
           </div>
 
