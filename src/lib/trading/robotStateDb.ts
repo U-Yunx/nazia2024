@@ -36,6 +36,10 @@ export interface RobotStateRow {
   strategy: RobotStrategyState | null
   /** The robot's position sizing (mode, risk %, fixed lot). */
   sizing: RobotSizingState | null
+  /** The robot's per-trade stop overrides (TP/SL pips, 0 = risk-based default). */
+  stops: RobotStopsState | null
+  /** The robot's session guardrails (max profit/loss USD, pull-back %). */
+  limits: RobotLimitsState | null
   /** Persisted activity feed, newest first. */
   activity: ActivityEntry[]
   updated_at: string | null
@@ -71,6 +75,33 @@ export interface RobotSizingState {
   lot: number
 }
 
+/**
+ * The robot's per-trade stop overrides, captured so a run that resumes on
+ * another device keeps the SAME TP/SL pips instead of falling back to the
+ * strategy's risk-based defaults. 0 = off (the risk-based default applies).
+ */
+export interface RobotStopsState {
+  /** Per-trade take-profit override in pips (0 = off). */
+  tpPips: number
+  /** Per-trade stop-loss override in pips (0 = off). */
+  slPips: number
+}
+
+/**
+ * The robot's session guardrails, captured so a run that resumes on another
+ * device keeps the SAME profit/loss limits and pull-back lock — the robot
+ * stops and flattens at the same numbers it was configured with instead of
+ * running unprotected against a different device's defaults.
+ */
+export interface RobotLimitsState {
+  /** Session max profit in USD (0 = off). */
+  maxProfitUsd: number
+  /** Session max loss in USD (0 = off). */
+  maxLossUsd: number
+  /** Profit pull-back lock % — a winner closes after giving back this much (0 = off). */
+  pullbackPct: number
+}
+
 /** A partial update: omitted fields are left untouched in the row. */
 export interface RobotStatePatch {
   running?: boolean
@@ -81,6 +112,8 @@ export interface RobotStatePatch {
   pairs?: string[]
   strategy?: RobotStrategyState | null
   sizing?: RobotSizingState | null
+  stops?: RobotStopsState | null
+  limits?: RobotLimitsState | null
   activity?: ActivityEntry[]
 }
 
@@ -139,6 +172,37 @@ export function sizingFrom(v: unknown): RobotSizingState | null {
   }
 }
 
+/** Coerce the stored jsonb per-trade stops into a typed, valid state (or null
+ *  when the blob isn't a stops object). Pips are floored at 0 — a corrupt or
+ *  partial row can never produce a negative stop or a huge unsigned value. */
+export function stopsFrom(v: unknown): RobotStopsState | null {
+  if (!v || typeof v !== 'object') return null
+  const o = v as Record<string, unknown>
+  const tp = Number(o.tpPips)
+  const sl = Number(o.slPips)
+  return {
+    tpPips: Number.isFinite(tp) ? Math.max(0, tp) : 0,
+    slPips: Number.isFinite(sl) ? Math.max(0, sl) : 0,
+  }
+}
+
+/** Coerce the stored jsonb session limits into a typed, valid state (or null
+ *  when the blob isn't a limits object). USD amounts are floored at 0 (off);
+ *  the pull-back % is clamped into the 0–90 band the UI allows, so a typo'd or
+ *  hostile row can never trap a winner into closing almost immediately. */
+export function limitsFrom(v: unknown): RobotLimitsState | null {
+  if (!v || typeof v !== 'object') return null
+  const o = v as Record<string, unknown>
+  const profit = Number(o.maxProfitUsd)
+  const loss = Number(o.maxLossUsd)
+  const pullback = Number(o.pullbackPct)
+  return {
+    maxProfitUsd: Number.isFinite(profit) ? Math.max(0, profit) : 0,
+    maxLossUsd: Number.isFinite(loss) ? Math.max(0, loss) : 0,
+    pullbackPct: Number.isFinite(pullback) ? Math.min(90, Math.max(0, pullback)) : 0,
+  }
+}
+
 /** Postgres bigint comes back as a string in some drivers — normalise to a number. */
 function numOrNull(v: unknown): number | null {
   if (v == null) return null
@@ -183,6 +247,8 @@ export async function loadRobotState(userId: string, robotNumber = 1): Promise<R
       pairs: pairsFrom(row.pairs),
       strategy: strategyFrom(row.strategy),
       sizing: sizingFrom(row.sizing),
+      stops: stopsFrom(row.stops),
+      limits: limitsFrom(row.limits),
       activity: activityFrom(row.activity),
     }
   } catch {

@@ -1010,6 +1010,46 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
           setRiskPerTradePct(sz.riskPerTradePct)
           setLot(sz.lot)
         }
+        // Per-trade stops — the exact TP/SL pip overrides a resumed run trades
+        // with, so it keeps the same exits instead of the risk-based defaults.
+        if (row.stops) {
+          const st = row.stops
+          const stopsChanged =
+            (prefs.perTradeTakeProfitPips ?? 0) !== st.tpPips ||
+            (prefs.perTradeStopLossPips ?? 0) !== st.slPips
+          if (stopsChanged) restored.push('per-trade stops')
+          setPerTradeTakeProfitPips(st.tpPips)
+          setPerTradeStopLossPips(st.slPips)
+        }
+        // Session limits — max profit / max loss / pull-back lock, so a resumed
+        // run keeps the same guardrails and stops at the same numbers
+        // (account.risk re-syncs to the restored pull-back via its effect).
+        if (row.limits) {
+          const lim = row.limits
+          const limitsChanged =
+            (prefs.overallMaxProfitUsd ?? 0) !== lim.maxProfitUsd ||
+            (prefs.overallMaxLossUsd ?? 0) !== lim.maxLossUsd ||
+            (prefs.profitPullbackPct ?? 25) !== lim.pullbackPct
+          if (limitsChanged) restored.push('session limits')
+          setOverallMaxProfitUsd(lim.maxProfitUsd)
+          setOverallMaxLossUsd(lim.maxLossUsd)
+          setProfitPullbackPct(lim.pullbackPct)
+        }
+        // Keep the "Apply limits" form in step with the committed values — its
+        // draft was seeded at mount from this device's own (maybe different)
+        // prefs, so a restore must re-sync the visible inputs too, or the form
+        // would show one set of numbers while the robot enforces another.
+        if (row.stops || row.limits) {
+          setDraftTradeLimits({
+            tp: row.stops?.tpPips ?? prefs.perTradeTakeProfitPips,
+            sl: row.stops?.slPips ?? prefs.perTradeStopLossPips,
+            profit: row.limits?.maxProfitUsd ?? prefs.overallMaxProfitUsd,
+            loss: row.limits?.maxLossUsd ?? prefs.overallMaxLossUsd,
+            pullback: row.limits?.pullbackPct ?? prefs.profitPullbackPct,
+          })
+          setLimitsDirty(false)
+          setLimitsApplied(true)
+        }
         // Tell the user when the restore actually overrode this device's own
         // settings (cross-device or after clearing the browser) — silent
         // config swaps are confusing; a same-device reload matches and stays
@@ -1058,6 +1098,11 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
       sz: prefs.sizingMode,
       rp: prefs.riskPerTradePct,
       lt: prefs.lot,
+      tp: prefs.perTradeTakeProfitPips,
+      sl: prefs.perTradeStopLossPips,
+      mp: prefs.overallMaxProfitUsd,
+      ml: prefs.overallMaxLossUsd,
+      pb: prefs.profitPullbackPct,
     })
     if (durableWriteRef.current?.key === key && durableWriteRef.current.sig === sig) return
     durableWriteRef.current = { key, sig }
@@ -1079,6 +1124,15 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
         sizingMode: prefs.sizingMode ?? 'risk',
         riskPerTradePct: prefs.riskPerTradePct ?? 1,
         lot: prefs.lot,
+      },
+      stops: {
+        tpPips: prefs.perTradeTakeProfitPips,
+        slPips: prefs.perTradeStopLossPips,
+      },
+      limits: {
+        maxProfitUsd: prefs.overallMaxProfitUsd,
+        maxLossUsd: prefs.overallMaxLossUsd,
+        pullbackPct: prefs.profitPullbackPct,
       },
       activity: robotLog,
     })
@@ -1102,6 +1156,11 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
     prefs.sizingMode,
     prefs.riskPerTradePct,
     prefs.lot,
+    prefs.perTradeTakeProfitPips,
+    prefs.perTradeStopLossPips,
+    prefs.overallMaxProfitUsd,
+    prefs.overallMaxLossUsd,
+    prefs.profitPullbackPct,
   ])
   /**
    * The multi-pair / multi-strategy robot. On every quote tick it fetches fresh

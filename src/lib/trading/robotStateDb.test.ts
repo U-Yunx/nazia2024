@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { isSupabaseConfigured } from '../supabase'
-import { clearRobotState, loadRobotState, pairsFrom, saveRobotState, sizingFrom, strategyFrom } from './robotStateDb'
+import { clearRobotState, limitsFrom, loadRobotState, pairsFrom, saveRobotState, sizingFrom, stopsFrom, strategyFrom } from './robotStateDb'
 
 /**
  * With no Supabase env vars configured (CI and fresh previews) the client is the
@@ -39,6 +39,15 @@ describe('robotStateDb (offline)', () => {
         session_start_equity: 10_000,
         last_run_at: 1_700_000_100_000,
         activity: [],
+      }),
+    ).resolves.toBeUndefined()
+  })
+
+  it('mirrors the guardrails (stops + limits) without throwing', async () => {
+    await expect(
+      saveRobotState('user-1', 1, {
+        stops: { tpPips: 25, slPips: 12 },
+        limits: { maxProfitUsd: 100, maxLossUsd: 20, pullbackPct: 25 },
       }),
     ).resolves.toBeUndefined()
   })
@@ -160,5 +169,49 @@ describe('robotStateDb normalizers', () => {
     expect(s?.lot).toBe(0)
     expect(sizingFrom({ sizingMode: 'fixed', riskPerTradePct: 'lots', lot: null })?.lot).toBe(0)
     expect(sizingFrom({ sizingMode: 'fixed', riskPerTradePct: NaN, lot: -3 })?.lot).toBe(0)
+  })
+
+  it('round-trips a full stops blob', () => {
+    expect(stopsFrom({ tpPips: 25, slPips: 12 })).toEqual({ tpPips: 25, slPips: 12 })
+  })
+
+  it('rejects a blob that is not stops at all', () => {
+    expect(stopsFrom(null)).toBeNull()
+    expect(stopsFrom(12)).toBeNull()
+    expect(stopsFrom('12')).toBeNull()
+  })
+
+  it('floors stop pips at 0 (off) and defaults invalid numbers', () => {
+    // A negative or garbage pip count must never come back as a live stop.
+    expect(stopsFrom({ tpPips: -5, slPips: 'wide' })).toEqual({ tpPips: 0, slPips: 0 })
+    expect(stopsFrom({ tpPips: 'x', slPips: null })).toEqual({ tpPips: 0, slPips: 0 })
+    expect(stopsFrom({})).toEqual({ tpPips: 0, slPips: 0 })
+  })
+
+  it('round-trips a full session-limits blob', () => {
+    expect(limitsFrom({ maxProfitUsd: 50, maxLossUsd: 5, pullbackPct: 25 })).toEqual({
+      maxProfitUsd: 50,
+      maxLossUsd: 5,
+      pullbackPct: 25,
+    })
+  })
+
+  it('rejects a blob that is not limits at all', () => {
+    expect(limitsFrom(null)).toBeNull()
+    expect(limitsFrom(5)).toBeNull()
+    expect(limitsFrom('limits')).toBeNull()
+  })
+
+  it('floors the USD limits at 0 (off) and clamps the pull-back to 0–90%', () => {
+    const lim = limitsFrom({ maxProfitUsd: -20, maxLossUsd: -1, pullbackPct: 500 })
+    expect(lim?.maxProfitUsd).toBe(0)
+    expect(lim?.maxLossUsd).toBe(0)
+    // A typo'd pull-back can never trap a winner into closing instantly.
+    expect(lim?.pullbackPct).toBe(90)
+    expect(limitsFrom({ maxProfitUsd: 'lots', maxLossUsd: NaN, pullbackPct: -3 })).toEqual({
+      maxProfitUsd: 0,
+      maxLossUsd: 0,
+      pullbackPct: 0,
+    })
   })
 })
