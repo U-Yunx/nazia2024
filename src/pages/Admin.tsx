@@ -472,14 +472,16 @@ function AddonsTab() {
     else {
       await refreshPurchases()
       if (purchase) {
-        const isCopy = purchase.addons?.kind === 'copy_trading'
+        const isSub = purchase.addons?.kind === 'copy_trading' || purchase.addons?.kind === 'ads'
         await notifyUser(
           purchase.user_id,
           status === 'active' ? 'success' : 'error',
           status === 'active' ? 'Add-on activated' : 'Add-on purchase rejected',
           status === 'active'
-            ? isCopy
-              ? `Copy trading is now active for ${purchase.duration_days} day${purchase.duration_days === 1 ? '' : 's'} — copy any pro trader from the Trading page.`
+            ? isSub
+              ? `${purchase.addons?.name} is now active for ${purchase.duration_days} day${purchase.duration_days === 1 ? '' : 's'} — ${
+                  purchase.addons?.kind === 'ads' ? 'your ads can go live' : 'copy any pro trader from the Trading page'
+                }.`
               : `your extra slot(s) are now live (+${purchase.addons?.amount ?? 0}).`
             : 'your purchase request was not approved.',
           '/packages',
@@ -573,6 +575,7 @@ function AddonsTab() {
               <Select label="Kind" value={editing.kind ?? 'slot'} onChange={(e) => setEditing({ ...editing, kind: e.target.value as AddonRow['kind'] })}>
                 <option value="slot">Extra slot (1 robot + 1 trading account)</option>
                 <option value="copy_trading">Copy trading (duration subscription)</option>
+                <option value="ads">Ads subscription (duration subscription)</option>
               </Select>
               <Input
                 label="Slots granted (amount)"
@@ -657,8 +660,8 @@ function AddonsTab() {
                       <Badge className="border-accent/40 bg-accent/15 text-accent">
                         {a.kind === 'slot'
                           ? `+${a.amount} slot${a.amount === 1 ? '' : 's'} (1 slot = 1 robot + 1 account)`
-                          : a.kind === 'copy_trading'
-                            ? `copy trading · ${a.duration_days}d${a.commission_pct > 0 ? ` · ${a.commission_pct}% commission` : ' · no commission'}`
+                          : a.kind === 'copy_trading' || a.kind === 'ads'
+                            ? `${a.kind === 'copy_trading' ? 'copy trading' : 'ads'} · ${a.duration_days}d${a.commission_pct > 0 ? ` · ${a.commission_pct}% commission` : ' · no commission'}`
                             : a.kind === 'robot'
                               ? 'robot'
                               : 'MT4/5'}

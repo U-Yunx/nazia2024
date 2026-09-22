@@ -3,13 +3,13 @@
  * add-on with its price and a buy button; shows how many slots the user already
  * owns from their active purchases.
  *
- * Two catalog groups are shown:
+ * Catalog groups shown:
  *   - Extra slots ('slot'): 1 slot = 1 robot + 1 trading account.
- *   - Copy trading ('copy_trading'): a duration-based subscription that unlocks
- *     copying pro traders while it is active. The 1-day tier is sold WITHOUT
- *     referral commission.
+ *   - Duration subscriptions ('copy_trading' / 'ads'): time-based grants that
+ *     unlock copying pro traders or running ads while active. Copy trading's
+ *     1-day tier is sold WITHOUT referral commission.
  */
-import { PackagePlus, Users } from 'lucide-react'
+import { Megaphone, PackagePlus, Users } from 'lucide-react'
 import type { AddonPurchaseRow, AddonRow } from '../lib/types'
 import { formatUsd } from '../lib/format'
 import { cn } from '../lib/cn'
@@ -19,9 +19,12 @@ const KIND_LABEL: Record<AddonRow['kind'], string> = {
   slot: 'Extra slot',
   robot: 'Robot slot',
   mt_account: 'MT account slot',
-  ads: 'Ad slot',
+  ads: 'Ads subscription',
   copy_trading: 'Copy trading',
 }
+
+/** Duration-based subscription kinds: billed per billing cycle, not per slot. */
+const SUBSCRIPTION_KINDS: AddonRow['kind'][] = ['copy_trading', 'ads']
 
 /** What one purchase of this add-on grants, as a human string. */
 function slotSummary(a: AddonRow): string {
@@ -31,6 +34,9 @@ function slotSummary(a: AddonRow): string {
   }
   if (a.kind === 'copy_trading') {
     return `Copy any pro trader's full configuration for ${a.duration_days} day${a.duration_days === 1 ? '' : 's'}`
+  }
+  if (a.kind === 'ads') {
+    return `Run your ad across the platform for ${a.duration_days} day${a.duration_days === 1 ? '' : 's'}`
   }
   // Legacy kinds (historical rows only): plain per-kind wording.
   return `+${a.amount} ${KIND_LABEL[a.kind].toLowerCase()}${a.amount === 1 ? '' : 's'}`
@@ -53,7 +59,8 @@ export function AddOnsSection({
 
   const slotAddons = active.filter((a) => a.kind === 'slot')
   const copyAddons = active.filter((a) => a.kind === 'copy_trading')
-  const legacyAddons = active.filter((a) => a.kind !== 'slot' && a.kind !== 'copy_trading')
+  const adsAddons = active.filter((a) => a.kind === 'ads')
+  const legacyAddons = active.filter((a) => a.kind !== 'slot' && !SUBSCRIPTION_KINDS.includes(a.kind))
 
   const owned = (kind: AddonRow['kind']): number =>
     purchases
@@ -62,8 +69,8 @@ export function AddOnsSection({
 
   const renderCard = (a: AddonRow) => {
     const mine = owned(a.kind)
-    const isCopy = a.kind === 'copy_trading'
-    const noCommission = isCopy && (a.commission_pct ?? 0) === 0
+    const isSub = SUBSCRIPTION_KINDS.includes(a.kind)
+    const noCommission = isSub && (a.commission_pct ?? 0) === 0
     return (
       <div
         key={a.id}
@@ -77,7 +84,7 @@ export function AddOnsSection({
           {a.description && <p className="mt-1 text-xs text-muted-foreground">{a.description}</p>}
           <p className="mt-2 text-sm">
             <span className="font-mono text-lg font-bold text-foreground">{formatUsd(a.price)}</span>
-            {isCopy ? (
+            {isSub ? (
               <span className="ml-1 text-xs text-muted-foreground">/ {a.duration_days}d subscription</span>
             ) : (
               <span className="ml-1 text-xs text-muted-foreground">/ {a.duration_days}d</span>
@@ -85,7 +92,7 @@ export function AddOnsSection({
           </p>
           <p className="mt-1 text-[11px] text-muted-foreground">
             {slotSummary(a)}
-            {mine > 0 && <span className="text-up"> · {isCopy ? 'active' : `${mine} owned`}</span>}
+            {mine > 0 && <span className="text-up"> · {isSub ? 'active' : `${mine} owned`}</span>}
           </p>
           {noCommission && (
             <p className="mt-1.5 inline-flex items-center gap-1 rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
@@ -100,7 +107,7 @@ export function AddOnsSection({
           onClick={() => onPurchase(a)}
           className={cn('w-full')}
         >
-          {isCopy ? 'Subscribe' : 'Buy add-on'}
+          {isSub ? 'Subscribe' : 'Buy add-on'}
         </Button>
       </div>
     )
@@ -114,8 +121,8 @@ export function AddOnsSection({
           Add-ons
         </CardTitle>
         <span className="text-xs text-muted-foreground">
-          Extra slots add 1 robot + 1 trading account each. Copy trading unlocks copying pro traders while your
-          subscription is active.
+          Extra slots add 1 robot + 1 trading account each. Copy trading and ads subscriptions unlock copying pro
+          traders and running ads while your subscription is active.
         </span>
       </CardHeader>
       <CardContent>
@@ -141,8 +148,19 @@ export function AddOnsSection({
             </div>
           </div>
         )}
-        {legacyAddons.length > 0 && (
+        {adsAddons.length > 0 && (
           <div className={cn((slotAddons.length > 0 || copyAddons.length > 0) && 'mt-6')}>
+            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <Megaphone className="h-3.5 w-3.5" aria-hidden="true" />
+              Ads — duration subscription
+            </p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {adsAddons.map(renderCard)}
+            </div>
+          </div>
+        )}
+        {legacyAddons.length > 0 && (
+          <div className={cn((slotAddons.length > 0 || copyAddons.length > 0 || adsAddons.length > 0) && 'mt-6')}>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {legacyAddons.map(renderCard)}
             </div>

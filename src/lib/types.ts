@@ -245,11 +245,11 @@ export interface AdRow {
 
 /**
  * What an add-on grants. The active catalog sells bundled slots
- * ('slot'): 1 slot = 1 robot + 1 trading account, and the copy-trading
- * subscription ('copy_trading'): a time-based grant that unlocks copying
- * pro traders while the purchase is within its `duration_days` window.
- * The legacy kinds ('robot' / 'mt_account' / 'ads') are kept only for
- * historical rows.
+ * ('slot'): 1 slot = 1 robot + 1 trading account, plus duration-based
+ * subscriptions ('copy_trading' / 'ads'): time-based grants that unlock
+ * copying pro traders or running ads while the purchase is within its
+ * `duration_days` window. The legacy kinds ('robot' / 'mt_account') are
+ * kept only for historical rows.
  */
 export type AddonKind = 'slot' | 'robot' | 'mt_account' | 'ads' | 'copy_trading'
 

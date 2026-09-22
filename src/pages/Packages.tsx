@@ -26,6 +26,23 @@ import type { AddonRow, PackageRow } from '../lib/types'
 
 const DURATIONS = [1, 7, 30, 90, 180, 365]
 
+/** Price for a package at a given billing duration (falls back to pkg.price). */
+function priceFor(pkg: PackageRow, days: number): number {
+  const tiers = pkg.features?.price_tiers as Record<string, number> | undefined
+  const tier = tiers?.[String(days)]
+  return tier != null ? Number(tier) : Number(pkg.price)
+}
+
+/** Duration → price pairs when a package is sold as duration-priced tiers. */
+function tierList(pkg: PackageRow): { days: number; price: number }[] {
+  const tiers = pkg.features?.price_tiers as Record<string, number> | undefined
+  if (!tiers || typeof tiers !== 'object') return []
+  return Object.entries(tiers)
+    .map(([d, p]) => ({ days: Number(d), price: Number(p) }))
+    .filter((t) => Number.isFinite(t.days) && Number.isFinite(t.price))
+    .sort((a, b) => a.days - b.days)
+}
+
 export function Packages() {
   const { user } = useAuth()
   const { packages } = usePackages()
@@ -63,7 +80,9 @@ export function Packages() {
     setBusy(true)
     setError(null)
     setSuccess(null)
-    const amount = Number(selected.price)
+    // Duration-priced packages charge the tier price for the chosen billing
+    // duration (e.g. Standard: 1d = $20, 7d = $50, 30d = $100, 180d = $250).
+    const amount = priceFor(selected, durationDays)
     const res = await createSubscription({
       user_id: user.id,
       package_id: selected.id,
@@ -165,10 +184,21 @@ export function Packages() {
               >
                 <CardHeader>
                   <CardTitle>{pkg.name}</CardTitle>
-                  <div className="text-2xl font-bold text-foreground">
-                    {formatUsd(Number(pkg.price))}
-                    <span className="text-xs font-normal text-muted-foreground"> / {pkg.duration_days}d</span>
-                  </div>
+                  {tierList(pkg).length > 0 ? (
+                    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                      {tierList(pkg).map((t) => (
+                        <span key={t.days} className="text-lg font-bold text-foreground">
+                          {formatUsd(t.price)}
+                          <span className="text-xs font-normal text-muted-foreground"> / {t.days}d</span>
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-2xl font-bold text-foreground">
+                      {formatUsd(Number(pkg.price))}
+                      <span className="text-xs font-normal text-muted-foreground"> / {pkg.duration_days}d</span>
+                    </div>
+                  )}
                 </CardHeader>
                 <CardContent className="flex-1">
                   {pkg.description && <p className="text-sm text-muted-foreground">{pkg.description}</p>}
@@ -203,11 +233,11 @@ export function Packages() {
         <Card className="mt-6">
           <CardHeader>
             <CardTitle>Complete your order — {selected.name}</CardTitle>
-            <Badge>{formatUsd(Number(selected.price))}</Badge>
+            <Badge>{formatUsd(priceFor(selected, durationDays))}</Badge>
           </CardHeader>
           <form onSubmit={handleBuy} className="grid gap-4 sm:grid-cols-2">
             <Select label="Billing duration" value={durationDays} onChange={(e) => setDurationDays(Number(e.target.value))}>
-              {DURATIONS.map((d) => (
+              {(tierList(selected).length > 0 ? tierList(selected).map((t) => t.days) : DURATIONS).map((d) => (
                 <option key={d} value={d}>
                   {d} day{d === 1 ? '' : 's'}
                 </option>
