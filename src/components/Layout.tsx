@@ -292,6 +292,7 @@ function AmbientBackground() {
 }
 
 export default function Layout() {
+  const { user, loading } = useAuth()
   return (
     <div className="isolate flex min-h-screen flex-col">
       <AmbientBackground />
@@ -299,8 +300,10 @@ export default function Layout() {
       <main className="flex-1">
         <Outlet />
       </main>
-      {/* Global live-progress bar — sticky at the bottom of every page. */}
-      <LiveProgressBar />
+      {/* Global live-progress bar — sticky at the bottom of every page, but only
+          for signed-in users (their workspace P&L and the community feed are
+          account features; anonymous visitors never see it). */}
+      {!loading && user && <LiveProgressBar />}
       <Footer />
     </div>
   )

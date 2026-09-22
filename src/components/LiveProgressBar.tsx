@@ -11,6 +11,10 @@
  * Reads the same persisted ledgers and robot run state as the workspaces
  * themselves (see LiveProgressGrid.buildLane), so it never desyncs or
  * double-writes an account. The collapsed state is remembered per browser.
+ *
+ * Auth-gated: rendered only for signed-in users (Layout skips mounting it while
+ * signed out / while auth is still resolving, and the guard below is a second
+ * line of defence). Anonymous visitors never see workspace P&L or the feed.
  */
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -67,6 +71,10 @@ export function LiveProgressBar() {
   const lanes = useMemo(() => buildLanes(rates, now, user?.id), [now, rates, user?.id])
   const activeLanes = lanes.filter((l) => l.running).length
   const communityLive = traders.filter((t) => t.open_trades > 0 || t.active_robots > 0)
+
+  // Defence in depth (all hooks above run unconditionally, so hook order is
+  // stable): never render the bar for an anonymous visitor.
+  if (!user) return null
 
   return (
     <div className="sticky bottom-0 z-40">
