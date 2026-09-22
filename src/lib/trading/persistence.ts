@@ -265,17 +265,35 @@ export async function loadRemote(user: User, robotNumber = 1): Promise<AccountSt
   }
 }
 
-/** Replace a robot slot's account (and all its trades) in Supabase. */
-export async function saveRemote(user: User, account: AccountState, robotNumber = 1): Promise<void> {
+/**
+ * Mirror a robot slot's account and trade ledger to Supabase.
+ *
+ * NON-DESTRUCTIVE ON PURPOSE. The old implementation deleted every trade row
+ * and then re-inserted them, so any interruption between the two statements —
+ * a tab change, a refresh, a failed insert — left the server ledger permanently
+ * empty while the browser still had the history. Now the ledger is upserted
+ * FIRST (idempotent, keyed on the trade id) and only rows that are no longer
+ * part of the ledger are pruned afterwards, so an interrupted save can at worst
+ * leave a stale row behind — it can never wipe the history.
+ *
+ * @returns true when the server accepted the whole write.
+ */
+export async function saveRemote(user: User, account: AccountState, robotNumber = 1): Promise<boolean> {
   try {
     const { account: accRow, trades } = toRow(account, user.id, robotNumber)
     await supabase.from('paper_accounts').upsert(accRow, { onConflict: 'user_id,robot_number' })
-    await supabase.from('paper_trades').delete().eq('user_id', user.id).eq('robot_number', robotNumber)
     if (trades.length > 0) {
-      await supabase.from('paper_trades').insert(trades)
+      await supabase.from('paper_trades').upsert(trades, { onConflict: 'id' })
     }
+    // Prune AFTER the upsert: keep exactly the rows in the current ledger.
+    const ids = trades.map((t) => t.id)
+    let prune = supabase.from('paper_trades').delete().eq('user_id', user.id).eq('robot_number', robotNumber)
+    if (ids.length > 0) prune = prune.not('id', 'in', `(${ids.join(',')})`)
+    await prune
+    return true
   } catch {
     /* best-effort — local copy still exists */
+    return false
   }
 }
 

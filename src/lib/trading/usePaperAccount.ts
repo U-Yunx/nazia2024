@@ -51,6 +51,23 @@ function stateKey(userId: string | undefined, robot: number): string | undefined
 export const DEFAULT_PAPER_BALANCE = 10_000
 
 /**
+ * Serialized signatures of the account state last mirrored to Supabase, keyed by
+ * `${userId}:${robot}`.
+ *
+ * Deliberately module-level rather than a ref: it has to OUTLIVE the hook
+ * instance so that navigating between pages (or refreshing) doesn't re-write a
+ * ledger the server already holds. The old mount-time echo rewrote the whole
+ * trade ledger on every page load, which is how a tab change that landed
+ * mid-write could wipe the history.
+ */
+const remoteSignatures = new Map<string, string>()
+
+/** Cache key for a user's robot slot. */
+function signatureKey(userId: string, robot: number): string {
+  return `${userId}:${robot}`
+}
+
+/**
  * Owns the paper account lifecycle: loads (Supabase when signed in, otherwise
  * localStorage), persists on every change, and exposes a `BrokerAdapter` so the
  * UI never talks to the engine directly. `connectionIds` maps each live platform
@@ -70,8 +87,6 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string },
   stateRef.current = account
   const userRef = useRef(user)
   userRef.current = user
-  /** Serialized signature of the last remotely-saved state, per user + slot. */
-  const lastSavedRef = useRef<string | null>(null)
 
   useEffect(() => {
     let active = true
@@ -80,7 +95,20 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string },
       const u = userRef.current
       let next: AccountState | null = null
       if (u) next = await loadRemote(u, robot)
-      if (!next) next = loadLocal(robot)
+      if (next) {
+        // Repair a ledger the server lost. The old save path deleted every trade
+        // row and then failed to re-insert them (it sent null for NOT NULL
+        // columns), so signed-in users came back to a blank journal and vanished
+        // open positions. If this browser still holds a richer local copy of the
+        // same slot, prefer it — the history is restored instead of silently
+        // staying lost.
+        if (next.trades.length === 0 && next.positions.length === 0) {
+          const local = loadLocal(robot)
+          if (local && (local.trades.length > 0 || local.positions.length > 0)) next = local
+        }
+      } else {
+        next = loadLocal(robot)
+      }
       if (!next) next = createAccount(DEFAULT_PAPER_BALANCE)
       // Restore the robot's on/off state across refreshes / tab closes. Live
       // OANDA / MetaTrader mirrors are never saved (the broker is the source of
@@ -109,21 +137,23 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string },
     saveLocal(account, robot)
     const u = userRef.current
     if (!u) return
-    // Skip the remote rewrite when nothing changed since the last save — e.g.
-    // the mount-time echo of an account that's already on the server. Without
-    // this, every page load deleted and re-inserted the whole trade ledger.
+    // Skip the remote rewrite when the server already holds exactly this state —
+    // e.g. the mount-time echo of an account that's already saved. The cache
+    // lives OUTSIDE the hook so it survives remounts: without it every page load
+    // (and every tab switch back) rewrote the whole trade ledger, which is how a
+    // navigation that landed mid-write could wipe the history.
     const signature = u.id + ':' + robot + ':' + JSON.stringify({ b: account.balance, r: account.risk, p: account.positions, t: account.trades })
-    if (lastSavedRef.current === signature) return
-    lastSavedRef.current = signature
+    const key = signatureKey(u.id, robot)
+    if (remoteSignatures.get(key) === signature) return
     const id = setTimeout(() => {
-      void saveRemote(u, account, robot)
+      void saveRemote(u, account, robot).then((ok) => {
+        // Only trust the cache once the server accepted the write — otherwise a
+        // failed save would look "done" and never be retried.
+        if (ok) remoteSignatures.set(key, signature)
+        else remoteSignatures.delete(key)
+      })
     }, 400)
-    return () => {
-      clearTimeout(id)
-      // Forget the signature on teardown (StrictMode double-mount) so a
-      // freshly created account is still written on the next effect run.
-      if (lastSavedRef.current === signature) lastSavedRef.current = null
-    }
+    return () => clearTimeout(id)
   }, [account, loading, robot])
 
   const commit = useCallback((next: AccountState) => setAccount(next), [])
@@ -343,7 +373,11 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string },
       // Wipe the Supabase mirror too, otherwise a signed-in user's reload loads
       // the old account + trades back from the server (see resetRemote).
       const u = userRef.current
-      if (u) void resetRemote(u, initialBalance, robot)
+      if (u) {
+        // Forget the cached signature so the fresh account is written up.
+        remoteSignatures.delete(signatureKey(u.id, robot))
+        void resetRemote(u, initialBalance, robot)
+      }
     },
     [robot],
   )
@@ -366,7 +400,11 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string },
     setAccount({ ...fresh, risk: { ...fresh.risk, kind } })
     clearRobotRunning(stateKey(userRef.current?.id, robot))
     const u = userRef.current
-    if (u) void resetRemote(u, balance, robot)
+    if (u) {
+      // Forget the cached signature so the fresh account is written up.
+      remoteSignatures.delete(signatureKey(u.id, robot))
+      void resetRemote(u, balance, robot)
+    }
   }, [robot])
 
   const setBrokerMode = useCallback((m: BrokerMode) => {
