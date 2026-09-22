@@ -14,6 +14,7 @@
 import { isSupabaseConfigured, supabase } from '../supabase'
 import { defaultParams } from '../strategies'
 import type { Interval, StrategyConfig, StrategyParams, StrategyType, TradingMethod } from '../types'
+import { normalizeLots } from './lots'
 import type { ActivityEntry } from './robotActivity'
 
 export interface RobotStateRow {
@@ -33,6 +34,8 @@ export interface RobotStateRow {
   pairs: string[]
   /** The robot's strategy configuration (method, mode, manual type, selected). */
   strategy: RobotStrategyState | null
+  /** The robot's position sizing (mode, risk %, fixed lot). */
+  sizing: RobotSizingState | null
   /** Persisted activity feed, newest first. */
   activity: ActivityEntry[]
   updated_at: string | null
@@ -53,6 +56,21 @@ export interface RobotStrategyState {
   selected?: StrategyConfig
 }
 
+/**
+ * The robot's position sizing, captured so a run that resumes on another device
+ * trades at the SAME size it was configured with: 'risk' = a % of equity per
+ * trade sized against the trade's own stop, 'fixed' = one picked lot on every
+ * trade. Without it a restored robot fell back to the default risk sizing (or a
+ * blank fixed lot, which refuses to start at all).
+ */
+export interface RobotSizingState {
+  sizingMode: 'risk' | 'fixed'
+  /** % of current equity risked per trade (clamped to the 0.05–10 band). */
+  riskPerTradePct: number
+  /** Fixed lot in 0.01 steps (0 = none picked yet — fixed mode won't start). */
+  lot: number
+}
+
 /** A partial update: omitted fields are left untouched in the row. */
 export interface RobotStatePatch {
   running?: boolean
@@ -62,6 +80,7 @@ export interface RobotStatePatch {
   last_run_at?: number | null
   pairs?: string[]
   strategy?: RobotStrategyState | null
+  sizing?: RobotSizingState | null
   activity?: ActivityEntry[]
 }
 
@@ -100,6 +119,23 @@ export function strategyFrom(v: unknown): RobotStrategyState | null {
       : 'MA',
     autoPickPairs: o.autoPickPairs === true,
     selected,
+  }
+}
+
+/** Coerce the stored jsonb sizing object into a typed, valid state (or null
+ *  when the blob isn't sizing at all). Invalid numbers fall back to the safe
+ *  defaults — risk % clamped into the 0.05–10 band, lot snapped to the 0.01
+ *  step — so a corrupt/partial row can never lock Start or size a trade wildly. */
+export function sizingFrom(v: unknown): RobotSizingState | null {
+  if (!v || typeof v !== 'object') return null
+  const o = v as Record<string, unknown>
+  if (o.sizingMode !== 'risk' && o.sizingMode !== 'fixed') return null
+  const risk = Number(o.riskPerTradePct)
+  const lot = Number(o.lot)
+  return {
+    sizingMode: o.sizingMode,
+    riskPerTradePct: Number.isFinite(risk) ? Math.min(10, Math.max(0.05, risk)) : 1,
+    lot: Number.isFinite(lot) ? normalizeLots(lot) : 0,
   }
 }
 
@@ -146,6 +182,7 @@ export async function loadRobotState(userId: string, robotNumber = 1): Promise<R
       last_run_at: numOrNull(row.last_run_at),
       pairs: pairsFrom(row.pairs),
       strategy: strategyFrom(row.strategy),
+      sizing: sizingFrom(row.sizing),
       activity: activityFrom(row.activity),
     }
   } catch {

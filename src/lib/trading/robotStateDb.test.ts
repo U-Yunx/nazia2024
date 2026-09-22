@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { isSupabaseConfigured } from '../supabase'
-import { clearRobotState, loadRobotState, pairsFrom, saveRobotState, strategyFrom } from './robotStateDb'
+import { clearRobotState, loadRobotState, pairsFrom, saveRobotState, sizingFrom, strategyFrom } from './robotStateDb'
 
 /**
  * With no Supabase env vars configured (CI and fresh previews) the client is the
@@ -54,6 +54,7 @@ describe('robotStateDb (offline)', () => {
           autoPickPairs: false,
           selected: { type: 'MACD', pair: 'GBP/USD', interval: '1h', params: { fast: 12 } },
         },
+        sizing: { sizingMode: 'fixed', riskPerTradePct: 2, lot: 0.05 },
       }),
     ).resolves.toBeUndefined()
   })
@@ -125,5 +126,39 @@ describe('robotStateDb normalizers', () => {
     })
     expect(s?.selected).toBeUndefined()
     expect(s?.manualStrategy).toBe('BOLLINGER')
+  })
+
+  it('round-trips a full sizing blob', () => {
+    expect(sizingFrom({ sizingMode: 'fixed', riskPerTradePct: 2.5, lot: 0.25 })).toEqual({
+      sizingMode: 'fixed',
+      riskPerTradePct: 2.5,
+      lot: 0.25,
+    })
+  })
+
+  it('rejects a blob that is not sizing at all', () => {
+    expect(sizingFrom(null)).toBeNull()
+    expect(sizingFrom(0.5)).toBeNull()
+    expect(sizingFrom('fixed')).toBeNull()
+    expect(sizingFrom({ lot: 0.1 })).toBeNull()
+    expect(sizingFrom({ sizingMode: 'turbo', lot: 0.1 })).toBeNull()
+  })
+
+  it('clamps risk % into the 0.05–10 band and snaps the lot to 0.01 steps', () => {
+    // A stale/hostile row can never size a trade outside the supported ranges.
+    expect(sizingFrom({ sizingMode: 'risk', riskPerTradePct: 0, lot: 0 })?.riskPerTradePct).toBe(0.05)
+    expect(sizingFrom({ sizingMode: 'risk', riskPerTradePct: 500, lot: 0 })?.riskPerTradePct).toBe(10)
+    expect(sizingFrom({ sizingMode: 'fixed', riskPerTradePct: 1, lot: 0.013 })?.lot).toBeCloseTo(0.01, 4)
+    expect(sizingFrom({ sizingMode: 'fixed', riskPerTradePct: 1, lot: 1.999 })?.lot).toBe(2)
+  })
+
+  it('falls back to the safe defaults for missing/invalid numbers', () => {
+    const s = sizingFrom({ sizingMode: 'risk' })
+    expect(s?.sizingMode).toBe('risk')
+    expect(s?.riskPerTradePct).toBe(1)
+    // No lot picked yet — fixed mode must stay locked rather than invent one.
+    expect(s?.lot).toBe(0)
+    expect(sizingFrom({ sizingMode: 'fixed', riskPerTradePct: 'lots', lot: null })?.lot).toBe(0)
+    expect(sizingFrom({ sizingMode: 'fixed', riskPerTradePct: NaN, lot: -3 })?.lot).toBe(0)
   })
 })

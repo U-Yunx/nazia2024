@@ -976,6 +976,12 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
           if (typeof s.autoPickPairs === 'boolean') setAutoPickPairs(s.autoPickPairs)
           if (s.selected) replaceStrategy(s.selected)
         }
+        // Position sizing — the exact size a resumed run should trade at.
+        if (row.sizing) {
+          setSizingMode(row.sizing.sizingMode)
+          setRiskPerTradePct(row.sizing.riskPerTradePct)
+          setLot(row.sizing.lot)
+        }
       }
       // Hydration is complete for this scope — only now may the mirror write.
       durableScopeRef.current = `${user.id}:${robot}`
@@ -1010,6 +1016,9 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
       m: prefs.method,
       ap: prefs.autoPickPairs,
       st: strategy,
+      sz: prefs.sizingMode,
+      rp: prefs.riskPerTradePct,
+      lt: prefs.lot,
     })
     if (durableWriteRef.current?.key === key && durableWriteRef.current.sig === sig) return
     durableWriteRef.current = { key, sig }
@@ -1026,6 +1035,11 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
         manualStrategy: prefs.manualStrategy,
         autoPickPairs: prefs.autoPickPairs,
         selected: strategy,
+      },
+      sizing: {
+        sizingMode: prefs.sizingMode ?? 'risk',
+        riskPerTradePct: prefs.riskPerTradePct ?? 1,
+        lot: prefs.lot,
       },
       activity: robotLog,
     })
@@ -1046,6 +1060,9 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
     prefs.method,
     prefs.autoPickPairs,
     strategy,
+    prefs.sizingMode,
+    prefs.riskPerTradePct,
+    prefs.lot,
   ])
   /**
    * The multi-pair / multi-strategy robot. On every quote tick it fetches fresh
