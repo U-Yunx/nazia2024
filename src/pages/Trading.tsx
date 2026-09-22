@@ -4,7 +4,18 @@ import { Activity, Check, Copy, ListChecks, Lock, Pause, Play, ShieldAlert, Slid
 import { DEFAULT_PAPER_BALANCE, usePaperAccount } from '../lib/trading/usePaperAccount'
 import { useRobotPrefs, methodInterval, methodLabel, methodRiskDefaults } from '../lib/trading/robotPrefs'
 import { useRobotRecorder } from '../lib/trading/useRobotRecorder'
-import { clearRobotRunning, clearRunEnd, clearSessionStart, loadRunEnd, loadSessionStart, saveRunEnd, saveSessionStart } from '../lib/trading/robotState'
+import {
+  clearRobotRunning,
+  clearRunEnd,
+  clearRunStart,
+  clearSessionStart,
+  loadRunEnd,
+  loadRunStart,
+  loadSessionStart,
+  saveRunEnd,
+  saveRunStart,
+  saveSessionStart,
+} from '../lib/trading/robotState'
 import {
   clearActivity,
   loadActivityLog,
@@ -68,6 +79,17 @@ function fmtCountdown(totalSeconds: number): string {
   const m = Math.floor(totalSeconds / 60)
   const s = totalSeconds % 60
   return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+/** Compact elapsed duration for the run timer: "45s", "12m 03s", "1h 05m". */
+function fmtElapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  if (h > 0) return `${h}h ${m.toString().padStart(2, '0')}m`
+  if (m > 0) return `${m}m ${sec.toString().padStart(2, '0')}s`
+  return `${sec}s`
 }
 
 /**
@@ -393,6 +415,12 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
   // session P&L (a plain ref wouldn't trigger re-renders).
   const sessionStartRef = useRef<number | null>(null)
   const [sessionStart, setSessionStart] = useState<number | null>(null)
+  // Epoch ms when the current run started — drives the run duration shown in
+  // the page's trading-progress panel and the live-progress grid. Persisted so
+  // a refresh (or another device) resumes the elapsed time instead of resetting
+  // it. Mirrored in state so the panels re-render when a run starts/stops.
+  const runStartRef = useRef<number | null>(null)
+  const [runStart, setRunStart] = useState<number | null>(null)
   // The last finished session's P&L, crystallized when the robot stops so the
   // trading-progress panel keeps showing the result (instead of wiping it) and
   // keeps accruing while remaining SL/TP closes settle after the stop.
@@ -462,6 +490,9 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
       setLastRun(null)
       setLastSessionPnl(null)
       settledBaselineRef.current = null
+      runStartRef.current = null
+      setRunStart(null)
+      clearRunStart(scopeId)
       reset(initialBalance)
     },
     [reset, scopeId],
@@ -669,6 +700,33 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
     setSessionStart(saved)
   }, [account, loading, account?.risk.autoTrade, scopeId])
 
+  // Stamp the run's start time the moment auto-trading begins (persisted so a
+  // refresh resumes it) and clear it when the robot stops — the trading-progress
+  // panel and the live-progress grid read it to show the run duration.
+  useEffect(() => {
+    if (!account || loading) return
+    if (autoTrade) {
+      if (runStartRef.current == null) {
+        const persisted = loadRunStart(scopeId)
+        if (persisted != null && persisted > 0 && persisted <= Date.now()) {
+          runStartRef.current = persisted
+          setRunStart(persisted)
+        } else {
+          const t = Date.now()
+          runStartRef.current = t
+          setRunStart(t)
+          saveRunStart(t, scopeId)
+        }
+      }
+      return
+    }
+    if (runStartRef.current != null) {
+      runStartRef.current = null
+      setRunStart(null)
+      clearRunStart(scopeId)
+    }
+  }, [account, loading, autoTrade, scopeId])
+
   /**
    * Session profit / loss guard. While the robot runs it tracks the equity
    * change since the run started and stops + flattens everything as soon as the
@@ -830,6 +888,14 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
         sessionStartRef.current = baseline
         setSessionStart(baseline)
         saveSessionStart(baseline, scopeId)
+      }
+      if (runStartRef.current == null && run.created_at) {
+        const t = new Date(run.created_at).getTime()
+        if (Number.isFinite(t) && t > 0) {
+          runStartRef.current = t
+          setRunStart(t)
+          saveRunStart(t, scopeId)
+        }
       }
     })()
     return () => {
@@ -1765,6 +1831,14 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
                           style={{ width: `${runPct}%` }}
                         />
                       </div>
+                    </div>
+                  )}
+                  {autoTrade && (
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">Run duration</span>
+                      <span className="font-mono tnum text-foreground">
+                        {runStart != null ? fmtElapsed(Date.now() - runStart) : '—'}
+                      </span>
                     </div>
                   )}
                   {displayedPnl != null && (

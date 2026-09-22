@@ -20,6 +20,7 @@
 
 const KEY_PREFIX = 'ana24.robot-running'
 const RUN_END_PREFIX = 'ana24.robot-run-end'
+const RUN_START_PREFIX = 'ana24.robot-run-start'
 const SESSION_START_PREFIX = 'ana24.robot-session-start'
 
 function scoped(prefix: string, userId?: string | null): string {
@@ -107,4 +108,34 @@ export function saveSessionStart(equityUsd: number | null, userId?: string | nul
 /** Forget a persisted session-start equity. */
 export function clearSessionStart(userId?: string | null): void {
   saveSessionStart(null, userId)
+}
+
+/** Epoch ms when the current run started, or null when unset. The live-progress
+ *  grid reads it to show how long the robot has been running — persisted so a
+ *  refresh (or another device) resumes the elapsed time instead of resetting it. */
+export function loadRunStart(userId?: string | null): number | null {
+  try {
+    const raw = localStorage.getItem(scoped(RUN_START_PREFIX, userId))
+    if (raw == null) return null
+    const t = Number(raw)
+    return Number.isFinite(t) && t > 0 ? t : null
+  } catch {
+    return null
+  }
+}
+
+/** Persist the run-start epoch ms, or remove it when null. */
+export function saveRunStart(startedAt: number | null, userId?: string | null): void {
+  try {
+    const key = scoped(RUN_START_PREFIX, userId)
+    if (startedAt == null) localStorage.removeItem(key)
+    else localStorage.setItem(key, String(startedAt))
+  } catch {
+    /* noop */
+  }
+}
+
+/** Forget a persisted run-start time. */
+export function clearRunStart(userId?: string | null): void {
+  saveRunStart(null, userId)
 }
