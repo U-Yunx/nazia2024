@@ -75,12 +75,17 @@ function parseMarketError(inner: unknown): InvokeResult<never> {
  * never leave the server. When Supabase isn't configured (e.g. a local sandbox
  * with no env vars) every fetch falls back to the direct keyless source.
  */
+const MARKET_DATA_TIMEOUT_MS = 60_000
+
 async function invokeMarketData<T>(payload: Record<string, unknown>): Promise<InvokeResult<T>> {
   if (!isSupabaseConfigured) {
     return { data: null, kind: 'no_api_key', error: 'Supabase is not configured in this environment.' }
   }
   try {
-    const { data, error } = await supabase.functions.invoke('market-data', { body: payload })
+    const { data, error } = await supabase.functions.invoke('market-data', {
+      body: payload,
+      timeout: MARKET_DATA_TIMEOUT_MS,
+    })
     if (error) {
       return { data: null, kind: 'error', error: 'Could not reach the market data service. Please try again.' }
     }

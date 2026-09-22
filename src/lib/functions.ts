@@ -3,6 +3,13 @@
  * the platform layer. Normalizes the many edge-function response shapes into a
  * single `{ data, error }` result and guards against an unconfigured client so
  * callers never need to know whether Supabase is connected.
+ *
+ * Error handling is deliberately strict: the user-facing `error` is ALWAYS
+ * either (a) a real reason the edge function wrote for humans (its `message`
+ * or a broker's own rejection text), (b) the caller's contextual `fallback`,
+ * or (c) generic transport copy — never the client library's raw text
+ * ("Failed to send a request to the Edge Function") and never a runtime
+ * signature like "ReadTimeout: " (see lib/transportErrors.ts).
  */
 import {
   FunctionsFetchError,
@@ -11,12 +18,23 @@ import {
   type FunctionsError,
 } from '@supabase/supabase-js'
 import { isSupabaseConfigured, supabase } from './supabase'
+import { TRANSPORT_MESSAGES, humanizeTransportError } from './transportErrors'
 
 interface InvokeOptions {
   body?: unknown
   /** User-friendly message shown when the call itself fails. */
   fallback?: string
+  /**
+   * Client-side cap in ms — the request is aborted when the function takes
+   * longer, so a stalled bridge surfaces as a clear timeout instead of hanging.
+   * Defaults to the platform client default (60s); raise it per-call for
+   * genuinely slow operations (e.g. MetaApi deployment).
+   */
+  timeout?: number
 }
+
+/** Matches the supabase-js functions-client default; overridable per call. */
+const DEFAULT_INVOKE_TIMEOUT_MS = 60_000
 
 interface EdgeErrorShape {
   error?: string
@@ -27,20 +45,38 @@ interface EdgeErrorShape {
   details?: string
 }
 
-/** Best-effort extraction of a human-readable reason from an error body. */
+/**
+ * Pick the reason an edge function wrote for HUMANS. The functions use `error`
+ * for a machine code ("upstream", "internal", "unauthorized") and `message`
+ * for the copy meant to be shown; broker-mt is the exception — it puts the
+ * broker's own rejection text in `error` with no `message`. A single token
+ * (no whitespace, short) is treated as a machine code, never user copy.
+ */
+function pickHumanReason(o: EdgeErrorShape): string | null {
+  const message = typeof o.message === 'string' ? o.message.trim() : ''
+  const error = typeof o.error === 'string' ? o.error.trim() : ''
+  const isMachineCode = (s: string): boolean => s.length > 0 && s.length <= 24 && !/\s/.test(s)
+  if (message && !isMachineCode(message)) return message
+  if (error && !isMachineCode(error)) return error
+  return message || error || null
+}
+
+/**
+ * Best-effort extraction of a human-readable reason from an error body.
+ * Transport/runtime signatures are never trusted — they return null so the
+ * caller's friendly copy wins.
+ */
 async function reasonFromBody(body: unknown): Promise<string | null> {
   if (!body) return null
   if (typeof body === 'string') {
     const t = body.trim()
-    return t.length > 0 && t.length <= 400 ? t : null
+    if (t.length === 0 || t.length > 400) return null
+    return humanizeTransportError(t) ?? t
   }
   if (typeof body === 'object') {
-    const o = body as EdgeErrorShape & { ok?: boolean }
-    // Edge functions return `{ ok: false, error: "…" }` — prefer the real
-    // broker/gateway reason over the generic fallback so a failed live-account
-    // load never just says "Could not load your MetaTrader account."
-    if (typeof o.error === 'string' && o.error.trim()) return o.error.trim()
-    if (typeof o.message === 'string' && o.message.trim()) return o.message.trim()
+    const picked = pickHumanReason(body as EdgeErrorShape & { ok?: boolean })
+    if (!picked) return null
+    return humanizeTransportError(picked) ?? picked
   }
   return null
 }
@@ -74,6 +110,7 @@ export async function fn<T>(
   try {
     const { data, error } = await supabase.functions.invoke(name, {
       body: options.body as string | Record<string, unknown> | undefined,
+      timeout: options.timeout ?? DEFAULT_INVOKE_TIMEOUT_MS,
     })
     if (error) {
       const err = error as FunctionsError
@@ -92,28 +129,40 @@ export async function fn<T>(
           data: null,
           error: status
             ? `The ${name} service returned an error (HTTP ${status}). Try again shortly.`
-            : (options.fallback ?? error.message),
+            : (options.fallback ?? TRANSPORT_MESSAGES.bad_gateway),
           code: meta?.code ?? null,
           details: meta?.details ?? null,
         }
       }
       // The relay couldn't reach the function, or the network request itself
-      // failed (offline, blocked, timed out). Surface the underlying reason
-      // when it's short and useful; otherwise keep the caller's fallback.
+      // failed (offline, blocked, timed out). The client library and the
+      // runtime only ever give us mechanical text here ("Failed to send a
+      // request to the Edge Function", "ReadTimeout: ") — never surface it.
       if (err instanceof FunctionsRelayError || err instanceof FunctionsFetchError) {
-        const real = await reasonFromBody(err.context ?? err.message)
-        return { data: null, error: real ?? options.fallback ?? error.message }
+        const transport = humanizeTransportError(err.context ?? err.message)
+        return {
+          data: null,
+          error: transport ?? options.fallback ?? TRANSPORT_MESSAGES.unreachable,
+        }
       }
-      return { data: null, error: options.fallback ?? error.message }
+      return {
+        data: null,
+        error: options.fallback ?? humanizeTransportError(error) ?? TRANSPORT_MESSAGES.unreachable,
+      }
     }
     if (data && typeof data === 'object' && 'error' in (data as object)) {
       const o = data as EdgeErrorShape
-      if (o.error) {
-        return { data: null, error: o.message ?? o.error, code: o.code ?? null, details: o.details ?? null }
+      const reason = pickHumanReason(o)
+      if (reason) {
+        return { data: null, error: reason, code: o.code ?? null, details: o.details ?? null }
       }
     }
     return { data: data as T, error: null }
-  } catch {
-    return { data: null, error: options.fallback ?? 'Could not reach the service.' }
+  } catch (err) {
+    // Last line of defence: never leak an unexpected runtime error either.
+    return {
+      data: null,
+      error: options.fallback ?? humanizeTransportError(err) ?? TRANSPORT_MESSAGES.unreachable,
+    }
   }
 }

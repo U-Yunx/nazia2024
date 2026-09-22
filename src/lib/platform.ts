@@ -5,6 +5,7 @@
  */
 import { supabase } from './supabase'
 import { fn } from './functions'
+import { edgeErrorMessage, humanizeTransportError } from './transportErrors'
 import type {
   AddonPurchaseRow,
   AddonPurchaseStatus,
@@ -606,7 +607,7 @@ export async function saveConnection(input: {
     if (error.code === '23505') {
       return { error: 'That MetaTrader account is already connected on this platform. Disconnect it from its current slot first.' }
     }
-    return { error: error.message }
+    return { error: humanizeTransportError(error) ?? error.message }
   }
   return { error: null }
 }
@@ -829,7 +830,7 @@ export async function reconfigureMarketData(): Promise<{
   config: MarketDataConfig | null
 }> {
   const { data, error } = await supabase.functions.invoke('market-data', { body: { action: 'reconfigure' } })
-  if (error) return { error: error.message ?? 'Could not reconfigure the API settings.', config: null }
+  if (error) return { error: edgeErrorMessage(error, 'Could not reconfigure the API settings.'), config: null }
   if (data && typeof data === 'object' && 'error' in (data as object)) {
     const msg = (data as { message?: string }).message
     return { error: msg ?? 'Could not reconfigure the API settings.', config: null }
@@ -852,7 +853,7 @@ export async function updateMarketDataApiKey(apiKey: string, provider = 'twelved
   const { data, error } = await supabase.functions.invoke('market-data', {
     body: { action: 'set_api_key', api_key: apiKey, provider },
   })
-  if (error) return error.message ?? 'Could not update the API key.'
+  if (error) return edgeErrorMessage(error, 'Could not update the API key.')
   if (data && typeof data === 'object' && 'error' in (data as object)) {
     const msg = (data as { message?: string }).message
     return msg ?? 'The provider rejected that key.'
@@ -869,7 +870,7 @@ export async function disconnectMarketData(provider = 'twelvedata'): Promise<str
   const { data, error } = await supabase.functions.invoke('market-data', {
     body: { action: 'disconnect', provider },
   })
-  if (error) return error.message ?? 'Could not disconnect the provider.'
+  if (error) return edgeErrorMessage(error, 'Could not disconnect the provider.')
   if (data && typeof data === 'object' && 'error' in (data as object)) {
     const msg = (data as { message?: string }).message
     return msg ?? 'Could not disconnect the provider.'
@@ -887,7 +888,7 @@ export async function provisionMarketDataFromBroker(broker: 'oanda' = 'oanda'): 
   const { data, error } = await supabase.functions.invoke('market-data', {
     body: { action: 'set_broker_source', broker },
   })
-  if (error) return error.message ?? 'Could not set up the broker market data source.'
+  if (error) return edgeErrorMessage(error, 'Could not set up the broker market data source.')
   if (data && typeof data === 'object' && 'error' in (data as object)) {
     const msg = (data as { message?: string }).message
     return msg ?? 'Could not set up the broker market data source.'
@@ -908,7 +909,7 @@ export async function activateFreeMarketData(): Promise<{
   config: MarketDataConfig | null
 }> {
   const { data, error } = await supabase.functions.invoke('market-data', { body: { action: 'activate_free' } })
-  if (error) return { error: error.message ?? 'Could not enable free market data.', config: null }
+  if (error) return { error: edgeErrorMessage(error, 'Could not enable free market data.'), config: null }
   if (data && typeof data === 'object' && 'error' in (data as object)) {
     const msg = (data as { message?: string }).message
     return { error: msg ?? 'Could not enable free market data.', config: null }
