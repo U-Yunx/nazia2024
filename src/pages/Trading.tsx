@@ -412,6 +412,17 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
   // commit the identity changes, whereas a state reset only lands on the next
   // render (which is exactly when the mirror effect would fire).
   const durableScopeRef = useRef<string | null>(null)
+  // Set when the row restored from the account actually CHANGED this device's
+  // local config (pairs / strategy / sizing) — i.e. a cross-device restore, or
+  // the first load after the browser was cleared. Holds a human list of what
+  // came back ("pairs and position sizing"). A same-device reload matches the
+  // row it mirrored, so nothing is announced. Auto-clears after 12s.
+  const [restoreNotice, setRestoreNotice] = useState<string | null>(null)
+  useEffect(() => {
+    if (!restoreNotice) return
+    const id = setTimeout(() => setRestoreNotice(null), 12_000)
+    return () => clearTimeout(id)
+  }, [restoreNotice])
   const [endsAt, setEndsAt] = useState<number | null>(null)
   const [remaining, setRemaining] = useState<number | null>(null)
   const [tuning, setTuning] = useState(false)
@@ -967,9 +978,20 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
         // instead of the defaults. Applied only when the row holds a real
         // selection, so a fresh (or deliberately emptied) config never clobbers
         // this device's own settings.
-        if (row.pairs.length > 0) setPairs(row.pairs)
+        const restored: string[] = []
+        if (row.pairs.length > 0) {
+          if (JSON.stringify(row.pairs) !== JSON.stringify(prefs.pairs)) restored.push('pairs')
+          setPairs(row.pairs)
+        }
         if (row.strategy) {
           const s = row.strategy
+          const strategyChanged =
+            ((s.method === 'scalping' || s.method === 'longterm') && s.method !== prefs.method) ||
+            ((s.strategyMode === 'auto' || s.strategyMode === 'manual') && s.strategyMode !== prefs.strategyMode) ||
+            (isStrategyType(s.manualStrategy) && s.manualStrategy !== prefs.manualStrategy) ||
+            (typeof s.autoPickPairs === 'boolean' && s.autoPickPairs !== prefs.autoPickPairs) ||
+            Boolean(s.selected && JSON.stringify(s.selected) !== JSON.stringify(strategy))
+          if (strategyChanged) restored.push('strategy')
           if (s.method === 'scalping' || s.method === 'longterm') setMethod(s.method)
           if (s.strategyMode === 'auto' || s.strategyMode === 'manual') setStrategyMode(s.strategyMode)
           if (isStrategyType(s.manualStrategy)) setManualStrategy(s.manualStrategy)
@@ -978,9 +1000,26 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
         }
         // Position sizing — the exact size a resumed run should trade at.
         if (row.sizing) {
-          setSizingMode(row.sizing.sizingMode)
-          setRiskPerTradePct(row.sizing.riskPerTradePct)
-          setLot(row.sizing.lot)
+          const sz = row.sizing
+          const sizingChanged =
+            (prefs.sizingMode ?? 'risk') !== sz.sizingMode ||
+            (prefs.riskPerTradePct ?? 1) !== sz.riskPerTradePct ||
+            (prefs.lot ?? null) !== sz.lot
+          if (sizingChanged) restored.push('position sizing')
+          setSizingMode(sz.sizingMode)
+          setRiskPerTradePct(sz.riskPerTradePct)
+          setLot(sz.lot)
+        }
+        // Tell the user when the restore actually overrode this device's own
+        // settings (cross-device or after clearing the browser) — silent
+        // config swaps are confusing; a same-device reload matches and stays
+        // quiet.
+        if (restored.length > 0) {
+          const label =
+            restored.length > 2
+              ? `${restored.slice(0, -1).join(', ')} and ${restored[restored.length - 1]}`
+              : restored.join(' and ')
+          setRestoreNotice(label)
         }
       }
       // Hydration is complete for this scope — only now may the mirror write.
@@ -2706,6 +2745,33 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
       />
 
       <MarketStatus quotes={quotes} />
+
+      {/* Cross-device restore notice — the account's saved robot config
+          overrode this device's own settings. role="status" announces it
+          politely to screen readers; it clears itself after 12s or on dismiss. */}
+      {restoreNotice && (
+        <div
+          role="status"
+          className="flex animate-slide-down items-start gap-3 rounded-xl border border-cyan/30 bg-cyan/5 p-3"
+        >
+          <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-cyan" aria-hidden="true" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-foreground">Configuration restored from your account</p>
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              Your robot's {restoreNotice} came back from your saved setup — this device had different settings, so the
+              robot now matches the configuration you last used. Review it above before starting.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setRestoreNotice(null)}
+            aria-label="Dismiss restore notice"
+            className="cursor-pointer rounded-md p-1.5 text-muted-foreground transition-colors duration-150 hover:bg-secondary hover:text-foreground"
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+      )}
 
       {!canRunRobot && (
         <Card>
