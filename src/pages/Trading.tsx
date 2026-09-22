@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Activity, Check, Copy, ListChecks, Lock, Pause, Play, ShieldAlert, Sliders, Sparkles, Target, Timer, Wallet, X } from 'lucide-react'
 import { DEFAULT_PAPER_BALANCE, usePaperAccount } from '../lib/trading/usePaperAccount'
-import { useRobotPrefs, methodInterval, methodLabel, methodRiskDefaults } from '../lib/trading/robotPrefs'
+import { isStrategyType, methodInterval, methodLabel, methodRiskDefaults, useRobotPrefs } from '../lib/trading/robotPrefs'
 import { useRobotRecorder } from '../lib/trading/useRobotRecorder'
 import {
   clearRobotRunning,
@@ -291,7 +291,7 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
   } = usePaperAccount({ oanda: oandaConn?.id, mt: mtConn?.id }, robot)
   // Each robot owns its own strategy settings: Robot 1 keeps the legacy key
   // (existing users keep their saved strategy); slots 2..N are namespaced.
-  const [strategy, updateStrategy] = useSelectedStrategy(robot > 1 ? `robot-${robot}` : undefined)
+  const [strategy, updateStrategy, replaceStrategy] = useSelectedStrategy(robot > 1 ? `robot-${robot}` : undefined)
   const {
     prefs,
     applyAll,
@@ -402,10 +402,16 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
   // doing — every entry is timestamped and re-stamped on each update.
   const [robotLog, setRobotLog] = useState<ActivityEntry[]>(() => loadActivityLog(scopeId))
   const [lastRun, setLastRun] = useState<number | null>(() => loadLastRun(scopeId))
-  // Whether the durable robot state (Supabase `robot_state`) has been read for
-  // this scope. The mirror effect below must not write before the hydrate
-  // effect has read, or a mount-time echo would overwrite the saved state.
-  const [durableReady, setDurableReady] = useState(false)
+  // The scope (`userId:robot`) whose durable robot state (Supabase
+  // `robot_state`) has actually been read back for this workspace. The mirror
+  // effect below must never write before that read has happened: a mount-time
+  // echo — or a sign-in that lands mid-hydrate — would otherwise overwrite the
+  // saved row with blank values, or with the previous user's.
+  //
+  // Deliberately a ref, not state: the gate has to be correct in the same
+  // commit the identity changes, whereas a state reset only lands on the next
+  // render (which is exactly when the mirror effect would fire).
+  const durableScopeRef = useRef<string | null>(null)
   const [endsAt, setEndsAt] = useState<number | null>(null)
   const [remaining, setRemaining] = useState<number | null>(null)
   const [tuning, setTuning] = useState(false)
@@ -915,16 +921,16 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
   // ---------------------------------------------------------------------------
   // Durable robot state (Supabase `robot_state`).
   //
-  // The running flag, auto-run window, session baseline, last-run stamp and
-  // activity feed used to live only in localStorage, so a refresh on another
-  // device (or after clearing the browser) came back with the robot off and an
-  // empty history. They are now mirrored into `robot_state` and hydrated back
+  // The running flag, auto-run window, session baseline, last-run stamp, the
+  // trading config (pairs + strategy) and the activity feed used to live only
+  // in localStorage, so a refresh on another device (or after clearing the
+  // browser) came back with the robot off, an empty history, and default pairs
+  // and strategy. They are now mirrored into `robot_state` and hydrated back
   // once per scope, so a reload restores exactly what the robot was doing.
   // Anonymous visitors keep the localStorage-only behaviour (no user row).
   useEffect(() => {
     if (!user || !account || loading) return
     let cancelled = false
-    setDurableReady(false)
     void (async () => {
       const row = await loadRobotState(user.id, robot)
       if (cancelled) return
@@ -956,8 +962,23 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
           setRunStart(row.run_start_at)
           saveRunStart(row.run_start_at, scopeId)
         }
+        // Trading config — pairs + strategy, so a reload (or another device)
+        // resumes the robot on the pairs and strategy it was ACTUALLY running
+        // instead of the defaults. Applied only when the row holds a real
+        // selection, so a fresh (or deliberately emptied) config never clobbers
+        // this device's own settings.
+        if (row.pairs.length > 0) setPairs(row.pairs)
+        if (row.strategy) {
+          const s = row.strategy
+          if (s.method === 'scalping' || s.method === 'longterm') setMethod(s.method)
+          if (s.strategyMode === 'auto' || s.strategyMode === 'manual') setStrategyMode(s.strategyMode)
+          if (isStrategyType(s.manualStrategy)) setManualStrategy(s.manualStrategy)
+          if (typeof s.autoPickPairs === 'boolean') setAutoPickPairs(s.autoPickPairs)
+          if (s.selected) replaceStrategy(s.selected)
+        }
       }
-      if (!cancelled) setDurableReady(true)
+      // Hydration is complete for this scope — only now may the mirror write.
+      durableScopeRef.current = `${user.id}:${robot}`
     })()
     return () => {
       cancelled = true
@@ -965,12 +986,17 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, account?.id, loading, scopeId, robot])
 
-  // Mirror the durable state whenever any of it changes. Gated on
-  // `durableReady` so the mount-time echo of an un-hydrated scope (empty feed,
-  // no run window) can never overwrite the row it is about to read.
+  // Mirror the durable state whenever any of it changes — the run window, the
+  // session baseline, the feed, and the trading config (pairs + strategy).
+  // Gated on `durableScopeRef` so nothing is written for a scope whose row has
+  // not been read back yet: the mount-time echo of an un-hydrated workspace
+  // (empty feed, no run window, default pairs) can never overwrite the row it
+  // is about to read.
   const durableWriteRef = useRef<{ key: string; sig: string } | null>(null)
   useEffect(() => {
-    if (!user || !account || loading || !durableReady) return
+    if (!user || !account || loading) return
+    const key = `${user.id}:${robot}`
+    if (durableScopeRef.current !== key) return
     const sig = JSON.stringify({
       r: autoTrade,
       e: endsAt,
@@ -978,8 +1004,13 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
       t: runStart,
       l: lastRun,
       a: robotLog,
+      p: prefs.pairs,
+      sm: prefs.strategyMode,
+      ms: prefs.manualStrategy,
+      m: prefs.method,
+      ap: prefs.autoPickPairs,
+      st: strategy,
     })
-    const key = `${user.id}:${robot}`
     if (durableWriteRef.current?.key === key && durableWriteRef.current.sig === sig) return
     durableWriteRef.current = { key, sig }
     void saveRobotState(user.id, robot, {
@@ -988,9 +1019,34 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
       run_start_at: runStart,
       session_start_equity: sessionStart,
       last_run_at: lastRun,
+      pairs: prefs.pairs,
+      strategy: {
+        method: prefs.method,
+        strategyMode: prefs.strategyMode,
+        manualStrategy: prefs.manualStrategy,
+        autoPickPairs: prefs.autoPickPairs,
+        selected: strategy,
+      },
       activity: robotLog,
     })
-  }, [user, robot, account, loading, durableReady, autoTrade, endsAt, sessionStart, runStart, lastRun, robotLog])
+  }, [
+    user,
+    robot,
+    account,
+    loading,
+    autoTrade,
+    endsAt,
+    sessionStart,
+    runStart,
+    lastRun,
+    robotLog,
+    prefs.pairs,
+    prefs.strategyMode,
+    prefs.manualStrategy,
+    prefs.method,
+    prefs.autoPickPairs,
+    strategy,
+  ])
   /**
    * The multi-pair / multi-strategy robot. On every quote tick it fetches fresh
    * bars for the pairs in scope, evaluates ALL strategies on each pair, and

@@ -6,17 +6,19 @@
  * Usage:  node scripts/smoke-home.mjs [baseUrl]
  *   baseUrl defaults to http://localhost:5173/
  *
- * Uses playwright-core (a devDependency) and resolves a real Chrome/Chromium
- * binary at runtime: PLAYWRIGHT_EXECUTABLE_PATH, then common system paths,
- * then the default playwright-managed install. This keeps the script working
- * in sandboxes that only ship a system browser.
+ * Uses playwright-core (a devDependency) and resolves a real browser binary at
+ * runtime: PLAYWRIGHT_EXECUTABLE_PATH, common system Chrome paths, the
+ * Playwright-managed Chromium build, and finally the Playwright-managed
+ * Firefox build (which .playwright/cli.config.json selects and
+ * scripts/ensure-test-browser.mjs installs). This keeps the script working in
+ * sandboxes that only ship one of these.
  */
 import { existsSync } from "node:fs";
-import { chromium } from "playwright-core";
+import { chromium, firefox } from "playwright-core";
 
 const url = process.argv[2] ?? "http://localhost:5173/";
 
-const candidates = [
+const chromeCandidates = [
   process.env.PLAYWRIGHT_EXECUTABLE_PATH,
   "/usr/bin/google-chrome",
   "/usr/bin/google-chrome-stable",
@@ -24,19 +26,27 @@ const candidates = [
   "/usr/bin/chromium-browser",
 ].filter(Boolean);
 
-const executablePath = candidates.find((p) => existsSync(p));
+const chromePath = chromeCandidates.find((p) => existsSync(p));
+const ffPath = firefox.executablePath();
 
-if (!executablePath) {
+const engine = chromePath
+  ? { browserType: chromium, executablePath: chromePath, args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"] }
+  : existsSync(ffPath)
+    ? { browserType: firefox, executablePath: ffPath, args: [] }
+    : null;
+
+if (!engine) {
   console.error(
-    "[smoke-home] No Chrome/Chromium binary found. Set PLAYWRIGHT_EXECUTABLE_PATH " +
-      "or run `npx playwright install chromium`.",
+    "[smoke-home] No browser binary found (no system Chrome, no Playwright " +
+      "Firefox build). Run `node scripts/ensure-test-browser.mjs` or set " +
+      "PLAYWRIGHT_EXECUTABLE_PATH.",
   );
   process.exit(1);
 }
 
-const browser = await chromium.launch({
-  executablePath,
-  args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+const browser = await engine.browserType.launch({
+  executablePath: engine.executablePath,
+  args: engine.args,
 });
 
 const page = await browser.newPage();

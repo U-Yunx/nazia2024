@@ -69,5 +69,9 @@ export function useSelectedStrategy(scope?: string) {
     })
   }, [])
 
-  return [strategy, updateStrategy] as const
+  /** Replace the whole strategy wholesale (used when restoring a saved robot
+   *  state) — unlike `updateStrategy`, this never resets params to defaults. */
+  const replaceStrategy = useCallback((next: StrategyConfig) => setStrategy(next), [])
+
+  return [strategy, updateStrategy, replaceStrategy] as const
 }
