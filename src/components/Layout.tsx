@@ -15,6 +15,7 @@ import { Activity, ChevronRight, Menu, X } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { cn } from '../lib/cn'
 import { Button } from './ui'
+import { LiveProgressBar } from './LiveProgressBar'
 
 interface NavItem {
   to: string
@@ -298,6 +299,8 @@ export default function Layout() {
       <main className="flex-1">
         <Outlet />
       </main>
+      {/* Global live-progress bar — sticky at the bottom of every page. */}
+      <LiveProgressBar />
       <Footer />
     </div>
   )

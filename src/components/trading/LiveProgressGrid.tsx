@@ -67,7 +67,7 @@ interface LanePositionRow {
   durationMs: number
 }
 
-interface Lane {
+export interface Lane {
   slot: number
   kind: 'manual' | 'robot'
   label: string
@@ -198,7 +198,19 @@ function buildLane(slot: number, now: number, rates: RatesMap, userScope: string
   }
 }
 
-export function LiveProgressGrid() {
+/** All four local lanes (Manual + Robot 1/2/3) for the current visitor, using
+ *  the same per-slot scope keys Trading.tsx uses (slot 1 keeps the legacy key).
+ *  Shared by the /trading hub grid and the global live-progress bar. */
+export function buildLanes(rates: RatesMap, now: number, userId: string | undefined): Lane[] {
+  const scopeFor = (slot: number): string | undefined => {
+    if (slot === 1) return userId
+    if (slot > 1) return userId ? `${userId}:slot-${slot}` : `slot-${slot}`
+    return undefined
+  }
+  return [0, 1, 2, 3].map((slot) => buildLane(slot, now, rates, scopeFor(slot)))
+}
+
+export function LiveProgressGrid({ embedded = false }: { embedded?: boolean }) {
   const { user } = useAuth()
   const [now, setNow] = useState(() => Date.now())
 
@@ -216,31 +228,25 @@ export function LiveProgressGrid() {
     return r
   }, [quotes])
 
-  const lanes = useMemo(() => {
-    // Same scope keys Trading.tsx uses per slot (slot 1 keeps the legacy key).
-    const scopeFor = (slot: number): string | undefined => {
-      if (slot === 1) return user?.id
-      if (slot > 1) return user?.id ? `${user.id}:slot-${slot}` : `slot-${slot}`
-      return undefined
-    }
-    return [0, 1, 2, 3].map((slot) => buildLane(slot, now, rates, scopeFor(slot)))
-  }, [now, rates, user?.id])
+  const lanes = useMemo(() => buildLanes(rates, now, user?.id), [now, rates, user?.id])
 
   return (
-    <section aria-label="Live trading progress" className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
-          <Activity className="h-4 w-4 text-accent" aria-hidden="true" />
-          Live progress
-          <Badge className="ml-0.5 border-up/30 bg-up/10 text-up">
-            <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-up" aria-hidden="true" />
-            Live
-          </Badge>
-        </h2>
-        <p className="text-[11px] text-muted-foreground">
-          P&amp;L marked to the latest quotes · durations tick every second
-        </p>
-      </div>
+    <section aria-label="Live trading progress" className={cn('space-y-3', embedded && 'space-y-0')}>
+      {!embedded && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+            <Activity className="h-4 w-4 text-accent" aria-hidden="true" />
+            Live progress
+            <Badge className="ml-0.5 border-up/30 bg-up/10 text-up">
+              <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-up" aria-hidden="true" />
+              Live
+            </Badge>
+          </h2>
+          <p className="text-[11px] text-muted-foreground">
+            P&amp;L marked to the latest quotes · durations tick every second
+          </p>
+        </div>
+      )}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {lanes.map((lane) => (
           <LaneCard key={lane.slot} lane={lane} />

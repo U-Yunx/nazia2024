@@ -16,7 +16,6 @@ import { Bot, Hand, ShieldAlert } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { Trading } from './Trading'
 import { ManualWorkspace } from './trading/ManualWorkspace'
-import { LiveProgressGrid } from '../components/trading/LiveProgressGrid'
 
 const TABS: { key: number; label: string; to: string; icon: typeof Bot; hint: string }[] = [
   { key: 0, label: 'Manual trading', to: '/trading', icon: Hand, hint: 'Your own ledger, strategy and copy-trading' },
@@ -73,9 +72,8 @@ export function TradingHub() {
         </p>
       </div>
 
-      {/* Live progress grid — Manual + Robot 1/2/3, each with live P&L and
-          run / hold duration, linked to its workspace tab. */}
-      <LiveProgressGrid />
+      {/* Live progress moved to the global sticky bar (Layout) — it follows the
+          visitor across every page and expands to the full workspace grid. */}
 
       {active === 0 ? (
         <ManualWorkspace />

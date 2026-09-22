@@ -11,13 +11,15 @@ import {
   ShieldCheck,
   Sparkles,
   Target,
+  Trophy,
   Users,
 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { usePublicUserStats } from '../hooks/usePlatform'
 import { useQuotes } from '../hooks/useMarketData'
+import { useLeaderboard } from '../hooks/useLiveCommunity'
 import { WATCHLIST } from '../lib/watchlist'
-import { formatChange, formatPrice } from '../lib/format'
+import { formatChange, formatPrice, formatUsd, timeAgo } from '../lib/format'
 import { cn } from '../lib/cn'
 import { Button } from '../components/ui'
 
@@ -52,6 +54,7 @@ export function Home() {
   const { user } = useAuth()
   const { stats } = usePublicUserStats()
   const { quotes } = useQuotes()
+  const { entries } = useLeaderboard(6, 60_000)
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-12 sm:py-16">
@@ -132,6 +135,72 @@ export function Home() {
             )
           })}
         </div>
+      </section>
+
+      {/* Public profit-history leaderboard — masked handles, no PII */}
+      <section className="mt-14">
+        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="flex items-center gap-2 font-heading text-lg font-semibold text-foreground">
+              <Trophy className="h-5 w-5 text-amber" aria-hidden="true" />
+              Top profit history
+            </h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Highest single win ever banked by a registered trader. Handles are masked for privacy.
+            </p>
+          </div>
+          <Link
+            to={user ? '/trading' : '/auth'}
+            className="flex items-center gap-1 text-sm text-accent hover:underline"
+          >
+            {user ? 'Open trading' : 'Start trading'} <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+          </Link>
+        </div>
+
+        {entries.length === 0 ? (
+          <div className="surface-premium rounded-xl border border-border/70 px-5 py-10 text-center">
+            <Trophy className="mx-auto h-7 w-7 text-muted-foreground/60" aria-hidden="true" />
+            <p className="mt-3 text-sm font-semibold text-foreground">No public profit history yet</p>
+            <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-muted-foreground">
+              The board fills up as registered traders bank their first wins. Start a robot on a free
+              paper account and claim the top spot.
+            </p>
+          </div>
+        ) : (
+          <ol className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {entries.slice(0, 6).map((e, i) => (
+              <li
+                key={`${e.handle}-${i}`}
+                className="surface-premium surface-hover flex items-center justify-between gap-3 rounded-xl border border-border/70 px-4 py-3.5"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span
+                    className={cn(
+                      'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold tnum',
+                      i === 0 ? 'bg-amber/20 text-amber' : 'bg-secondary text-muted-foreground',
+                    )}
+                  >
+                    {i + 1}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-foreground">{e.handle}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {e.events} win{e.events === 1 ? '' : 's'} · {timeAgo(e.last_seen)}
+                    </p>
+                  </div>
+                </div>
+                <p
+                  className={cn(
+                    'shrink-0 tnum font-mono text-base font-bold',
+                    e.best_profit >= 0 ? 'text-up' : 'text-down',
+                  )}
+                >
+                  {formatUsd(e.best_profit)}
+                </p>
+              </li>
+            ))}
+          </ol>
+        )}
       </section>
 
       {/* Pillars */}
