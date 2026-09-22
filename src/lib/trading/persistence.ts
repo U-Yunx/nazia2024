@@ -97,7 +97,11 @@ interface PaperTradeRow {
   tp1_price: number | null
   /** Whether the position already banked its partial take-profit. */
   partial_taken: boolean | null
-  created_at: string | null
+  /** Server-generated. Must NEVER be sent as null — the column is NOT NULL and
+   *  an explicit null made the old delete-then-insert save wipe the whole
+   *  ledger (delete succeeded, re-insert failed). Omit it so the DB default
+   *  applies. */
+  created_at?: string | null
 }
 
 function toRow(account: AccountState, userId: string, robotNumber = 1): {
@@ -128,8 +132,10 @@ function toRow(account: AccountState, userId: string, robotNumber = 1): {
       target_loss_usd: p.targetLossUsd ?? null,
       peak_profit_usd: p.peakProfitUsd ?? null,
       tp1_price: p.tp1Price ?? null,
-      partial_taken: p.partialTaken ?? false,
-      created_at: null,
+      // partial_taken is NOT NULL in the DB — never send null.
+      partial_taken: p.partialTaken === true,
+      // created_at / updated_at are omitted so the DB defaults apply; sending
+      // null used to violate NOT NULL and failed the whole insert.
     })),
     ...account.trades.map<PaperTradeRow>((t) => ({
       id: t.id,
@@ -154,8 +160,9 @@ function toRow(account: AccountState, userId: string, robotNumber = 1): {
       target_loss_usd: null,
       peak_profit_usd: null,
       tp1_price: null,
-      partial_taken: null,
-      created_at: null,
+      // NOT NULL in the DB — a closed trade never has a partial take-profit.
+      partial_taken: false,
+      // created_at / updated_at omitted (NOT NULL columns) — see above.
     })),
   ]
   return {
