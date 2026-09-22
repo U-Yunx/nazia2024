@@ -103,7 +103,10 @@ export function Packages() {
       amount: Number(addon.price),
       currency: addon.currency,
       tx_ref: 'manual',
-      duration_days: 30,
+      // The add-on's own billing duration (e.g. 1/7/30/180 days for copy
+      // trading subscriptions) — NOT a hardcoded 30, so the activation window
+      // and expiry match what the buyer actually paid for.
+      duration_days: addon.duration_days,
       payment_method: 'crypto',
     })
     if (res.error) {

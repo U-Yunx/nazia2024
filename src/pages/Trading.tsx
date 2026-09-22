@@ -24,8 +24,8 @@ import { manualTargets } from '../lib/trading/manualMethod'
 import { fetchTimeSeries, useQuotes } from '../hooks/useMarketData'
 import { useSelectedStrategy } from '../hooks/useSelectedStrategy'
 import { useAuth } from '../hooks/useAuth'
-import { useAccess, useBrokers, useProfile, useSubscriptions } from '../hooks/usePlatform'
-import { acceptRisk } from '../lib/platform'
+import { useAccess, useAddonPurchases, useBrokers, useProfile, useSubscriptions } from '../hooks/usePlatform'
+import { acceptRisk, hasActiveCopyTrading } from '../lib/platform'
 import { pipValueUsd, stopDistanceFromAtr } from '../lib/trading/risk'
 import { effectiveRobotCaps, robotTier, STARTER_MAX_PAIRS, STARTER_MAX_PER_PAIR, UNLOCK_SUBSCRIPTION_DAYS } from '../lib/trading/tierLimits'
 import { equity, MIN_TRADE_BALANCE_USD } from '../lib/trading/engine'
@@ -239,6 +239,10 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
   const scopeId = robot > 1 ? (user?.id ? `${user.id}:slot-${robot}` : `slot-${robot}`) : user?.id
   const { profile, refresh: refreshProfile } = useProfile()
   const { subscriptions } = useSubscriptions(user?.id)
+  // Copy trading (copying a pro trader's full configuration) is a paid add-on
+  // subscription: active only while an activated 'copy_trading' purchase is
+  // within its duration window.
+  const { purchases: addonPurchases } = useAddonPurchases(user?.id)
   const access = useAccess(profile, subscriptions)
 
   // The user's broker connections, resolved BEFORE the live adapters are built
@@ -1199,9 +1203,9 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
   }, [account, mode, liveConn, liveLabel, prefs, scanPairs, robotCaps, riskPct, sizingLabel])
 
   // Copy a pro trader — apply their full configuration (method, pairs, sizing,
-  // exits and risk) to this robot in one click. A 30-day subscriber perk.
-  const proCopyUnlocked =
-    (tier.subscriberDays != null && tier.subscriberDays >= UNLOCK_SUBSCRIPTION_DAYS) || profile?.role === 'admin'
+  // exits and risk) to this robot in one click. Unlocked by the paid Copy
+  // trading add-on subscription (or admin); locks again when it expires.
+  const proCopyUnlocked = hasActiveCopyTrading(addonPurchases) || profile?.role === 'admin'
   const [copiedTrader, setCopiedTrader] = useState<string | null>(null)
   const copyTrader = (t: ProTrader) => {
     if (!account) return
@@ -1378,7 +1382,7 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
               {!proCopyUnlocked && (
                 <Badge className="border-amber/40 bg-amber/10 text-amber">
                   <Lock className="h-3 w-3" aria-hidden="true" />
-                  Subscriber perk — {UNLOCK_SUBSCRIPTION_DAYS} days
+                  Copy trading add-on
                 </Badge>
               )}
             </div>
@@ -1443,10 +1447,12 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
               <div className="mt-3 flex items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
                 <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber" aria-hidden="true" />
                 <p className="text-xs text-muted-foreground">
-                  Copying a pro trader unlocks after {UNLOCK_SUBSCRIPTION_DAYS} days with an active subscription
-                  {tier.subscriberDays != null ? <> — you're at {tier.subscriberDays} day{tier.subscriberDays === 1 ? '' : 's'} now</> : ''}
-                  . It applies the trader's full configuration (method, pairs, sizing, exits and risk) to your robot in
-                  one click.
+                  Copying a pro trader unlocks with the{' '}
+                  <Link to="/packages" className="text-accent hover:underline">
+                    Copy trading add-on
+                  </Link>{' '}
+                  — pick a duration (1, 7, 30 or 180 days) and it stays active for that long. It applies the trader's
+                  full configuration (method, pairs, sizing, exits and risk) to your robot in one click.
                 </p>
               </div>
             )}

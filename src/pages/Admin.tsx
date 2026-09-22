@@ -431,7 +431,7 @@ function AddonsTab() {
   const emailOf = (id: string) => users.find((u) => u.id === id)?.email ?? '—'
 
   const startNew = () =>
-    setEditing({ name: '', description: '', kind: 'slot', amount: 1, price: 0, currency: 'USDT', duration_days: 30, active: true, sort: 99 })
+    setEditing({ name: '', description: '', kind: 'slot', amount: 1, price: 0, currency: 'USDT', duration_days: 30, commission_pct: 10, active: true, sort: 99 })
 
   const save = async (e: FormEvent) => {
     e.preventDefault()
@@ -446,6 +446,7 @@ function AddonsTab() {
       price: Number(editing.price) || 0,
       currency: editing.currency ?? 'USDT',
       duration_days: Number(editing.duration_days) || 30,
+      commission_pct: Number(editing.commission_pct) || 0,
       active: editing.active ?? true,
       sort: Number(editing.sort) || 0,
     })
@@ -471,11 +472,16 @@ function AddonsTab() {
     else {
       await refreshPurchases()
       if (purchase) {
+        const isCopy = purchase.addons?.kind === 'copy_trading'
         await notifyUser(
           purchase.user_id,
           status === 'active' ? 'success' : 'error',
           status === 'active' ? 'Add-on activated' : 'Add-on purchase rejected',
-          `${purchase.addons?.name ?? 'Add-on'} — ${status === 'active' ? `your extra slot(s) are now live (+${purchase.addons?.amount ?? 0}).` : 'your purchase request was not approved.'}`,
+          status === 'active'
+            ? isCopy
+              ? `Copy trading is now active for ${purchase.duration_days} day${purchase.duration_days === 1 ? '' : 's'} — copy any pro trader from the Trading page.`
+              : `your extra slot(s) are now live (+${purchase.addons?.amount ?? 0}).`
+            : 'your purchase request was not approved.',
           '/packages',
         )
       }
@@ -566,6 +572,7 @@ function AddonsTab() {
               <Input label="Name" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} required />
               <Select label="Kind" value={editing.kind ?? 'slot'} onChange={(e) => setEditing({ ...editing, kind: e.target.value as AddonRow['kind'] })}>
                 <option value="slot">Extra slot (1 robot + 1 trading account)</option>
+                <option value="copy_trading">Copy trading (duration subscription)</option>
               </Select>
               <Input
                 label="Slots granted (amount)"
@@ -593,6 +600,15 @@ function AddonsTab() {
                 min={1}
                 value={editing.duration_days ?? 30}
                 onChange={(e) => setEditing({ ...editing, duration_days: Number(e.target.value) })}
+              />
+              <Input
+                label="Referral commission % (0 = none)"
+                type="number"
+                min={0}
+                max={100}
+                step="0.5"
+                value={editing.commission_pct ?? 0}
+                onChange={(e) => setEditing({ ...editing, commission_pct: Number(e.target.value) })}
               />
               <Input
                 label="Sort order"
@@ -639,16 +655,18 @@ function AddonsTab() {
                     <p className="font-medium">
                       {a.name}{' '}
                       <Badge className="border-accent/40 bg-accent/15 text-accent">
-                        +{a.amount}{' '}
                         {a.kind === 'slot'
-                          ? `slot${a.amount === 1 ? '' : 's'} (1 slot = 1 robot + 1 account)`
-                          : a.kind === 'robot'
-                            ? 'robot'
-                            : 'MT4/5'}
+                          ? `+${a.amount} slot${a.amount === 1 ? '' : 's'} (1 slot = 1 robot + 1 account)`
+                          : a.kind === 'copy_trading'
+                            ? `copy trading · ${a.duration_days}d${a.commission_pct > 0 ? ` · ${a.commission_pct}% commission` : ' · no commission'}`
+                            : a.kind === 'robot'
+                              ? 'robot'
+                              : 'MT4/5'}
                       </Badge>
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      {a.price} {a.currency} · {a.duration_days}d · {a.active ? 'Active' : 'Hidden'} · sort {a.sort}
+                      {a.price} {a.currency} · {a.duration_days}d{a.commission_pct > 0 ? ` · ${a.commission_pct}% commission` : ''} ·{' '}
+                      {a.active ? 'Active' : 'Hidden'} · sort {a.sort}
                     </p>
                   </div>
                   <div className="flex gap-2">

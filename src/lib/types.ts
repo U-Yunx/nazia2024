@@ -244,11 +244,14 @@ export interface AdRow {
 }
 
 /**
- * What an add-on grants. The active catalog only sells bundled slots
- * ('slot'): 1 slot = 1 robot + 1 trading account. The legacy kinds
- * ('robot' / 'mt_account' / 'ads') are kept only for historical rows.
+ * What an add-on grants. The active catalog sells bundled slots
+ * ('slot'): 1 slot = 1 robot + 1 trading account, and the copy-trading
+ * subscription ('copy_trading'): a time-based grant that unlocks copying
+ * pro traders while the purchase is within its `duration_days` window.
+ * The legacy kinds ('robot' / 'mt_account' / 'ads') are kept only for
+ * historical rows.
  */
-export type AddonKind = 'slot' | 'robot' | 'mt_account' | 'ads'
+export type AddonKind = 'slot' | 'robot' | 'mt_account' | 'ads' | 'copy_trading'
 
 /** A purchasable add-on (admin-managed catalog). */
 export interface AddonRow {
@@ -262,6 +265,11 @@ export interface AddonRow {
   currency: string
   /** Billing duration in days (1, 7, 30, 90, 180 or 365). */
   duration_days: number
+  /**
+   * Referral commission % the buyer's referrer earns when this add-on is
+   * activated. 0 = no referral commission (e.g. the 1-day copy-trading tier).
+   */
+  commission_pct: number
   active: boolean
   sort: number
   created_at: string
@@ -284,7 +292,7 @@ export interface AddonPurchaseRow {
   activated_by: string | null
   activated_at: string | null
   created_at: string
-  addons?: Pick<AddonRow, 'id' | 'name' | 'kind' | 'amount' | 'price' | 'currency'> | null
+  addons?: Pick<AddonRow, 'id' | 'name' | 'kind' | 'amount' | 'price' | 'currency' | 'duration_days' | 'commission_pct'> | null
 }
 
 export type BrokerStatus = 'available' | 'maintenance' | 'coming_soon'

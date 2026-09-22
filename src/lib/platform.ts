@@ -231,7 +231,7 @@ export async function deleteAddon(id: string): Promise<string | null> {
   return error?.message ?? null
 }
 
-const ADDON_PURCHASE_SELECT = '*, addons(id, name, kind, amount, price, currency)'
+const ADDON_PURCHASE_SELECT = '*, addons(id, name, kind, amount, price, currency, duration_days, commission_pct)'
 
 /** The signed-in user's add-on purchases (newest first). */
 export async function fetchMyAddonPurchases(userId: string): Promise<AddonPurchaseRow[]> {
@@ -292,6 +292,37 @@ export function activeAddonSlots(purchases: AddonPurchaseRow[], kind: AddonRow['
   return purchases
     .filter((p) => p.status === 'active' && p.addons?.kind === kind)
     .reduce((sum, p) => sum + (p.addons?.amount ?? 0), 0)
+}
+
+const DAY_MS = 86_400_000
+
+/**
+ * True while the user holds an ACTIVE copy-trading subscription: an activated
+ * 'copy_trading' add-on purchase whose `duration_days` window hasn't expired
+ * yet (activated_at + duration_days > now). Copy trading (copying a pro
+ * trader's full configuration) is only available inside this window.
+ */
+export function hasActiveCopyTrading(purchases: AddonPurchaseRow[], now = Date.now()): boolean {
+  return purchases.some((p) => {
+    if (p.status !== 'active' || p.addons?.kind !== 'copy_trading' || !p.activated_at) return false
+    const days = p.duration_days > 0 ? p.duration_days : (p.addons.duration_days ?? 0)
+    if (days <= 0) return false
+    const expiresAt = new Date(p.activated_at).getTime() + days * DAY_MS
+    return expiresAt > now
+  })
+}
+
+/** Milliseconds until the active copy-trading subscription expires (0 if none). */
+export function copyTradingExpiry(purchases: AddonPurchaseRow[], now = Date.now()): number {
+  let latest = 0
+  for (const p of purchases) {
+    if (p.status !== 'active' || p.addons?.kind !== 'copy_trading' || !p.activated_at) continue
+    const days = p.duration_days > 0 ? p.duration_days : (p.addons.duration_days ?? 0)
+    if (days <= 0) continue
+    const expiresAt = new Date(p.activated_at).getTime() + days * DAY_MS
+    if (expiresAt > now && expiresAt > latest) latest = expiresAt
+  }
+  return latest
 }
 
 /* --------------------------------- referrals ------------------------------- */

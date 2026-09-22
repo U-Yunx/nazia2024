@@ -3,10 +3,13 @@
  * add-on with its price and a buy button; shows how many slots the user already
  * owns from their active purchases.
  *
- * Every add-on grants bundled SLOTS: 1 slot = 1 robot + 1 trading account.
- * The four catalog items are "1 / 2 / 3 / 4 extra slots".
+ * Two catalog groups are shown:
+ *   - Extra slots ('slot'): 1 slot = 1 robot + 1 trading account.
+ *   - Copy trading ('copy_trading'): a duration-based subscription that unlocks
+ *     copying pro traders while it is active. The 1-day tier is sold WITHOUT
+ *     referral commission.
  */
-import { PackagePlus } from 'lucide-react'
+import { PackagePlus, Users } from 'lucide-react'
 import type { AddonPurchaseRow, AddonRow } from '../lib/types'
 import { formatUsd } from '../lib/format'
 import { cn } from '../lib/cn'
@@ -17,6 +20,7 @@ const KIND_LABEL: Record<AddonRow['kind'], string> = {
   robot: 'Robot slot',
   mt_account: 'MT account slot',
   ads: 'Ad slot',
+  copy_trading: 'Copy trading',
 }
 
 /** What one purchase of this add-on grants, as a human string. */
@@ -24,6 +28,9 @@ function slotSummary(a: AddonRow): string {
   if (a.kind === 'slot') {
     const n = Math.max(1, a.amount)
     return `+${n} extra slot${n === 1 ? '' : 's'} — each slot adds 1 robot + 1 trading account`
+  }
+  if (a.kind === 'copy_trading') {
+    return `Copy any pro trader's full configuration for ${a.duration_days} day${a.duration_days === 1 ? '' : 's'}`
   }
   // Legacy kinds (historical rows only): plain per-kind wording.
   return `+${a.amount} ${KIND_LABEL[a.kind].toLowerCase()}${a.amount === 1 ? '' : 's'}`
@@ -44,10 +51,60 @@ export function AddOnsSection({
 
   if (active.length === 0) return null
 
+  const slotAddons = active.filter((a) => a.kind === 'slot')
+  const copyAddons = active.filter((a) => a.kind === 'copy_trading')
+  const legacyAddons = active.filter((a) => a.kind !== 'slot' && a.kind !== 'copy_trading')
+
   const owned = (kind: AddonRow['kind']): number =>
     purchases
       .filter((p) => p.status === 'active' && p.addons?.kind === kind)
       .reduce((sum, p) => sum + (p.addons?.amount ?? 0), 0)
+
+  const renderCard = (a: AddonRow) => {
+    const mine = owned(a.kind)
+    const isCopy = a.kind === 'copy_trading'
+    const noCommission = isCopy && (a.commission_pct ?? 0) === 0
+    return (
+      <div
+        key={a.id}
+        className="flex flex-col justify-between gap-3 rounded-xl border border-border/60 bg-secondary/30 p-4"
+      >
+        <div>
+          <div className="flex items-center justify-between gap-2">
+            <p className="font-medium text-foreground">{a.name}</p>
+            <Badge className="border-accent/40 bg-accent/10 text-accent">{KIND_LABEL[a.kind]}</Badge>
+          </div>
+          {a.description && <p className="mt-1 text-xs text-muted-foreground">{a.description}</p>}
+          <p className="mt-2 text-sm">
+            <span className="font-mono text-lg font-bold text-foreground">{formatUsd(a.price)}</span>
+            {isCopy ? (
+              <span className="ml-1 text-xs text-muted-foreground">/ {a.duration_days}d subscription</span>
+            ) : (
+              <span className="ml-1 text-xs text-muted-foreground">/ {a.duration_days}d</span>
+            )}
+          </p>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {slotSummary(a)}
+            {mine > 0 && <span className="text-up"> · {isCopy ? 'active' : `${mine} owned`}</span>}
+          </p>
+          {noCommission && (
+            <p className="mt-1.5 inline-flex items-center gap-1 rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+              No referral commission
+            </p>
+          )}
+        </div>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={disabled}
+          onClick={() => onPurchase(a)}
+          className={cn('w-full')}
+        >
+          {isCopy ? 'Subscribe' : 'Buy add-on'}
+        </Button>
+      </div>
+    )
+  }
 
   return (
     <Card>
@@ -57,46 +114,40 @@ export function AddOnsSection({
           Add-ons
         </CardTitle>
         <span className="text-xs text-muted-foreground">
-          Extend your package — every extra slot adds 1 robot + 1 trading account.
+          Extra slots add 1 robot + 1 trading account each. Copy trading unlocks copying pro traders while your
+          subscription is active.
         </span>
       </CardHeader>
       <CardContent>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {active.map((a) => {
-            const mine = owned(a.kind)
-            return (
-              <div
-                key={a.id}
-                className="flex flex-col justify-between gap-3 rounded-xl border border-border/60 bg-secondary/30 p-4"
-              >
-                <div>
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="font-medium text-foreground">{a.name}</p>
-                    <Badge className="border-accent/40 bg-accent/10 text-accent">{KIND_LABEL[a.kind]}</Badge>
-                  </div>
-                  {a.description && <p className="mt-1 text-xs text-muted-foreground">{a.description}</p>}
-                  <p className="mt-2 text-sm">
-                    <span className="font-mono text-lg font-bold text-foreground">{formatUsd(a.price)}</span>
-                    <span className="ml-1 text-xs text-muted-foreground">/ {a.duration_days}d</span>
-                  </p>
-                  <p className="mt-1 text-[11px] text-muted-foreground">
-                    {slotSummary(a)}
-                    {mine > 0 && <span className="text-up"> · {mine} owned</span>}
-                  </p>
-                </div>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={disabled}
-                  onClick={() => onPurchase(a)}
-                  className={cn('w-full')}
-                >
-                  Buy add-on
-                </Button>
-              </div>
-            )
-          })}
-        </div>
+        {slotAddons.length > 0 && (
+          <>
+            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <PackagePlus className="h-3.5 w-3.5" aria-hidden="true" />
+              Extra slots
+            </p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {slotAddons.map(renderCard)}
+            </div>
+          </>
+        )}
+        {copyAddons.length > 0 && (
+          <div className={cn(slotAddons.length > 0 && 'mt-6')}>
+            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <Users className="h-3.5 w-3.5" aria-hidden="true" />
+              Copy trading — duration subscription
+            </p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {copyAddons.map(renderCard)}
+            </div>
+          </div>
+        )}
+        {legacyAddons.length > 0 && (
+          <div className={cn((slotAddons.length > 0 || copyAddons.length > 0) && 'mt-6')}>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {legacyAddons.map(renderCard)}
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   )
