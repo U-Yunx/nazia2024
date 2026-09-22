@@ -15,6 +15,7 @@ import type {
 import { applySignal, canOpen, closeAllPositions, closeRobotPositions as engineCloseRobotPositions, createAccount, openPosition } from './engine'
 import { clearLocal, loadLocal, loadRemote, resetRemote, saveLocal, saveRemote } from './persistence'
 import { clearRobotRunning, loadRobotRunning, saveRobotRunning } from './robotState'
+import { clearRobotState, loadRobotState } from './robotStateDb'
 import { createBroker, type BrokerAdapter } from './broker'
 import { MIN_PAPER_DEPOSIT, startingBalanceForKind } from './accountKind'
 import type { PaperAccountKind } from './types'
@@ -94,7 +95,15 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string },
     void (async () => {
       const u = userRef.current
       let next: AccountState | null = null
-      if (u) next = await loadRemote(u, robot)
+      if (u) {
+        // Fetch the ledger and the durable robot state together, so a refresh
+        // restores the robot's on/off flag at the same time as the account.
+        const [remote, durable] = await Promise.all([loadRemote(u, robot), loadRobotState(u.id, robot)])
+        next = remote
+        // The durable copy is the source of truth for the running flag — seed
+        // localStorage from it so every downstream reader agrees immediately.
+        if (durable) saveRobotRunning(durable.running, stateKey(u.id, robot))
+      }
       if (next) {
         // Repair a ledger the server lost. The old save path deleted every trade
         // row and then failed to re-insert them (it sent null for NOT NULL
@@ -377,6 +386,9 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string },
         // Forget the cached signature so the fresh account is written up.
         remoteSignatures.delete(signatureKey(u.id, robot))
         void resetRemote(u, initialBalance, robot)
+        // Wipe the durable robot state too, so the reload after a reset comes
+        // back to a clean, stopped robot instead of the old run.
+        void clearRobotState(u.id, robot)
       }
     },
     [robot],
@@ -404,6 +416,8 @@ export function usePaperAccount(connectionIds?: { oanda?: string; mt?: string },
       // Forget the cached signature so the fresh account is written up.
       remoteSignatures.delete(signatureKey(u.id, robot))
       void resetRemote(u, balance, robot)
+      // A new account kind is a fresh start — forget the old run state too.
+      void clearRobotState(u.id, robot)
     }
   }, [robot])
 

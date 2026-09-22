@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "postinstall": "node scripts/ensure-test-browser.mjs",
     "deploy": "node scripts/check-deploy-env.mjs && vite build",
     "deploy:pages": "npm run deploy && npx wrangler@latest pages deploy dist --project-name ana24"
   },

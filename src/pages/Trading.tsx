@@ -16,6 +16,7 @@ import {
   saveRunStart,
   saveSessionStart,
 } from '../lib/trading/robotState'
+import { clearRobotState, loadRobotState, saveRobotState } from '../lib/trading/robotStateDb'
 import {
   clearActivity,
   loadActivityLog,
@@ -401,6 +402,10 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
   // doing — every entry is timestamped and re-stamped on each update.
   const [robotLog, setRobotLog] = useState<ActivityEntry[]>(() => loadActivityLog(scopeId))
   const [lastRun, setLastRun] = useState<number | null>(() => loadLastRun(scopeId))
+  // Whether the durable robot state (Supabase `robot_state`) has been read for
+  // this scope. The mirror effect below must not write before the hydrate
+  // effect has read, or a mount-time echo would overwrite the saved state.
+  const [durableReady, setDurableReady] = useState(false)
   const [endsAt, setEndsAt] = useState<number | null>(null)
   const [remaining, setRemaining] = useState<number | null>(null)
   const [tuning, setTuning] = useState(false)
@@ -493,9 +498,12 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
       runStartRef.current = null
       setRunStart(null)
       clearRunStart(scopeId)
+      // A fresh account starts clean — forget the durable robot state too, so
+      // a reload after the reset comes back to a clean, stopped robot.
+      if (user) void clearRobotState(user.id, robot)
       reset(initialBalance)
     },
-    [reset, scopeId],
+    [reset, scopeId, user, robot],
   )
 
   // Stopping the robot also closes EVERY open trade — robot and manual — so
@@ -904,6 +912,85 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ledgerRobot, user, account?.id, account?.risk.autoTrade, loading])
 
+  // ---------------------------------------------------------------------------
+  // Durable robot state (Supabase `robot_state`).
+  //
+  // The running flag, auto-run window, session baseline, last-run stamp and
+  // activity feed used to live only in localStorage, so a refresh on another
+  // device (or after clearing the browser) came back with the robot off and an
+  // empty history. They are now mirrored into `robot_state` and hydrated back
+  // once per scope, so a reload restores exactly what the robot was doing.
+  // Anonymous visitors keep the localStorage-only behaviour (no user row).
+  useEffect(() => {
+    if (!user || !account || loading) return
+    let cancelled = false
+    setDurableReady(false)
+    void (async () => {
+      const row = await loadRobotState(user.id, robot)
+      if (cancelled) return
+      if (row) {
+        // Activity feed + last-run stamp.
+        if (Array.isArray(row.activity) && row.activity.length > 0) {
+          setRobotLog(row.activity)
+          saveActivityLog(row.activity, scopeId)
+        }
+        if (row.last_run_at != null) {
+          setLastRun(row.last_run_at)
+          saveLastRun(row.last_run_at, scopeId)
+        }
+        // Auto-run window — resume the countdown where it left off.
+        if (row.run_end_at != null && row.run_end_at > Date.now()) {
+          setEndsAt(row.run_end_at)
+          setRemaining(Math.max(0, Math.round((row.run_end_at - Date.now()) / 1000)))
+          saveRunEnd(row.run_end_at, scopeId)
+        }
+        // Session-guard baseline + run start, so a run that spanned a refresh
+        // keeps measuring from where it began and its elapsed time resumes.
+        if (row.session_start_equity != null) {
+          sessionStartRef.current = row.session_start_equity
+          setSessionStart(row.session_start_equity)
+          saveSessionStart(row.session_start_equity, scopeId)
+        }
+        if (row.run_start_at != null && row.run_start_at <= Date.now()) {
+          runStartRef.current = row.run_start_at
+          setRunStart(row.run_start_at)
+          saveRunStart(row.run_start_at, scopeId)
+        }
+      }
+      if (!cancelled) setDurableReady(true)
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, account?.id, loading, scopeId, robot])
+
+  // Mirror the durable state whenever any of it changes. Gated on
+  // `durableReady` so the mount-time echo of an un-hydrated scope (empty feed,
+  // no run window) can never overwrite the row it is about to read.
+  const durableWriteRef = useRef<{ key: string; sig: string } | null>(null)
+  useEffect(() => {
+    if (!user || !account || loading || !durableReady) return
+    const sig = JSON.stringify({
+      r: autoTrade,
+      e: endsAt,
+      s: sessionStart,
+      t: runStart,
+      l: lastRun,
+      a: robotLog,
+    })
+    const key = `${user.id}:${robot}`
+    if (durableWriteRef.current?.key === key && durableWriteRef.current.sig === sig) return
+    durableWriteRef.current = { key, sig }
+    void saveRobotState(user.id, robot, {
+      running: autoTrade,
+      run_end_at: endsAt,
+      run_start_at: runStart,
+      session_start_equity: sessionStart,
+      last_run_at: lastRun,
+      activity: robotLog,
+    })
+  }, [user, robot, account, loading, durableReady, autoTrade, endsAt, sessionStart, runStart, lastRun, robotLog])
   /**
    * The multi-pair / multi-strategy robot. On every quote tick it fetches fresh
    * bars for the pairs in scope, evaluates ALL strategies on each pair, and
@@ -1134,6 +1221,17 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
     pushLog([
       `Method set to ${methodLabel(m)} — interval ${intervalLabel(methodInterval(m))}, stops and risk adjusted.`,
     ])
+  }
+
+  // "Add all pairs to trade" — one click puts every watchlist pair on the
+  // robot's trade list, so the robot covers the whole market instead of only
+  // the pairs ticked by hand (auto-pick already scans the whole watchlist, but
+  // switching it off keeps every pair ticked). Disabled once they are all on.
+  const allPairsSelected = robotPairs.length >= WATCHLIST.length
+  const addAllPairs = () => {
+    if (allPairsSelected) return
+    setPairs(WATCHLIST.map((p) => p.symbol))
+    pushLog([`Added all ${WATCHLIST.length} watchlist pairs to trade.`])
   }
 
   const runTune = async () => {
@@ -2071,6 +2169,31 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
                 />
               </button>
             </div>
+
+            {/* One-click: put every watchlist pair on the trade list, so the
+                robot considers the whole market without ticking pairs by hand. */}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={addAllPairs}
+                disabled={allPairsSelected}
+                title={
+                  allPairsSelected
+                    ? 'Every watchlist pair is already on the trade list.'
+                    : 'Add every watchlist pair to the pairs the robot trades.'
+                }
+              >
+                <ListChecks className="h-4 w-4" aria-hidden="true" />
+                Add all pairs to trade
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                {allPairsSelected
+                  ? `All ${WATCHLIST.length} watchlist pairs are on the trade list.`
+                  : `${robotPairs.length} of ${WATCHLIST.length} watchlist pairs on the trade list.`}
+              </span>
+            </div>
+
             {prefs.autoPickPairs && (
               <div className="mt-3 flex flex-wrap items-center gap-3">
                 <span className="flex items-center gap-1.5 text-sm text-foreground">
