@@ -34,6 +34,7 @@ export interface RobotRunRow {
   trade_mode: 'sequential' | 'concurrent'
   max_per_pair: number
   max_open_trades: number
+  max_pairs_per_trade: number
   per_trade_take_profit_pips: number
   per_trade_stop_loss_pips: number
   overall_max_profit_usd: number
@@ -120,6 +121,7 @@ export async function saveRobotRun(userId: string, accountId: string, input: Rob
     trade_mode: input.prefs.tradeMode,
     max_per_pair: input.prefs.maxPerPair,
     max_open_trades: input.prefs.maxOpenTrades,
+    max_pairs_per_trade: input.prefs.maxPairsPerTrade ?? 0,
     per_trade_take_profit_pips: input.prefs.perTradeTakeProfitPips,
     per_trade_stop_loss_pips: input.prefs.perTradeStopLossPips,
     overall_max_profit_usd: input.prefs.overallMaxProfitUsd,

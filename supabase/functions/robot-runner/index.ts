@@ -406,6 +406,7 @@ interface RobotRunRow {
   trade_mode: "sequential" | "concurrent";
   max_per_pair: number;
   max_open_trades: number;
+  max_pairs_per_trade: number;
   per_trade_take_profit_pips: number;
   per_trade_stop_loss_pips: number;
   overall_max_profit_usd: number;
@@ -669,9 +670,14 @@ async function tickRun(
         : ranked;
   // Starter tier: open on at most 6 distinct pairs — trade the strongest
   // setups within the cap. Subscribers 30+ days get every ranked pair.
-  const targets = Number.isFinite(tier.maxPairs)
-    ? rankedTargets.slice(0, STARTER_MAX_PAIRS)
-    : rankedTargets;
+  const tierCap = Number.isFinite(tier.maxPairs) ? STARTER_MAX_PAIRS : rankedTargets.length;
+  // The user's optional "max pairs per trade" limit (0 = no cap) may shrink
+  // that further — never grows it beyond the tier allowance.
+  const pairCap =
+    typeof run.max_pairs_per_trade === "number" && run.max_pairs_per_trade > 0
+      ? Math.min(tierCap, Math.floor(run.max_pairs_per_trade))
+      : tierCap;
+  const targets = rankedTargets.slice(0, pairCap);
 
   const cycleInputs: RobotCycleInput[] = [];
   for (const target of targets) {

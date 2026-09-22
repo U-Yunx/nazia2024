@@ -50,6 +50,7 @@ const BEST: RobotPrefs = {
   tradeMode: 'sequential',
   maxPerPair: 1,
   maxOpenTrades: 0,
+  maxPairsPerTrade: 0,
   profitPullbackPct: 25,
   lot: 1,
 }
@@ -70,6 +71,7 @@ const COMMON: RobotPrefs = {
   tradeMode: 'sequential',
   maxPerPair: 1,
   maxOpenTrades: 0,
+  maxPairsPerTrade: 0,
   profitPullbackPct: 25,
   lot: 1,
 }

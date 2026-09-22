@@ -18,6 +18,9 @@ import { MIN_LOT, normalizeLots } from './lots'
 import type { RiskConfig } from './types'
 
 const KEY = 'ana24.robot-prefs'
+/** Hard ceiling for the "max pairs per trade" pref — a sane multiple of any
+ *  watchlist size, so a stale/typo'd value can never freeze the robot. */
+const MAX_PAIRS_CAP = 50
 /** Namespaced key for a scope: slot 0 is the MANUAL trading workspace (its own
  *  method/strategy settings, separate from every robot); slot 1 keeps the
  *  legacy key so existing users keep their saved configuration; slots 2..N get
@@ -47,6 +50,8 @@ const DEFAULTS: RobotPrefs = {
   tradeMode: 'sequential',
   maxPerPair: 1,
   maxOpenTrades: 0,
+  // 0 = trade every eligible pair (up to the tier's pair cap).
+  maxPairsPerTrade: 0,
   profitPullbackPct: 25,
   // Risk-based sizing by default — no lot pick required to start.
   sizingMode: 'risk',
@@ -96,6 +101,12 @@ export function loadRobotPrefs(slot = 1): RobotPrefs {
       maxPerPair: Math.max(1, Math.round(num(p.maxPerPair, DEFAULTS.maxPerPair))),
       // 0 = unlimited (no global cap); any positive number is a hard cap.
       maxOpenTrades: Math.max(0, Math.round(num(p.maxOpenTrades, DEFAULTS.maxOpenTrades))),
+      // 0 = no cap; positive = at most N distinct pairs per cycle (clamped to
+      // the watchlist size so a stale pref can never freeze the robot).
+      maxPairsPerTrade: Math.min(
+        MAX_PAIRS_CAP,
+        Math.max(0, Math.round(num(p.maxPairsPerTrade, DEFAULTS.maxPairsPerTrade))),
+      ),
       // Profit-pullback lock % — clamp to a sane 0–90 so a typo can't trap a
       // winner into closing almost immediately.
       profitPullbackPct: Math.min(90, Math.max(0, num(p.profitPullbackPct, DEFAULTS.profitPullbackPct))),
@@ -151,6 +162,7 @@ export function useRobotPrefs(slot = 1) {
     setTradeMode: (tradeMode: 'sequential' | 'concurrent') => update({ tradeMode }),
     setMaxPerPair: (maxPerPair: number) => update({ maxPerPair }),
     setMaxOpenTrades: (maxOpenTrades: number) => update({ maxOpenTrades }),
+    setMaxPairsPerTrade: (maxPairsPerTrade: number) => update({ maxPairsPerTrade }),
     setProfitPullbackPct: (profitPullbackPct: number) => update({ profitPullbackPct }),
     setSizingMode: (sizingMode: 'risk' | 'fixed') => update({ sizingMode }),
     setRiskPerTradePct: (riskPerTradePct: number) => update({ riskPerTradePct: clampRiskPct(riskPerTradePct) }),

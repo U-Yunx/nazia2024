@@ -285,6 +285,7 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
     setOverallMaxProfitUsd,
     setOverallMaxLossUsd,
     setMaxPerPair,
+    setMaxPairsPerTrade,
     setProfitPullbackPct,
     setSizingMode,
     setRiskPerTradePct,
@@ -885,7 +886,12 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
         // `robotCaps.maxTargets` distinct pairs (6 for free / <30-day
         // subscribers) — trade the strongest setups within the cap, and the
         // full watchlist once the 30-day subscription unlock applies.
-        const targets: RankedPair[] = rankedTargets.slice(0, robotCaps.maxTargets)
+        // User's optional "max pairs per trade" cap shrinks the tier allowance
+        // (0 = no cap, trade up to the tier's maxTargets).
+        const targets: RankedPair[] = rankedTargets.slice(
+          0,
+          Math.min(robotCaps.maxTargets, prefs.maxPairsPerTrade > 0 ? prefs.maxPairsPerTrade : Number.POSITIVE_INFINITY),
+        )
         if (prefs.autoPickPairs && targets.length > 0) {
           pushLog([
             `Best analysis method picked ${targets.length} pair${targets.length === 1 ? '' : 's'}: ${targets
@@ -1459,8 +1465,9 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
           </div>
 
           {/* Pick lot — REQUIRED pre-start step. The robot opens every trade
-              at this size (1 lot = 100,000 units), so Start stays locked
-              until an integer lot ≥ 1 is chosen. */}
+              at the lot chosen here; 0.01 (one micro-lot of the account's
+              contract size) is the minimum, and Start stays locked until a
+              lot of 0.01 or more is picked — on any account kind. */}
           <div
             className={cn(
               'flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-start sm:justify-between',
@@ -1572,6 +1579,11 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
                   </Button>
                 </div>
               )}
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {sizingValid
+                  ? `Every trade opens at ${formatLots(normalizeLots(prefs.lot))} lot = ${Math.max(1, Math.round(normalizeLots(prefs.lot) * contractSize)).toLocaleString('en-US')} units on this ${accountKindLabel(account?.risk.kind)} account.`
+                  : `0.01 lot = ${Math.max(1, Math.round(contractSize * MIN_LOT))} unit${Math.max(1, Math.round(contractSize * MIN_LOT)) === 1 ? '' : 's'} on this ${accountKindLabel(account?.risk.kind)} account — pick a lot of 0.01 or more.`}
+              </p>
             </div>
           </div>
 
@@ -1614,6 +1626,45 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
               <Badge className="border-border bg-muted text-muted-foreground">
                 Max {robotCaps.maxOpenTrades > 0 ? robotCaps.maxOpenTrades : 'unlimited'} total
               </Badge>
+              <Badge className="border-border bg-muted text-muted-foreground">
+                {prefs.maxPairsPerTrade > 0
+                  ? `Max ${prefs.maxPairsPerTrade} pair${prefs.maxPairsPerTrade === 1 ? '' : 's'} per trade`
+                  : 'All ranked pairs eligible'}
+              </Badge>
+            </div>
+
+            {/* How many distinct pairs the robot may trade in one cycle. */}
+            <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-secondary/40 px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-foreground">Max pairs per trade</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  The robot scores every pair and trades only the strongest setups — cap it to concentrate on
+                  fewer pairs at once. 0 = all eligible pairs (up to the tier's pair limit).
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  aria-label="Fewer pairs per trade"
+                  onClick={() => setMaxPairsPerTrade(Math.max(0, prefs.maxPairsPerTrade - 1))}
+                  disabled={prefs.maxPairsPerTrade <= 0}
+                >
+                  −
+                </Button>
+                <span className="w-10 text-center text-sm font-semibold tnum">
+                  {prefs.maxPairsPerTrade > 0 ? prefs.maxPairsPerTrade : 'All'}
+                </span>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  aria-label="More pairs per trade"
+                  onClick={() => setMaxPairsPerTrade(Math.min(50, prefs.maxPairsPerTrade + 1))}
+                  disabled={prefs.maxPairsPerTrade >= 50}
+                >
+                  +
+                </Button>
+              </div>
             </div>
 
             {/* How many positions the robot may hold on one pair at the same time. */}
