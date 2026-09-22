@@ -1,5 +1,15 @@
 # Cloudflare Pages configuration — wrangler.toml
-# Fresh setup for deploying the built SPA (dist/) to Cloudflare Pages.
+# This is a PAGES project (static site), NOT a Worker.
+#
+#   ✅ Deploy with:  npx wrangler@latest pages deploy dist --project-name ana24
+#   ❌ NEVER run:    npx wrangler deploy   (that is the Workers command)
+#
+# Running `wrangler deploy` on a Pages config fails with:
+#   ✘ [ERROR] Missing entry-point to Worker script or to assets directory
+# That error means "this is a Pages project — use `wrangler pages deploy`".
+# Do NOT "fix" it by adding `main` or `[assets]` here — that would turn this
+# into a Workers project and break Pages behaviour (_headers, _redirects, 404).
+#
 # Reference: https://developers.cloudflare.com/pages/configuration/wrangler-configuration/
 #
 # Quick start:
