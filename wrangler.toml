@@ -1,22 +1,37 @@
-# Cloudflare Pages project configuration for ANA24.
+# Cloudflare configuration for ANA24.
 #
-# This drives `wrangler pages deploy` (see package.json -> deploy:pages).
-# The project name must match an existing Cloudflare Pages project in your
-# account — `ana24` — otherwise the deploy fails with PROJECT_NOT_FOUND.
+# This is a Workers static-assets config. The deploy step runs `wrangler deploy`,
+# which requires either a Worker script entry-point (`main`) or an assets
+# directory (`[assets]`). This app is a static SPA, so it ships the Vite build
+# output as static assets — no Worker script is needed.
+#
+# NOTE: this file used to describe a Cloudflare *Pages* project
+# (`pages_build_output_dir`). `wrangler deploy` rejects that shape with
+# "Missing entry-point to Worker script or to assets directory" (after warning
+# that a Pages project should use `wrangler pages deploy` instead), so the
+# config now matches the command the deploy pipeline actually runs.
 #
 # Credentials are NOT stored here:
-#   - CLOUDFLARE_API_TOKEN   -> set in CI/environment secrets (required)
-#   - CLOUDFLARE_ACCOUNT_ID  -> set in CI/environment secrets (required),
-#                               or uncomment `account_id` below and fill in.
-#   - VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY -> public values, injected at
-#                               build time by `npm run deploy` (see
+#   - CLOUDFLARE_API_TOKEN   -> a REAL secret; keep it in CI/environment secrets
+#                               (needs the "Workers Scripts — Edit" permission)
+#   - CLOUDFLARE_ACCOUNT_ID  -> public, but required when the token can reach
+#                               more than one account
+#   - VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY -> public build-time values,
+#                               injected by `npm run deploy` (see
 #                               scripts/check-deploy-env.mjs).
 
 name = "ana24"
-pages_build_output_dir = "./dist"
 compatibility_date = "2024-11-01"
 
-# Cloudflare account that owns the Pages project. Prefer setting
-# CLOUDFLARE_ACCOUNT_ID in the environment; uncomment only if you want it
-# baked into this file (it is not a secret — it is your public account ID):
+[assets]
+# Upload the production build (vite build -> dist/).
+directory = "./dist"
+
+# Client-side routing: any path with no file on disk (e.g. /markets, /trading)
+# returns index.html so React Router resolves it, instead of 404ing on a hard
+# refresh or a deep link.
+not_found_handling = "single-page-application"
+
+# Uncomment to pin the account for a single-account deploy (the account ID is
+# public, not a secret):
 # account_id = "REPLACE_WITH_YOUR_ACCOUNT_ID"

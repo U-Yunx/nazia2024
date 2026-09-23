@@ -9,9 +9,9 @@ MetaTrader — plus a referral/commission system with manual payouts.
 - **Frontend** — React 18 + TypeScript + Vite + Tailwind CSS v4
 - **Charts** — lightweight-charts (candles, equity curves)
 - **Backend** — Supabase (Auth, Postgres, Realtime, Edge Functions)
-- **Deploy** — static SPA built with `npm run build` to `dist/`, deployable to
-  Cloudflare Pages (see [Deployment](#deployment)). `npm run dev` for local
-  development.
+- **Deploy** — static SPA built with `npm run build` to `dist/`, published to
+  Cloudflare as static assets (see [Deployment](#deployment)). `npm run dev`
+  for local development.
 
 ## Getting started
 
@@ -33,48 +33,65 @@ injected automatically once a Supabase project is linked.
 | `npm run build` | Production build to `dist/`               |
 | `npm test`      | Run the Vitest unit tests                 |
 | `npm run deploy`| Pre-deploy checks + production build      |
-| `npm run deploy:pages` | Credential preflight + build + Cloudflare Pages upload |
+| `npm run deploy:cloudflare` | Credential preflight + build + Cloudflare upload |
 
-## Deployment (Cloudflare Pages)
+## Deployment (Cloudflare)
 
-The app is a static SPA; `dist/` ships with Cloudflare Pages-friendly
-`_redirects` (SPA fallback), `_headers` (CSP + security + caching), `404.html`,
-`robots.txt` and `sitemap.xml`. The Pages project is named **`ana24`** and is
-declared in [`wrangler.toml`](./wrangler.toml).
+The app is a static SPA. `vite build` writes `dist/`, which Cloudflare serves as
+static assets — no Worker script is involved. The deployment is named
+**`ana24`** and is declared in [`wrangler.toml`](./wrangler.toml), together with
+two settings the deploy depends on:
+
+- `[assets] directory = "./dist"` — the folder to upload. `wrangler deploy`
+  **requires** either this or a Worker `main` entry-point; with neither it exits
+  with *"Missing entry-point to Worker script or to assets directory"*.
+- `not_found_handling = "single-page-application"` — deep links and hard
+  refreshes (`/markets`, `/trading`, …) return `index.html` so React Router
+  resolves them instead of 404ing.
+
+`dist/` also ships `_redirects` (SPA fallback), `_headers` (CSP + security +
+caching), `404.html`, `robots.txt` and `sitemap.xml`.
 
 ### Option A — direct upload (wrangler)
 
 ```bash
-npm run deploy:pages
+npm run deploy:cloudflare
 ```
 
 This runs three steps, each failing fast with a clear message:
 
-1. `scripts/check-cloudflare-env.mjs` — verifies deploy credentials are present.
+1. `scripts/check-cloudflare-env.mjs` — verifies deploy credentials are present
+   and that `wrangler.toml` still declares a deployable `[assets]` target.
 2. `npm run deploy` — `scripts/check-deploy-env.mjs` (public VITE vars **and**
    CSP/Supabase-ref drift guard) then the production build.
-3. `wrangler pages deploy` — uploads `dist/` to the `ana24` Pages project.
+3. `wrangler deploy` — uploads `dist/` to the `ana24` deployment.
 
 Required environment (CI secrets, never committed):
 
 | Variable | What it is | Where to get it |
 | --- | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | API token, real secret | [Create a token](https://developers.cloudflare.com/fundamentals/api/get-started/create-token/) with "Cloudflare Pages — Edit" |
+| `CLOUDFLARE_API_TOKEN` | API token, real secret | [Create a token](https://developers.cloudflare.com/fundamentals/api/get-started/create-token/) with "Workers Scripts — Edit" |
 | `CLOUDFLARE_ACCOUNT_ID` | Your account ID (public) | Cloudflare dashboard → right sidebar |
 | `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` | Public Supabase URL + anon key | Injected automatically when Supabase is linked |
 
-### Option B — Git-integrated builds (Pages dashboard)
+### Option B — Git-integrated builds (Cloudflare dashboard)
 
-Connect the repo in the Cloudflare Pages dashboard instead of using wrangler.
-Then:
+Connect the repo to Cloudflare instead of uploading with wrangler. The dashboard
+then runs:
 
 - **Build command:** `npm ci && npm run build`
-- **Build output directory:** `dist`
+- **Deploy command:** `npx wrangler deploy`
 - **Environment variables:** set `VITE_SUPABASE_URL` and
-  `VITE_SUPABASE_ANON_KEY` (public) plus `NODE_VERSION=20.19.0`. Cloudflare
-  Pages does **not** read `.nvmrc`, and Vite 7 requires Node 20.19+ / 22.12+ —
-  without `NODE_VERSION` the build can fail on Pages' older default Node.
+  `VITE_SUPABASE_ANON_KEY` (public) plus `NODE_VERSION=20.19.0`. Cloudflare's
+  build image does **not** read `.nvmrc`, and Vite 7 requires Node 20.19+ /
+  22.12+ — without `NODE_VERSION` the build can fail on an older default Node.
   Secrets (e.g. `CLOUDFLARE_API_TOKEN`) are not needed for this flow.
+
+The deploy command is `npx wrangler deploy` (the Workers command), which is why
+`wrangler.toml` must define an `[assets]` target. Don't mix the two models: if
+you ever point the deploy command at a Pages upload
+(`npx wrangler pages deploy dist --project-name=ana24`), the config has to go
+back to a `pages_build_output_dir` project.
 
 ### Keeping the Supabase project ref in sync
 

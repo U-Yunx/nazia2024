@@ -10,7 +10,7 @@
     "test": "vitest run",
     "postinstall": "node scripts/ensure-test-browser.mjs",
     "deploy": "node scripts/check-deploy-env.mjs && vite build",
-    "deploy:pages": "node scripts/check-cloudflare-env.mjs && npm run deploy && wrangler pages deploy"
+    "deploy:cloudflare": "node scripts/check-cloudflare-env.mjs && npm run deploy && wrangler deploy"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.4",

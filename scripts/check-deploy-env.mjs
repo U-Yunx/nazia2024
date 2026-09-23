@@ -59,7 +59,7 @@ const headersPath = resolve('public/_headers')
 
 if (!existsSync(headersPath)) {
   console.error(`[check-deploy-env] public/_headers is missing (expected at ${headersPath}).`)
-  console.error('Cloudflare Pages serves its security headers from this file — do not ship without it.')
+  console.error('public/_headers carries the CSP that must match the build-time Supabase project — do not ship without it.')
   process.exit(1)
 }
 
