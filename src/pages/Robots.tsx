@@ -118,6 +118,21 @@ export function Robots() {
   const [rows, setRows] = useState<SlotRow[] | null>(null)
   // The slot whose full control room is embedded below the fleet (null = none).
   const [activeSlot, setActiveSlot] = useState<number | null>(null)
+  // Keep-alive control rooms. A slot's control room is mounted the first time
+  // it is opened and STAYS mounted afterwards — inactive rooms are hidden, never
+  // unmounted. This is what keeps a running robot alive when you switch slots:
+  // its engine loop, quote stream, heartbeat and live-broker connection keep
+  // running in the background, so opening Robot 2 never stops Robot 1.
+  const [visitedSlots, setVisitedSlots] = useState<Set<number>>(() => new Set())
+  const openSlot = (slot: number) => {
+    setActiveSlot((cur) => (cur === slot ? null : slot))
+    setVisitedSlots((prev) => {
+      if (prev.has(slot)) return prev
+      const next = new Set(prev)
+      next.add(slot)
+      return next
+    })
+  }
 
   // Authoritative server ledger rows (signed-in users only).
   const loadRows = () => {
@@ -362,7 +377,7 @@ export function Robots() {
                 )}
 
                 {/* In-page control — expands the full control room for this slot. */}
-                <Button variant={expanded ? 'secondary' : 'primary'} size="sm" className="w-full" onClick={() => setActiveSlot(expanded ? null : s.slot)}>
+                <Button variant={expanded ? 'secondary' : 'primary'} size="sm" className="w-full" onClick={() => openSlot(s.slot)}>
                   {expanded ? (
                     <>
                       <X className="h-4 w-4" aria-hidden="true" />
@@ -386,34 +401,44 @@ export function Robots() {
         })}
       </div>
 
-      {/* Embedded control room for the active slot — the real Trading UI, no
-          navigation needed. Collapsed by default so the fleet stays light. */}
-      {activeSlot != null && (
-        <section aria-label={`Robot ${activeSlot} control room`} className="space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm text-muted-foreground">
-              <ChevronRight className="mr-1 inline h-4 w-4 text-accent" aria-hidden="true" />
-              Controlling <span className="font-semibold text-foreground">Robot {activeSlot}</span> — every change
-              saves to this slot only. For a distraction-free view, open it full-screen:
-            </p>
-            <Link to={robotTarget(activeSlot)} className="shrink-0">
-              <Button variant="secondary" size="sm">
-                Full screen
-                <ChevronRight className="h-4 w-4" aria-hidden="true" />
-              </Button>
-            </Link>
-          </div>
-          <Suspense
-            fallback={
-              <div className="flex min-h-[40vh] items-center justify-center" role="status" aria-label="Loading control room">
-                <Loader2 className="h-6 w-6 animate-spin text-accent" aria-hidden="true" />
-              </div>
-            }
+      {/* Embedded control rooms — the real Trading UI, no navigation needed.
+          Keep-alive: each opened slot's room stays mounted (hidden while
+          inactive), so a running robot never stops when you switch slots.
+          Collapsed rooms are hidden, not unmounted. */}
+      {[...visitedSlots].map((slot) => {
+        const isActive = activeSlot === slot
+        return (
+          <section
+            key={slot}
+            hidden={!isActive}
+            aria-label={`Robot ${slot} control room`}
+            className="space-y-3"
           >
-            <TradingRoom slot={activeSlot} />
-          </Suspense>
-        </section>
-      )}
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm text-muted-foreground">
+                <ChevronRight className="mr-1 inline h-4 w-4 text-accent" aria-hidden="true" />
+                Controlling <span className="font-semibold text-foreground">Robot {slot}</span> — every change
+                saves to this slot only. For a distraction-free view, open it full-screen:
+              </p>
+              <Link to={robotTarget(slot)} className="shrink-0">
+                <Button variant="secondary" size="sm">
+                  Full screen
+                  <ChevronRight className="h-4 w-4" aria-hidden="true" />
+                </Button>
+              </Link>
+            </div>
+            <Suspense
+              fallback={
+                <div className="flex min-h-[40vh] items-center justify-center" role="status" aria-label="Loading control room">
+                  <Loader2 className="h-6 w-6 animate-spin text-accent" aria-hidden="true" />
+                </div>
+              }
+            >
+              <TradingRoom slot={slot} />
+            </Suspense>
+          </section>
+        )
+      })}
 
       {/* Recent fleet activity */}
       <Card>

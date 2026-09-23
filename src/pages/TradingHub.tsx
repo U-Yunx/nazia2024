@@ -11,6 +11,7 @@
  * The tab is driven by `?robot=N` (1–3 selects that robot, absent = manual)
  * so deep links from the Robots fleet ("Full screen") land on the right tab.
  */
+import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Bot, Hand, ShieldAlert } from 'lucide-react'
 import { cn } from '../lib/cn'
@@ -61,6 +62,22 @@ export function TradingHub() {
   const raw = Number(searchParams.get('robot'))
   const active = Number.isInteger(raw) && raw >= 1 && raw <= 3 ? raw : 0
 
+  // Keep-alive tabs. A workspace is mounted the first time its tab is visited
+  // and STAYS mounted afterwards — inactive tabs are hidden, never unmounted.
+  // This is what keeps a running robot alive across tab switches: its engine
+  // loop, quote stream, heartbeat and live-broker connection keep running in
+  // the background, so switching from Robot 1 to Robot 2 never stops Robot 1.
+  // Only tabs that have actually been opened cost anything (lazy first mount).
+  const [visited, setVisited] = useState<Set<number>>(() => new Set([active]))
+  useEffect(() => {
+    setVisited((prev) => {
+      if (prev.has(active)) return prev
+      const next = new Set(prev)
+      next.add(active)
+      return next
+    })
+  }, [active])
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3">
@@ -68,19 +85,28 @@ export function TradingHub() {
         <p className="flex items-start gap-1.5 text-xs text-muted-foreground" role="note">
           <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />
           Every tab is fully independent — its own balance, configuration, strategy settings and copy-trading. Nothing
-          you set on manual trading changes any robot, and no robot shares another robot's ledger.
+          you set on manual trading changes any robot, and no robot shares another robot's ledger. Switching tabs never
+          stops a running robot — it keeps trading in the background.
         </p>
       </div>
 
       {/* Live progress moved to the global sticky bar (Layout) — it follows the
           visitor across every page and expands to the full workspace grid. */}
 
-      {active === 0 ? (
-        <ManualWorkspace />
-      ) : (
-        // key={active} remounts the control room per robot so each tab starts
-        // on that robot's own saved state (hooks scope by slot).
-        <Trading slot={active} key={active} />
+      {/* Keep-alive panels: once visited, each workspace stays mounted and is
+          merely hidden while another tab is active. `hidden` (display:none)
+          keeps the DOM alive — effects, intervals and connections included. */}
+      {visited.has(0) && (
+        <div hidden={active !== 0}>
+          <ManualWorkspace />
+        </div>
+      )}
+      {[1, 2, 3].map((n) =>
+        visited.has(n) ? (
+          <div key={n} hidden={active !== n}>
+            <Trading slot={n} />
+          </div>
+        ) : null,
       )}
     </div>
   )
