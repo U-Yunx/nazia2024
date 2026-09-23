@@ -30,6 +30,18 @@ directory = "./dist"
 # Client-side routing: any path with no file on disk (e.g. /markets, /trading)
 # returns index.html so React Router resolves it, instead of 404ing on a hard
 # refresh or a deep link.
+#
+# ⚠️ DO NOT add a `/*  /index.html  200` rule to a `_redirects` file to do this.
+# Cloudflare validates it as an infinite loop and rejects the whole upload:
+#
+#   Invalid _redirects configuration:
+#   Line 7: Infinite loop detected in this rule. This would cause a redirect to
+#   strip `.html` or `/index` and end up triggering this rule again. [code: 100324]
+#
+# The reason: a 200 rewrite to `/index.html` is normalised back to `/`, and then
+# `/*` matches that path again — so the rule re-triggers itself. This setting is
+# the supported way to serve an SPA fallback, so `not_found_handling` replaces
+# the old `public/_redirects` file (which has been removed).
 not_found_handling = "single-page-application"
 
 # Uncomment to pin the account for a single-account deploy (the account ID is

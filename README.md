@@ -49,8 +49,23 @@ two settings the deploy depends on:
   refreshes (`/markets`, `/trading`, …) return `index.html` so React Router
   resolves them instead of 404ing.
 
-`dist/` also ships `_redirects` (SPA fallback), `_headers` (CSP + security +
-caching), `404.html`, `robots.txt` and `sitemap.xml`.
+> **Do not add a `_redirects` file for the SPA fallback.** The classic
+> `/*  /index.html  200` line looks equivalent to the setting above, but
+> Cloudflare validates it as an infinite loop and rejects the entire upload:
+>
+> ```
+> Invalid _redirects configuration:
+> Line 7: Infinite loop detected in this rule. This would cause a redirect to
+> strip `.html` or `/index` and end up triggering this rule again. [code: 100324]
+> ```
+>
+> The rewrite target `/index.html` is normalised back to `/`, which `/*` then
+> matches again. `not_found_handling` above is the supported SPA fallback, so
+> `public/_redirects` was removed. `wrangler deploy` is unaffected either way —
+> the failure happens server-side, at upload.
+
+`dist/` also ships `_headers` (CSP + security + caching), `404.html`,
+`robots.txt` and `sitemap.xml`.
 
 ### Option A — direct upload (wrangler)
 
