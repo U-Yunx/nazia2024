@@ -12,6 +12,16 @@ dist
 dist-ssr
 *.local
 
+# Local environment files — never commit real env values.
+# (.env.example is the committed template and is NOT ignored.)
+.env
+.env.*
+!.env.example
+
+# Wrangler / Cloudflare caches and credentials (wrangler.toml IS committed —
+# it contains no secrets)
+.wrangler
+
 # Playwright CLI runtime artifacts (snapshots/screenshots/videos)
 .playwright-cli
 

@@ -5,6 +5,11 @@
 #
 # Security hardening for a finance app: no framing, strict referrer, a tight
 # CSP that only allows Supabase as an external origin, and HSTS.
+#
+# ⚠️ COUPLING WARNING: the `connect-src` origins below hardcode the Supabase
+# project ref (xopygzpepikerwqxzqzu). If the linked Supabase project ever
+# changes, update BOTH this file AND VITE_SUPABASE_URL. `npm run deploy` fails
+# the build automatically if they drift (see scripts/check-deploy-env.mjs).
 
 /*
   X-Content-Type-Options: nosniff

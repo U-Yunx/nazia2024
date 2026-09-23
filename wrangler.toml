@@ -1,27 +1,22 @@
-# Cloudflare Pages configuration — wrangler.toml
-# This is a PAGES project (static site), NOT a Worker.
+# Cloudflare Pages project configuration for ANA24.
 #
-#   ✅ Deploy with:  npx wrangler@latest pages deploy dist --project-name ana24
-#   ❌ NEVER run:    npx wrangler deploy   (that is the Workers command)
+# This drives `wrangler pages deploy` (see package.json -> deploy:pages).
+# The project name must match an existing Cloudflare Pages project in your
+# account — `ana24` — otherwise the deploy fails with PROJECT_NOT_FOUND.
 #
-# Running `wrangler deploy` on a Pages config fails with:
-#   ✘ [ERROR] Missing entry-point to Worker script or to assets directory
-# That error means "this is a Pages project — use `wrangler pages deploy`".
-# Do NOT "fix" it by adding `main` or `[assets]` here — that would turn this
-# into a Workers project and break Pages behaviour (_headers, _redirects, 404).
-#
-# Reference: https://developers.cloudflare.com/pages/configuration/wrangler-configuration/
-#
-# Quick start:
-#   npx wrangler@latest login
-#   npx wrangler@latest pages project create ana24 --production-branch main
-#   npm run build
-#   npx wrangler@latest pages deploy dist --project-name ana24
+# Credentials are NOT stored here:
+#   - CLOUDFLARE_API_TOKEN   -> set in CI/environment secrets (required)
+#   - CLOUDFLARE_ACCOUNT_ID  -> set in CI/environment secrets (required),
+#                               or uncomment `account_id` below and fill in.
+#   - VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY -> public values, injected at
+#                               build time by `npm run deploy` (see
+#                               scripts/check-deploy-env.mjs).
 
-name = "ana24"                     # Pages project name — rename to match your dashboard project
-pages_build_output_dir = "./dist"  # Vite build output (what gets uploaded)
-compatibility_date = "2024-11-01"  # Runtime compatibility date for Pages/Functions
+name = "ana24"
+pages_build_output_dir = "./dist"
+compatibility_date = "2024-11-01"
 
-# NOTE: SPA fallback and security headers live in /public/_redirects and
-# /public/_headers — Vite copies them into dist/, so Pages applies them at the edge.
-# No Cloudflare Functions are used; all backend logic runs in Supabase Edge Functions.
+# Cloudflare account that owns the Pages project. Prefer setting
+# CLOUDFLARE_ACCOUNT_ID in the environment; uncomment only if you want it
+# baked into this file (it is not a secret — it is your public account ID):
+# account_id = "REPLACE_WITH_YOUR_ACCOUNT_ID"
