@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Playwright CLI runtime artifacts (snapshots/screenshots/videos)
+.playwright-cli
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
