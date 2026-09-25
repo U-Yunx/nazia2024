@@ -3,7 +3,7 @@
 import { describe, it } from 'vitest'
 import type { Bar, StrategyConfig } from '../types'
 import { trendingWavesBars } from '../trading/testBars'
-import { capAdvice, comparePerPairCaps } from './capComparison'
+import { comparePerPairCaps } from './capComparison'
 
 /**
  * Correlated pairs: the same trending-wave series shifted in time (so each pair
