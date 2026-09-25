@@ -1,194 +1,46 @@
 @import "tailwindcss";
 
-/* ============================= ANA24 design system =============================
- * Dark trading-terminal theme. Every component consumes these tokens — never
- * ad-hoc colors. The palette is tuned for dense data: a deep navy-black
- * canvas, an indigo primary, a cyan accent, and semantic up/down colours for
- * price moves. Custom utilities (surface-premium, surface-hover, btn-lift,
- * text-gradient, shadow-glow, tnum) and the pulse/ticker animations below are
- * the shared "feel" of the app.
- * ============================================================================= */
+/* THESE ARE PLACEHOLDER FOR EMPTY APP, FEEL FREE TO REPLACE WITH DESIRED DESIGN */
 
 @theme {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji",
-    "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
-  --font-heading: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
-    Roboto, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-    "Liberation Mono", "Courier New", monospace;
-
-  /* Core surfaces */
-  --color-background: oklch(0.145 0.016 258.2);
-  --color-foreground: oklch(0.955 0.008 258);
-  --color-secondary: oklch(0.205 0.02 258);
-  --color-muted: oklch(0.24 0.018 258);
-  --color-muted-foreground: oklch(0.665 0.018 258);
-  --color-border: oklch(0.31 0.022 258);
-  --color-ring: oklch(0.72 0.13 235);
-
-  /* Brand */
-  --color-primary: oklch(0.56 0.22 280);
-  --color-primary-foreground: oklch(0.985 0.005 258);
-  --color-on-primary: oklch(0.985 0.005 258);
-  --color-accent: oklch(0.78 0.14 200);
-  --color-destructive: oklch(0.62 0.21 25);
-
-  /* Data accents */
-  --color-cyan: oklch(0.77 0.13 195);
-  --color-pink: oklch(0.68 0.19 348);
-  --color-amber: oklch(0.82 0.15 82);
-
-  /* Price semantics */
-  --color-up: oklch(0.73 0.16 155);
-  --color-down: oklch(0.63 0.2 25);
-
-  /* Custom effects */
-  --shadow-glow: 0 0 24px -6px color-mix(in oklab, var(--color-accent) 55%, transparent);
-
-  --animate-pulse-dot: pulse-dot 1.6s ease-in-out infinite;
-  --animate-pulse-glow: pulse-glow 2s ease-in-out infinite;
-  --animate-ticker: ticker 42s linear infinite;
-  --animate-slide-down: slide-down 320ms ease-out;
-
-  @keyframes pulse-dot {
-    0%,
-    100% {
-      opacity: 1;
-      transform: scale(1);
-    }
-    50% {
-      opacity: 0.45;
-      transform: scale(0.82);
-    }
-  }
-
-  @keyframes pulse-glow {
-    0%,
-    100% {
-      box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-accent) 45%, transparent);
-    }
-    50% {
-      box-shadow: 0 0 18px 2px color-mix(in oklab, var(--color-accent) 35%, transparent);
-    }
-  }
-
-  @keyframes ticker {
-    from {
-      transform: translateX(0);
-    }
-    to {
-      transform: translateX(-50%);
-    }
-  }
-
-  @keyframes slide-down {
-    from {
-      opacity: 0;
-      transform: translateY(-6px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
+  --font-sans: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --color-text-muted: var(--text-muted);
 }
 
-/* ------------------------------- base ---------------------------------- */
-
-html {
-  color-scheme: dark;
+:root {
+  --text-muted: oklch(0.554 0.046 257.417);
+  --dotgrid-surface: oklch(0.97 0 0);
+  --dotgrid-glow-strong: oklch(0.45 0.05 250 / 12%);
+  --dotgrid-glow-mid: oklch(0.45 0.05 250 / 7%);
+  --dotgrid-glow-soft: oklch(0.45 0.05 250 / 4%);
+  --dotgrid-glow-faint: oklch(0.45 0.05 250 / 2%);
+  --dotgrid-dot: oklch(0 0 0 / 20%);
 }
 
-body {
-  background-color: var(--color-background);
-  color: var(--color-foreground);
-  font-family: var(--font-sans);
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
+.dark {
+  --text-muted: oklch(0.9015 0.0154 241.79);
+  --dotgrid-surface: oklch(0.1638 0 0);
+  --dotgrid-glow-strong: oklch(0.41 0.14 250 / 45%);
+  --dotgrid-glow-mid: oklch(0.41 0.14 250 / 22%);
+  --dotgrid-glow-soft: oklch(0.41 0.14 250 / 10%);
+  --dotgrid-glow-faint: oklch(0.41 0.14 250 / 4%);
+  --dotgrid-dot: oklch(0.41 0.14 250 / 4%);
 }
 
-::selection {
-  background-color: color-mix(in oklab, var(--color-accent) 30%, transparent);
-}
-
-/* --------------------------- custom utilities -------------------------- */
-
-/* Elevated card surface: soft vertical gradient + hairline top highlight so
-   cards step up from the flat page instead of floating on shadows alone. */
-.surface-premium {
-  background-image: linear-gradient(
-    180deg,
-    color-mix(in oklab, var(--color-secondary) 52%, transparent),
-    color-mix(in oklab, var(--color-secondary) 8%, transparent) 100%
-  );
-  box-shadow:
-    inset 0 1px 0 0 color-mix(in oklab, white 6%, transparent),
-    0 1px 2px 0 rgb(0 0 0 / 0.25);
-}
-
-/* Interactive surfaces lift on hover (gated to (hover:hover) so touch
-   devices never stick in the hover state). */
-.surface-hover {
-  transition:
-    transform 200ms ease-out,
-    border-color 200ms ease-out,
-    background-color 200ms ease-out;
-}
-@media (hover: hover) {
-  .surface-hover:hover {
-    transform: translateY(-1px);
-    border-color: color-mix(in oklab, var(--color-accent) 35%, var(--color-border));
-  }
-}
-
-/* Primary interaction feedback: everything pressable compresses slightly. */
-.btn-lift {
-  transition:
-    transform 150ms ease-out,
-    box-shadow 200ms ease-out,
-    background-color 200ms ease-out,
-    border-color 200ms ease-out,
-    opacity 150ms ease-out;
-}
-.btn-lift:active {
-  transform: scale(0.97);
-}
-
-/* Gradient headline text (brand → accent → cyan). */
-.text-gradient {
-  background-image: linear-gradient(
-    100deg,
-    var(--color-primary),
-    var(--color-accent) 55%,
-    var(--color-cyan)
-  );
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
-/* Soft ambient glow for the brand mark / key elements. */
-.shadow-glow {
-  box-shadow: var(--shadow-glow);
-}
-
-/* Tabular numerals for price columns & stats. */
-.tnum {
-  font-variant-numeric: tabular-nums;
-}
-
-/* Respect reduced-motion preferences: drop the decorative motion. */
-@media (prefers-reduced-motion: reduce) {
-  .animate-ticker,
-  .animate-pulse-dot,
-  .animate-pulse-glow {
-    animation: none !important;
-  }
-  *,
-  ::before,
-  ::after {
-    transition-duration: 0.01ms !important;
-    animation-duration: 0.01ms !important;
-  }
+.bg-dotgrid-glow {
+  background-color: var(--dotgrid-surface);
+  background-image:
+    radial-gradient(
+      circle at 50% 118%,
+      var(--dotgrid-glow-strong) 0%,
+      var(--dotgrid-glow-mid) 22%,
+      var(--dotgrid-glow-soft) 32%,
+      var(--dotgrid-glow-faint) 38%,
+      transparent 45%
+    ),
+    radial-gradient(var(--dotgrid-dot) 1px, transparent 1px);
+  background-size:
+    100% 100%,
+    16px 16px;
+  background-position: center, center;
 }
