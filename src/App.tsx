@@ -15,6 +15,7 @@ import { Suspense, lazy } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { Activity } from 'lucide-react'
 import Layout from './components/Layout'
+import { AuthProvider } from './hooks/useAuth'
 
 const Home = lazy(() => import('./pages/Home').then((m) => ({ default: m.Home })))
 const MarketPairs = lazy(() => import('./pages/MarketPairs').then((m) => ({ default: m.MarketPairs })))
@@ -53,8 +54,9 @@ function PageFallback() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <Suspense fallback={<PageFallback />}>
+    <AuthProvider>
+      <BrowserRouter>
+        <Suspense fallback={<PageFallback />}>
         <Routes>
           <Route element={<Layout />}>
             {/* Public */}
@@ -87,7 +89,8 @@ export default function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>
-      </Suspense>
-    </BrowserRouter>
+        </Suspense>
+      </BrowserRouter>
+    </AuthProvider>
   )
 }
