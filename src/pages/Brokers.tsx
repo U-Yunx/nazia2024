@@ -34,6 +34,7 @@ import {
   saveMetaApiToken,
 } from '../lib/platform'
 import { fn } from '../lib/functions'
+import { isAdminRole } from '../lib/roles'
 import { terminalStatus } from '../lib/brokerErrors'
 import type { BrokerConnectionRow, BrokerPlatform, BrokerRow, BrokerTokenStatus, MetaApiStatus } from '../lib/types'
 import { cn } from '../lib/cn'
@@ -1121,7 +1122,7 @@ export function Brokers() {
         Admin referral codes are shown on each broker's connect form so you can register with the platform's code and
         get the best conditions.
       </p>
-      {profile?.role === 'admin' && (
+      {isAdminRole(profile?.role) && (
         <p className="text-xs text-muted-foreground">
           You're an admin — manage the broker catalog from the{' '}
           <Link to="/admin" className="text-accent hover:underline">

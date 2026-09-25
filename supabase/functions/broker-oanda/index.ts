@@ -91,7 +91,7 @@ const TIER_DAY_MS = 86_400_000;
  */
 async function orderTier(client: any, userId: string): Promise<{ limited: boolean; maxPairs: number; maxPerPair: number }> {
   const { data: profile } = await client.from("profiles").select("role").eq("id", userId).maybeSingle();
-  if (profile?.role === "admin") return { limited: false, maxPairs: Infinity, maxPerPair: Infinity };
+  if (profile?.role === "admin" || profile?.role === "superadmin") return { limited: false, maxPairs: Infinity, maxPerPair: Infinity };
   const { data: subs } = await client
     .from("subscriptions")
     .select("status, starts_at, activated_at, created_at, ends_at")

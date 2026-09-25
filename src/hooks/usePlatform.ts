@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from './useAuth'
+import { isAdminRole } from '../lib/roles'
 import {
   fetchAddons,
   fetchAds,
@@ -423,7 +424,7 @@ export function useAccess(
       (s) => s.status === 'active' && (!s.ends_at || new Date(s.ends_at).getTime() > now),
     )
     const trial = profile?.trial_ends_at != null && new Date(profile.trial_ends_at).getTime() > now
-    const admin = profile?.role === 'admin'
+    const admin = isAdminRole(profile?.role)
 
     let status: AccessStatus = 'none'
     if (admin) status = 'admin'

@@ -35,6 +35,7 @@ import { rankPairs, type RankedPair } from '../lib/trading/pairRanking'
 import { manualTargets } from '../lib/trading/manualMethod'
 import { fetchTimeSeries, useQuotes } from '../hooks/useMarketData'
 import { useSelectedStrategy } from '../hooks/useSelectedStrategy'
+import { isAdminRole } from '../lib/roles'
 import { useAuth } from '../hooks/useAuth'
 import { useAccess, useAddonPurchases, useBrokers, useProfile, useSubscriptions } from '../hooks/usePlatform'
 import { acceptRisk, hasActiveCopyTrading } from '../lib/platform'
@@ -1608,7 +1609,7 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
   // Copy a pro trader — apply their full configuration (method, pairs, sizing,
   // exits and risk) to this robot in one click. Unlocked by the paid Copy
   // trading add-on subscription (or admin); locks again when it expires.
-  const proCopyUnlocked = hasActiveCopyTrading(addonPurchases) || profile?.role === 'admin'
+  const proCopyUnlocked = hasActiveCopyTrading(addonPurchases) || isAdminRole(profile?.role)
   const [copiedTrader, setCopiedTrader] = useState<string | null>(null)
   const copyTrader = (t: ProTrader) => {
     if (!account) return

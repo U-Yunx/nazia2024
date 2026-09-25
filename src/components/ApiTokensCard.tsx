@@ -40,6 +40,8 @@ import {
 } from '../lib/tokens'
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle } from './ui'
 import { cn } from '../lib/cn'
+import { isAdminRole } from '../lib/roles'
+import type { UserRole } from '../lib/types'
 
 const EMPTY_STATUS: Record<string, TokenStatus> = Object.fromEntries(
   TOKEN_DEFS.map((t) => [t.name, { name: t.name, label: t.label, configured: false, masked: null }]),
@@ -92,7 +94,7 @@ export function ApiTokensCard() {
         .select('role')
         .eq('id', user.id)
         .maybeSingle()
-      if (alive) setIsAdmin((data as { role?: string } | null)?.role === 'admin')
+      if (alive) setIsAdmin(isAdminRole((data as { role?: UserRole } | null)?.role))
     })()
     return () => {
       alive = false

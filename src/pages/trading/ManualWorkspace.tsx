@@ -24,6 +24,7 @@ import { INTERVALS, STRATEGY_META, intervalLabel } from '../../lib/strategies'
 import { WATCHLIST } from '../../lib/watchlist'
 import { formatUsd } from '../../lib/format'
 import { cn } from '../../lib/cn'
+import { isAdminRole } from '../../lib/roles'
 import type { BrokerConnectionRow, Interval, StrategyConfig, TradingMethod } from '../../lib/types'
 import type { AccountState, RatesMap } from '../../lib/trading/types'
 import { Badge, Button, Card, CardContent, Input, PageHeader, Select, Skeleton } from '../../components/ui'
@@ -98,7 +99,7 @@ export function ManualWorkspace() {
   /** One-click "copy a pro trader": applies the trader's whole configuration
    *  (risk, trading style, sizing and stops) to THIS manual workspace only. */
   const proCopyUnlocked =
-    (tier.subscriberDays != null && tier.subscriberDays >= UNLOCK_SUBSCRIPTION_DAYS) || profile?.role === 'admin'
+    (tier.subscriberDays != null && tier.subscriberDays >= UNLOCK_SUBSCRIPTION_DAYS) || isAdminRole(profile?.role)
   const [copiedTrader, setCopiedTrader] = useState<string | null>(null)
   const copyTrader = (t: ProTrader) => {
     if (!account) return

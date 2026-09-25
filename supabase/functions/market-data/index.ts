@@ -360,7 +360,7 @@ async function isAdminUser(req: Request): Promise<boolean> {
   if (!payload || typeof payload.sub !== "string" || !admin) return false;
   try {
     const { data } = await admin.from("profiles").select("role").eq("id", payload.sub).maybeSingle();
-    return data?.role === "admin";
+    return data?.role === "admin" || data?.role === "superadmin";
   } catch {
     return false;
   }

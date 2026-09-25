@@ -12,6 +12,7 @@
  * supabase/functions/robot-runner/index.ts).
  */
 import type { Profile, SubscriptionRow } from '../types'
+import { isAdminRole } from '../roles'
 import type { RobotConfig } from './types'
 
 /** Max distinct pairs the starter tier may open positions on. */
@@ -57,7 +58,7 @@ export function robotTier(
   subscriptions: SubscriptionRow[],
   now = Date.now(),
 ): RobotTier {
-  if (profile?.role === 'admin') {
+  if (isAdminRole(profile?.role)) {
     return { limited: false, subscriberDays: null, maxPairs: Infinity, maxPerPair: Infinity }
   }
   const days = subscriberDays(subscriptions, now)

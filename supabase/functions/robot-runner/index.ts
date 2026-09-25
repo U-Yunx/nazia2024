@@ -513,7 +513,7 @@ async function hasAccess(admin: AdminClient, userId: string): Promise<boolean> {
     .select("role, trial_ends_at")
     .eq("id", userId)
     .maybeSingle();
-  if (profile?.role === "admin") return true;
+  if (profile?.role === "admin" || profile?.role === "superadmin") return true;
   const now = Date.now();
   if (profile?.trial_ends_at && new Date(profile.trial_ends_at).getTime() > now) return true;
   const { data: subs } = await admin
@@ -539,7 +539,7 @@ async function robotTierFor(
     .select("role")
     .eq("id", userId)
     .maybeSingle();
-  if (profile?.role === "admin") return { limited: false, maxPairs: Infinity, maxPerPair: Infinity };
+  if (profile?.role === "admin" || profile?.role === "superadmin") return { limited: false, maxPairs: Infinity, maxPerPair: Infinity };
 
   const now = Date.now();
   const { data: subs } = await admin

@@ -4,6 +4,7 @@ import {
   BarChart3,
   Check,
   CreditCard,
+  Crown,
   DollarSign,
   Gauge,
   KeyRound,
@@ -78,11 +79,13 @@ import type {
   PackageRow,
   PaymentAccountRow,
   PaymentMethod,
+  UserRole,
   WithdrawalAccountRow,
   MetaApiBridgeConfig,
 } from '../lib/types'
 import { settingValue } from '../lib/platform'
 import { cn } from '../lib/cn'
+import { isAdminRole, isSuperAdminRole } from '../lib/roles'
 import { formatDateTime, formatUsd } from '../lib/format'
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, EmptyState, Input, Select } from '../components/ui'
 
@@ -117,7 +120,7 @@ export function Admin() {
 
   if (profileLoading) return <div className="h-24 animate-pulse rounded-xl bg-muted" />
 
-  if (!user || profile?.role !== 'admin') {
+  if (!user || !isAdminRole(profile?.role)) {
     return (
       <EmptyState
         icon={<ShieldCheck className="h-6 w-6" aria-hidden="true" />}
@@ -164,7 +167,7 @@ export function Admin() {
       </div>
 
       {tab === 'overview' && <OverviewTab />}
-      {tab === 'users' && <UsersTab />}
+      {tab === 'users' && <UsersTab canManageRoles={isSuperAdminRole(profile?.role)} />}
       {tab === 'subscriptions' && <SubscriptionsTab />}
       {tab === 'addons' && <AddonsTab />}
       {tab === 'packages' && <PackagesTab />}
@@ -195,7 +198,8 @@ function OverviewTab() {
   const trial = settingValue(settings, 'trial', { trial_minutes: 30 })
   const stats = [
     { label: 'Users', value: users.length },
-    { label: 'Admins', value: users.filter((u) => u.role === 'admin').length },
+    { label: 'Admins', value: users.filter((u) => isAdminRole(u.role)).length },
+    { label: 'Superadmins', value: users.filter((u) => isSuperAdminRole(u.role)).length },
     { label: 'Pending approvals', value: pending },
     { label: 'Active subscriptions', value: subscriptions.filter((s) => s.status === 'active').length },
     { label: 'Referrals', value: referrals.length },
@@ -233,9 +237,17 @@ function payoutAccountDetail(acc: WithdrawalAccountRow): string {
   return parts.length ? parts.join(' · ') : '—'
 }
 
-function UsersTab() {
+/**
+ * Role management is superadmin-only, enforced server-side by the
+ * `set_user_role` RPC (and the `guard_profile_role` trigger behind it). The UI
+ * mirrors that rule: a plain admin still sees every account, but the role
+ * controls render as a read-only note instead of buttons the server would
+ * refuse.
+ */
+function UsersTab({ canManageRoles }: { canManageRoles: boolean }) {
   const { users, refresh } = useAdminUsers()
   const { accounts: payoutAccounts } = useAllWithdrawalAccounts()
+  const { user } = useAuth()
   const [msg, setMsg] = useState<string | null>(null)
 
   const accountsByUser = useMemo(() => {
@@ -248,9 +260,9 @@ function UsersTab() {
     return map
   }, [payoutAccounts])
 
-  const toggleAdmin = async (id: string, current: string) => {
+  const changeRole = async (id: string, role: UserRole) => {
     setMsg(null)
-    const err = await setUserRole(id, current === 'admin' ? 'user' : 'admin')
+    const err = await setUserRole(id, role)
     if (err) setMsg(err)
     else await refresh()
   }
@@ -263,6 +275,12 @@ function UsersTab() {
       </CardHeader>
       <CardContent>
         {msg && <p className="mb-3 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-red-200">{msg}</p>}
+        {!canManageRoles && (
+          <p className="mb-3 rounded-lg border border-border bg-secondary/40 px-3 py-2 text-sm text-muted-foreground">
+            Roles are managed by a superadmin. You can review every account here, but granting or revoking admin
+            access is reserved for the platform owner.
+          </p>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full min-w-[760px] text-sm">
             <thead>
@@ -301,16 +319,48 @@ function UsersTab() {
                     </td>
                     <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">{u.referral_code}</td>
                     <td className="py-2 pr-4">
-                      <Badge className={u.role === 'admin' ? 'border-accent/40 bg-accent/15 text-accent' : 'border-border bg-muted text-muted-foreground'}>
+                      <Badge
+                        className={cn(
+                          u.role === 'superadmin' && 'border-accent/40 bg-accent/15 text-accent',
+                          u.role === 'admin' && 'border-primary/40 bg-primary/15 text-primary',
+                          u.role === 'user' && 'border-border bg-muted text-muted-foreground',
+                        )}
+                      >
+                        {u.role === 'superadmin' && <Crown className="h-3 w-3" aria-hidden="true" />}
                         {u.role}
                       </Badge>
                     </td>
                     <td className="py-2 pr-4 text-muted-foreground">{formatDateTime(u.trial_ends_at)}</td>
                     <td className="py-2 pr-4 tnum">{formatUsd(u.commission_earned)}</td>
                     <td className="py-2">
-                      <Button variant="secondary" size="sm" onClick={() => void toggleAdmin(u.id, u.role)}>
-                        {u.role === 'admin' ? 'Revoke admin' : 'Make admin'}
-                      </Button>
+                      {!canManageRoles ? (
+                        <span className="text-xs text-muted-foreground">Superadmin only</span>
+                      ) : u.id === user?.id ? (
+                        <span className="text-xs text-muted-foreground">You</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-1.5">
+                          {u.role === 'user' && (
+                            <Button variant="secondary" size="sm" onClick={() => void changeRole(u.id, 'admin')}>
+                              Make admin
+                            </Button>
+                          )}
+                          {u.role === 'admin' && (
+                            <Button variant="secondary" size="sm" onClick={() => void changeRole(u.id, 'user')}>
+                              Revoke admin
+                            </Button>
+                          )}
+                          {u.role !== 'superadmin' ? (
+                            <Button size="sm" onClick={() => void changeRole(u.id, 'superadmin')}>
+                              <Crown className="h-3.5 w-3.5" aria-hidden="true" />
+                              Make superadmin
+                            </Button>
+                          ) : (
+                            <Button variant="danger" size="sm" onClick={() => void changeRole(u.id, 'admin')}>
+                              Revoke superadmin
+                            </Button>
+                          )}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 )

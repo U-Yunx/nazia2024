@@ -109,7 +109,7 @@ export interface PairSignal {
 
 /* ----------------------------- v2.0 platform types ---------------------------- */
 
-export type UserRole = 'user' | 'admin'
+export type UserRole = 'user' | 'admin' | 'superadmin'
 
 /** Identity-verification state for a profile (manual admin review). */
 export type IdentityStatus = 'unverified' | 'pending' | 'verified' | 'rejected'

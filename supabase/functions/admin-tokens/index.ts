@@ -326,7 +326,8 @@ Deno.serve(async (req: Request) => {
 
   // 2. Admin only — checked server-side against the profiles table.
   const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle();
-  if (profile?.role !== "admin") return json({ ok: false, error: "Admins only." }, 403);
+  const isStaff = profile?.role === "admin" || profile?.role === "superadmin";
+  if (!isStaff) return json({ ok: false, error: "Admins only." }, 403);
 
   let body: { action?: string; tokens?: unknown; name?: unknown };
   try {
