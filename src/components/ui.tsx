@@ -60,8 +60,8 @@ export function Badge({ className, children }: { className?: string; children?: 
 
 /* ---------------------------------- Button --------------------------------- */
 
-type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
-type ButtonSize = 'sm' | 'md' | 'lg'
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
+export type ButtonSize = 'sm' | 'md' | 'lg'
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant
@@ -84,6 +84,25 @@ const SIZE_CLASSES: Record<ButtonSize, string> = {
   lg: 'h-12 px-6 text-base',
 }
 
+/**
+ * The button look without the <button>. Exported so the same affordance can be
+ * put on an <a> (downloads, external links) without nesting a button inside a
+ * link — which breaks keyboard and screen-reader semantics.
+ */
+export function buttonClasses(
+  variant: ButtonVariant = 'primary',
+  size: ButtonSize = 'md',
+  className?: string,
+) {
+  return cn(
+    'inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl font-semibold tracking-tight',
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+    VARIANT_CLASSES[variant],
+    SIZE_CLASSES[size],
+    className,
+  )
+}
+
 export function Button({
   variant = 'primary',
   size = 'md',
@@ -99,11 +118,8 @@ export function Button({
       type={type}
       disabled={disabled || loading}
       className={cn(
-        'inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl font-semibold tracking-tight',
+        buttonClasses(variant, size),
         'disabled:cursor-not-allowed disabled:opacity-50',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-        VARIANT_CLASSES[variant],
-        SIZE_CLASSES[size],
         className,
       )}
       {...rest}

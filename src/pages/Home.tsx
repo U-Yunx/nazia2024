@@ -7,6 +7,7 @@ import {
   ArrowRight,
   BarChart3,
   Bot,
+  Download,
   LineChart,
   ShieldCheck,
   Smartphone,
@@ -22,7 +23,8 @@ import { useLeaderboard } from '../hooks/useLiveCommunity'
 import { WATCHLIST } from '../lib/watchlist'
 import { formatChange, formatPrice, formatUsd, timeAgo } from '../lib/format'
 import { cn } from '../lib/cn'
-import { Button } from '../components/ui'
+import { useAndroidRelease } from '../lib/androidRelease'
+import { Button, buttonClasses } from '../components/ui'
 
 const PILLARS = [
   {
@@ -56,6 +58,11 @@ export function Home() {
   const { stats } = usePublicUserStats()
   const { quotes } = useQuotes()
   const { entries } = useLeaderboard(6, 60_000)
+
+  // The Android CTA becomes a real download the moment a signed APK has been
+  // published (see scripts/publish-apk.mjs); until then it links to the build
+  // guide on the Help page. No rebuild needed to flip between the two.
+  const android = useAndroidRelease()
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-12 sm:py-16">
@@ -244,18 +251,34 @@ export function Home() {
                 Get the Android app
               </h2>
               <p className="mt-1 max-w-md text-sm leading-relaxed text-muted-foreground">
-                ANA24 ships as a native Android build of this exact app — same dashboard, same
-                robot, and it keeps working offline. Install it straight from the repo, no Play
-                Store and no signing needed.
+                {android.release
+                  ? `ANA24 ships as a native Android build of this exact app — same dashboard, same robot, and it keeps working offline. Download v${android.release.version} and install it straight from your phone.`
+                  : 'ANA24 ships as a native Android build of this exact app — same dashboard, same robot, and it keeps working offline. Build the signed APK from the repo — no Play Store account needed.'}
               </p>
             </div>
           </div>
-          <Link to="/help#android" className="relative shrink-0">
-            <Button variant="secondary">
-              Build the APK
-              <ArrowRight className="h-4 w-4" aria-hidden="true" />
-            </Button>
-          </Link>
+          {android.release && android.href ? (
+            <div className="relative flex shrink-0 flex-wrap items-center gap-2">
+              <a
+                href={android.href}
+                download={android.release.file}
+                className={buttonClasses('primary')}
+              >
+                <Download className="h-4 w-4" aria-hidden="true" />
+                Download APK
+              </a>
+              <Link to="/help#android">
+                <Button variant="secondary">Install guide</Button>
+              </Link>
+            </div>
+          ) : (
+            <Link to="/help#android" className="relative shrink-0">
+              <Button variant="secondary">
+                Build the APK
+                <ArrowRight className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            </Link>
+          )}
         </div>
       </section>
 

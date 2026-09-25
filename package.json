@@ -1,7 +1,7 @@
 {
   "name": "ana24",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,8 +14,10 @@
     "cap:add:android": "cap add android",
     "cap:sync": "cap sync android",
     "cap:open:android": "cap open android",
+    "apk:signing": "node scripts/android-signing.mjs",
     "apk:debug": "npm run build && cap sync android && cd android && ./gradlew assembleDebug",
-    "apk:release": "npm run build && cap sync android && cd android && ./gradlew assembleRelease"
+    "apk:release": "npm run apk:signing && npm run build && cap sync android && cd android && ./gradlew assembleRelease",
+    "apk:publish": "npm run apk:release && node scripts/publish-apk.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",
