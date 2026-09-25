@@ -60,8 +60,8 @@ export function Home() {
   const { entries } = useLeaderboard(6, 60_000)
 
   // The Android CTA becomes a real download the moment a signed APK has been
-  // published (see scripts/publish-apk.mjs); until then it links to the build
-  // guide on the Help page. No rebuild needed to flip between the two.
+  // published (see scripts/publish-apk.mjs); until then it links to the Help
+  // page's Android section. No rebuild needed to flip between the two.
   const android = useAndroidRelease()
 
   return (
@@ -253,7 +253,7 @@ export function Home() {
               <p className="mt-1 max-w-md text-sm leading-relaxed text-muted-foreground">
                 {android.release
                   ? `ANA24 ships as a native Android build of this exact app — same dashboard, same robot, and it keeps working offline. Download v${android.release.version} and install it straight from your phone.`
-                  : 'ANA24 ships as a native Android build of this exact app — same dashboard, same robot, and it keeps working offline. Build the signed APK from the repo — no Play Store account needed.'}
+                  : 'ANA24 ships as a native Android build of this exact app — same dashboard, same robot, and it keeps working offline. The signed download is on its way — check back soon.'}
               </p>
             </div>
           </div>
@@ -274,7 +274,7 @@ export function Home() {
           ) : (
             <Link to="/help#android" className="relative shrink-0">
               <Button variant="secondary">
-                Build the APK
+                Learn more
                 <ArrowRight className="h-4 w-4" aria-hidden="true" />
               </Button>
             </Link>
