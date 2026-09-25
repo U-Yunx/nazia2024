@@ -1320,8 +1320,8 @@ export function openPosition(
   const tp1Price =
     risk.partialTakeProfit && (risk.partialTpRatio ?? 1) > 0
       ? input.side === 'long'
-        ? input.entryPrice + (risk.partialTpRatio ?? 1) * Math.abs(entryPrice - stopPrice)
-        : input.entryPrice - (risk.partialTpRatio ?? 1) * Math.abs(entryPrice - stopPrice)
+        ? input.entryPrice + (risk.partialTpRatio ?? 1) * Math.abs(input.entryPrice - stopPrice)
+        : input.entryPrice - (risk.partialTpRatio ?? 1) * Math.abs(input.entryPrice - stopPrice)
       : undefined
 
   const position: Position = {
