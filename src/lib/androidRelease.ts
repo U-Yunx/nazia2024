@@ -5,9 +5,9 @@
  * `scripts/publish-apk.mjs` copies the signed APK into `public/downloads/` and
  * writes `public/downloads/latest.json` beside it. The app reads that manifest
  * at runtime, so the download buttons on the Help page and the landing page
- * switch themselves on as soon as a build has been published — and show the
- * build-from-source instructions while none has been (the committed default is
- * `available: false`).
+ * switch themselves on as soon as a build has been published — and show a
+ * "not published yet" note with a contact link while none has been (the
+ * committed default is `available: false`).
  *
  * It is a plain same-origin static file, so it also resolves in the Capacitor
  * WebView and offline: the manifest ships inside the APK's own assets.

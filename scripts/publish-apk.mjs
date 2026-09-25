@@ -10,7 +10,7 @@
  * The Help page and the landing-page CTA switch themselves on from the manifest
  * — no code change, no cache-busting, nothing to keep in sync by hand. If the
  * manifest says `available: false` (the committed default), those surfaces show
- * the build-it-yourself instructions instead of a dead link.
+ * a "not published yet" note with a contact link instead of a dead download.
  *
  * Usage:
  *   node scripts/publish-apk.mjs                # release APK only (default)

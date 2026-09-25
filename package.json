@@ -14,9 +14,11 @@
     "cap:add:android": "cap add android",
     "cap:sync": "cap sync android",
     "cap:open:android": "cap open android",
+    "apk:check:env": "node scripts/check-android-env.mjs",
+    "apk:ensure:android": "node scripts/ensure-android-platform.mjs",
     "apk:signing": "node scripts/android-signing.mjs",
-    "apk:debug": "npm run build && cap sync android && cd android && ./gradlew assembleDebug",
-    "apk:release": "npm run apk:signing && npm run build && cap sync android && cd android && ./gradlew assembleRelease",
+    "apk:debug": "npm run apk:ensure:android && npm run build && cap sync android && cd android && ./gradlew assembleDebug",
+    "apk:release": "npm run apk:check:env && npm run apk:ensure:android && npm run build && cap sync android && npm run apk:signing && cd android && ./gradlew assembleRelease",
     "apk:publish": "npm run apk:release && node scripts/publish-apk.mjs"
   },
   "dependencies": {
