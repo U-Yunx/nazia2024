@@ -10,6 +10,20 @@ import { useAuth } from '../hooks/useAuth'
 import { isSupabaseConfigured, supabase } from '../lib/supabase'
 import { Button, Card, CardContent, CardHeader, CardTitle, Input } from '../components/ui'
 
+/** Turns raw Supabase/GoTrue auth errors into human copy (never raw server text). */
+function friendlyAuthError(raw: string): string {
+  const m = raw.toLowerCase()
+  if (m.includes('invalid login')) return 'That email/password combination is wrong — check and try again.'
+  if (m.includes('is invalid')) return "That email address doesn't look right — double-check it and try again."
+  if (m.includes('already registered') || m.includes('already exists'))
+    return 'An account with that email already exists — sign in instead, or reset your password.'
+  if (m.includes('rate limit') || m.includes('too many requests'))
+    return 'Too many attempts — wait a minute and try again.'
+  if (m.includes('signup') && (m.includes('disabled') || m.includes('not allowed')))
+    return 'New sign-ups are currently disabled — try again later.'
+  return raw
+}
+
 export function Auth() {
   const { user, loading, signIn, updatePassword, resetPasswordForEmail, isPasswordRecovery, clearRecovery } = useAuth()
   const navigate = useNavigate()
@@ -88,11 +102,7 @@ export function Auth() {
       const { error: signInError } = await signIn(email.trim(), password)
       setBusy(false)
       if (signInError) {
-        setError(
-          signInError.toLowerCase().includes('invalid login')
-            ? 'That email/password combination is wrong — check and try again.'
-            : signInError,
-        )
+        setError(friendlyAuthError(signInError))
         return
       }
       navigate(from, { replace: true })
@@ -105,7 +115,7 @@ export function Auth() {
     })
     setBusy(false)
     if (signUpError) {
-      setError(signUpError.message)
+      setError(friendlyAuthError(signUpError.message))
       return
     }
     setInfo('Account created! Check your inbox to confirm your email, then sign in.')
