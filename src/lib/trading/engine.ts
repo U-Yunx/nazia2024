@@ -749,13 +749,43 @@ export function applySignal(
 
 
 /**
+ * Reverse-order (zig-zag) legs.
+ *
+ * Once a pair is allowed MORE than two positions at once the robot stops
+ * stacking one-way entries and starts alternating. The first two legs on a pair
+ * follow the signal; every leg after that flips side — for a buy signal the
+ * pair fills long, long, short, long, short… Each leg is an ordinary position
+ * with its own stop, target and sizing, so a pair that keeps signalling builds
+ * a balanced two-way book instead of a one-directional pile-up that a single
+ * adverse move can wipe out.
+ *
+ * The per-pair cap gates the rule on its own: at `maxPerPair` 1 or 2 no third
+ * leg can ever exist, so sequential mode and 2-per-pair runs are unchanged.
+ */
+export const ZIG_ZAG_MIN_PER_PAIR = 3
+
+/**
+ * The side the leg at `legIndex` (0-based, counted across the positions already
+ * open on one pair) should take. Legs 0 and 1 follow the signal; from leg 2 on
+ * the side alternates, the even legs reversing the signal and the odd ones
+ * returning to it.
+ */
+export function reverseOrderLeg(side: Side, legIndex: number, maxPerPair: number): Side {
+  if (maxPerPair < ZIG_ZAG_MIN_PER_PAIR) return side
+  if (legIndex < 2) return side
+  if (legIndex % 2 !== 0) return side
+  return side === 'long' ? 'short' : 'long'
+}
+
+/**
  * Run one multi-pair robot cycle: evaluate every pair on the watchlist and
  * open a trade on each qualifying pair, subject to the per-pair cap
  * (config.maxPerPair — 1 by default, raise it to hold several positions per
  * pair) and the global maxOpenTrades cap. A pair at either cap is skipped —
- * never over-filled. Per-pair failures (risk gate, position sizing, open
- * error) are isolated: the cycle keeps going for the other pairs. Pure
- * reducer — no I/O — so paper and live share it.
+ * never over-filled. With the cap above two, the extra legs alternate
+ * direction (see reverseOrderLeg). Per-pair failures (risk gate, position
+ * sizing, open error) are isolated: the cycle keeps going for the other pairs.
+ * Pure reducer — no I/O — so paper and live share it.
  */
 export function runRobotCycle(
   state: AccountState,
@@ -770,7 +800,7 @@ export function runRobotCycle(
     const { symbol, signal, price, rates, strategy, stopPips, takeProfitPips, units } = input
     if (signal === 'neutral') continue
 
-    const side: Side = signal === 'buy' ? 'long' : 'short'
+    const signalSide: Side = signal === 'buy' ? 'long' : 'short'
     const openOnSymbol = next.positions.filter((p) => p.symbol === symbol).length
 
     // Per-pair cap — a pair at its cap is skipped, never over-filled.
@@ -793,11 +823,19 @@ export function runRobotCycle(
     // The 50%+ profit-probability gate — the robot only opens a trade when
     // its estimated chance of profit is strictly above the threshold. Pairs
     // below it are skipped (and logged) so capital isn't parked on coin flips.
+    // The gate judges the PAIR's setup, not the leg's direction — once a pair
+    // qualifies, its extra legs may still alternate (see reverseOrderLeg).
     const probGate = probabilityGate(input)
     if (!probGate.ok) {
       events.push(`Skipped ${symbol}: ${probGate.reason ?? 'not enough edge right now.'}`)
       continue
     }
+
+    // Reverse-order legs: with the per-pair cap above two, every leg past the
+    // second alternates direction (long, long, short, long…), building a
+    // balanced two-way book on a pair that keeps signalling. The reversed leg
+    // is sized and stop-protected exactly like the signal leg.
+    const side = reverseOrderLeg(signalSide, openOnSymbol, perPairCap)
 
     const res = openPosition(
       next,
@@ -810,7 +848,11 @@ export function runRobotCycle(
       continue // isolate this pair — the rest of the cycle proceeds
     }
     next = res.state
-    events.push(`Opened ${symbol} ${side} at ${price.toFixed(5)}.`)
+    events.push(
+      side === signalSide
+        ? `Opened ${symbol} ${side} at ${price.toFixed(5)}.`
+        : `Opened ${symbol} ${side} at ${price.toFixed(5)} (reverse order — leg ${openOnSymbol + 1} of ${perPairCap}).`,
+    )
   }
 
   return { state: next, events }

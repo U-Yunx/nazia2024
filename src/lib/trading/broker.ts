@@ -11,7 +11,7 @@
  *                         UI renders exactly like paper trading.
  */
 import { fn } from '../functions'
-import { canOpen, closePosition, markToMarket, openPosition, runRobotCycle } from './engine'
+import { canOpen, closePosition, markToMarket, openPosition, reverseOrderLeg, runRobotCycle } from './engine'
 import { pipSize, stopTakePrices } from './risk'
 import type {
   AccountState,
@@ -286,7 +286,7 @@ async function liveRunCycle(
   let mirror = getState()
   for (const input of inputs) {
     if (input.signal === 'neutral') continue
-    const side: Side = input.signal === 'buy' ? 'long' : 'short'
+    const signalSide: Side = input.signal === 'buy' ? 'long' : 'short'
     // Per-pair cap comes straight from the config in BOTH modes (sequential
     // simply runs with maxPerPair = 1 unless the user raises it).
     const perPairCap = Math.max(1, config.maxPerPair)
@@ -304,6 +304,11 @@ async function liveRunCycle(
       events.push(gate.reason ?? `${input.symbol}: risk limits block this trade.`)
       continue
     }
+    // Reverse-order legs — with the per-pair cap above two, every leg past the
+    // second alternates direction (long, long, short, long…), mirroring the
+    // pure engine exactly. The leg is a normal order: same size, stop
+    // distance and target as the signal leg, just the other way round.
+    const side = reverseOrderLeg(signalSide, onSymbol, perPairCap)
     await sleep(ORDER_THROTTLE_MS)
     const res = await adapter.openPosition(
       {
@@ -326,7 +331,11 @@ async function liveRunCycle(
       if (isRateLimit(res.error)) await sleep(RATE_LIMIT_BACKOFF_MS)
       continue
     }
-    events.push(`Opened ${input.symbol} ${side} at ${input.price.toFixed(5)} (${adapter.label}).`)
+    events.push(
+      side === signalSide
+        ? `Opened ${input.symbol} ${side} at ${input.price.toFixed(5)} (${adapter.label}).`
+        : `Opened ${input.symbol} ${side} at ${input.price.toFixed(5)} (reverse order — leg ${onSymbol + 1} of ${perPairCap}, ${adapter.label}).`,
+    )
     mirror = getState()
   }
   return { events }

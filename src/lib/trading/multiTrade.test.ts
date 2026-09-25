@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createAccount, markToMarket, openPosition, runRobotCycle } from './engine'
+import { closePosition, createAccount, markToMarket, openPosition, reverseOrderLeg, runRobotCycle } from './engine'
 import type { RatesMap, RobotConfig, RobotCycleInput } from './types'
 
 const RATES: RatesMap = { 'EUR/USD': 1.085, 'GBP/USD': 1.27, 'USD/JPY': 151.2 }
@@ -74,6 +74,75 @@ describe('runRobotCycle — sequential mode', () => {
     const again = runRobotCycle(state, [input('EUR/USD', 'buy')], cfg)
     expect(again.state.positions).toHaveLength(1)
     expect(again.events.some((e) => e.includes('per-pair cap 1 reached'))).toBe(true)
+  })
+})
+
+describe('reverse-order (zig-zag) legs above 2 per pair', () => {
+  it('keeps legs 1 and 2 on the signal side and alternates every leg after that', () => {
+    // Buy signal, cap 4 → long, long, short, long, short…
+    expect(reverseOrderLeg('long', 0, 4)).toBe('long')
+    expect(reverseOrderLeg('long', 1, 4)).toBe('long')
+    expect(reverseOrderLeg('long', 2, 4)).toBe('short')
+    expect(reverseOrderLeg('long', 3, 4)).toBe('long')
+    expect(reverseOrderLeg('long', 4, 5)).toBe('short')
+    // Sell signal mirrors the pattern.
+    expect(reverseOrderLeg('short', 2, 4)).toBe('long')
+    expect(reverseOrderLeg('short', 3, 4)).toBe('short')
+  })
+
+  it('never reverses with a cap of 2 or less — the cap gates the rule', () => {
+    for (const cap of [1, 2]) {
+      for (const leg of [0, 1, 2, 3]) {
+        expect(reverseOrderLeg('long', leg, cap)).toBe('long')
+        expect(reverseOrderLeg('short', leg, cap)).toBe('short')
+      }
+    }
+  })
+
+  it('fills a 4-per-pair cap as long, long, short, long across cycles', () => {
+    const cfg = config({ tradeMode: 'concurrent', maxPerPair: 4, maxOpenTrades: 6 })
+    let state = createAccount(10_000)
+    const events: string[] = []
+    for (let i = 0; i < 4; i++) {
+      const run = runRobotCycle(state, [input('EUR/USD', 'buy')], cfg)
+      state = run.state
+      events.push(...run.events)
+    }
+    expect(state.positions.map((p) => p.side)).toEqual(['long', 'long', 'short', 'long'])
+    // Every leg — reversed ones included — keeps its own stop protection, on
+    // the correct side of its entry.
+    expect(state.positions.every((p) => p.stopPrice > 0)).toBe(true)
+    expect(state.positions.filter((p) => p.side === 'short')).toHaveLength(1)
+    expect(state.positions.filter((p) => p.side === 'short')[0].stopPrice).toBeGreaterThan(1.085)
+    expect(events.some((e) => e.includes('reverse order — leg 3 of 4'))).toBe(true)
+    // The cap still bites: a fifth qualifying signal opens nothing.
+    const fifth = runRobotCycle(state, [input('EUR/USD', 'buy')], cfg)
+    expect(fifth.state.positions).toHaveLength(4)
+    expect(fifth.events.some((e) => e.includes('per-pair cap 4 reached'))).toBe(true)
+  })
+
+  it('mirrors the pattern for a sell signal (short, short, long)', () => {
+    const cfg = config({ tradeMode: 'concurrent', maxPerPair: 3, maxOpenTrades: 4 })
+    let state = createAccount(10_000)
+    for (let i = 0; i < 3; i++) {
+      state = runRobotCycle(state, [input('EUR/USD', 'sell')], cfg).state
+    }
+    expect(state.positions.map((p) => p.side)).toEqual(['short', 'short', 'long'])
+  })
+
+  it('counts the legs actually open on the pair, so a closed leg shifts the pattern', () => {
+    const cfg = config({ tradeMode: 'concurrent', maxPerPair: 4, maxOpenTrades: 6 })
+    let state = createAccount(10_000)
+    state = runRobotCycle(state, [input('EUR/USD', 'buy')], cfg).state // leg 1 — long
+    state = runRobotCycle(state, [input('EUR/USD', 'buy')], cfg).state // leg 2 — long
+    state = runRobotCycle(state, [input('EUR/USD', 'buy')], cfg).state // leg 3 — short
+    // Close the short (third) leg → two longs remain, so the NEXT leg is
+    // leg index 2 again and refills the reversed slot.
+    const third = state.positions[2]
+    expect(third.side).toBe('short')
+    state = closePosition(state, third.id, { price: 1.085, reason: 'manual', rates: RATES }).state
+    const next = runRobotCycle(state, [input('EUR/USD', 'buy')], cfg)
+    expect(next.state.positions.map((p) => p.side)).toEqual(['long', 'long', 'short'])
   })
 })
 

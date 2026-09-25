@@ -6,8 +6,9 @@
  * key.
  */
 import { useCallback, useEffect, useState } from 'react'
-import { Check, Layers, RefreshCw, Save, ShieldCheck, SlidersHorizontal, Sparkles, Zap, Wrench, ListChecks } from 'lucide-react'
+import { ArrowLeftRight, Check, Layers, RefreshCw, Save, ShieldCheck, SlidersHorizontal, Sparkles, Zap, Wrench, ListChecks } from 'lucide-react'
 import { useRobotPrefs, methodLabel } from '../lib/trading/robotPrefs'
+import { ZIG_ZAG_MIN_PER_PAIR } from '../lib/trading/engine'
 import { ROBOT_PRESETS, loadPresetMode, savePresetMode, type RobotPresetKey } from '../lib/trading/robotPresets'
 import { WATCHLIST, isCryptoPair } from '../lib/watchlist'
 import { activateFreeMarketData, fetchMarketDataConfig, reconfigureMarketData } from '../lib/platform'
@@ -363,6 +364,14 @@ export function Configuration() {
                 : `Concurrent can hold up to ${prefs.maxPerPair} position${prefs.maxPerPair === 1 ? '' : 's'} on each pair${prefs.maxOpenTrades > 0 ? `, bounded by the ${prefs.maxOpenTrades} global open-trade cap` : ' with no global open-trade cap'}.`}
               {' '}Both caps are enforced by the trading engine on every cycle, so a busy market can never over-leverage the account.
             </p>
+            {prefs.tradeMode === 'concurrent' && prefs.maxPerPair >= ZIG_ZAG_MIN_PER_PAIR && (
+              <p className="mt-2 flex items-start gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-foreground">
+                <ArrowLeftRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />
+                Reverse-order (zig-zag) legs are on — with more than 2 positions per pair the first two follow the
+                signal and every extra one alternates: long, long, short, long… Each leg keeps its own stop and
+                target, so a pair that keeps signalling builds a balanced book instead of stacking one way.
+              </p>
+            )}
             {prefs.maxOpenTrades === 0 && (
               <p className="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
                 <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />

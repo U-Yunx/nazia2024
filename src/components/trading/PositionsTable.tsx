@@ -7,7 +7,7 @@
  */
 import { X } from 'lucide-react'
 import type { AccountState, Position, RatesMap, TradeMode } from '../../lib/trading/types'
-import { MIN_TRADE_BALANCE_USD } from '../../lib/trading/engine'
+import { MIN_TRADE_BALANCE_USD, ZIG_ZAG_MIN_PER_PAIR } from '../../lib/trading/engine'
 import { pnlUsd } from '../../lib/trading/risk'
 import { formatDateTime, formatPct, formatPrice, formatUnits, formatUsd } from '../../lib/format'
 import { cn } from '../../lib/cn'
@@ -23,6 +23,13 @@ export interface RobotCaps {
 function perPairCap(caps?: RobotCaps): number {
   if (!caps) return 1
   return Math.max(1, caps.maxPerPair)
+}
+
+/** True when the robot is placing reverse-order (zig-zag) legs on each pair:
+ *  concurrent mode with a cap above two, so the legs past the second alternate
+ *  direction (long, long, short, long…). */
+function zigZagOn(caps?: RobotCaps): boolean {
+  return !!caps && caps.tradeMode === 'concurrent' && perPairCap(caps) >= ZIG_ZAG_MIN_PER_PAIR
 }
 
 export function PositionsTable({
@@ -67,9 +74,20 @@ export function PositionsTable({
             </span>
           )}
           {robotCaps && (
-            <Badge className="border-border bg-muted text-muted-foreground">
-              {robotCaps.tradeMode === 'concurrent' ? 'Concurrent' : 'Sequential'} · {perPairCap(robotCaps)}/pair
-            </Badge>
+            // The Badge takes only className/children, so the explanatory
+            // tooltip lives on a thin wrapper around it.
+            <span
+              title={
+                zigZagOn(robotCaps)
+                  ? `Concurrent, ${perPairCap(robotCaps)}/pair — legs past the second alternate direction (reverse-order zig-zag).`
+                  : undefined
+              }
+            >
+              <Badge className="border-border bg-muted text-muted-foreground">
+                {robotCaps.tradeMode === 'concurrent' ? 'Concurrent' : 'Sequential'} · {perPairCap(robotCaps)}/pair
+                {zigZagOn(robotCaps) ? ' · zig-zag' : ''}
+              </Badge>
+            </span>
           )}
         </>
       }

@@ -1380,6 +1380,25 @@ export function canOpen(state: AccountState, rates: RatesMap): { ok: boolean; re
   return { ok: true }
 }
 
+/**
+ * Reverse-order (zig-zag) legs — Deno mirror of the client rule.
+ *
+ * Once a pair is allowed MORE than two positions at once the robot stops
+ * stacking one-way entries and starts alternating: the first two legs follow
+ * the signal, every leg after that flips side — long, long, short, long…
+ * The per-pair cap gates the rule on its own: at 1 or 2 no third leg can
+ * exist, so sequential and 2-per-pair runs are unchanged.
+ */
+const ZIG_ZAG_MIN_PER_PAIR = 3
+
+/** Side for the leg at `legIndex` (0-based, positions already open on the pair). */
+function reverseOrderLeg(side: Side, legIndex: number, maxPerPair: number): Side {
+  if (maxPerPair < ZIG_ZAG_MIN_PER_PAIR) return side
+  if (legIndex < 2) return side
+  if (legIndex % 2 !== 0) return side
+  return side === 'long' ? 'short' : 'long'
+}
+
 export function runRobotCycle(
   state: AccountState,
   inputs: RobotCycleInput[],
@@ -1392,7 +1411,7 @@ export function runRobotCycle(
     const { symbol, signal, price, rates, strategy, stopPips, takeProfitPips, units } = input
     if (signal === 'neutral') continue
 
-    const side: Side = signal === 'buy' ? 'long' : 'short'
+    const signalSide: Side = signal === 'buy' ? 'long' : 'short'
     const openOnSymbol = next.positions.filter((p) => p.symbol === symbol).length
     // Per-pair cap comes straight from the config in BOTH modes (sequential
     // simply runs with maxPerPair = 1 unless the user raises it).
@@ -1416,11 +1435,18 @@ export function runRobotCycle(
     // The 50%+ profit-probability gate — the robot only opens a trade when
     // its estimated chance of profit is strictly above the threshold. Pairs
     // below it are skipped (and logged) so capital isn't parked on coin flips.
+    // The gate judges the PAIR's setup, not the leg's direction — once a pair
+    // qualifies, its extra legs may still alternate (see reverseOrderLeg).
     const probGate = probabilityGate(input)
     if (!probGate.ok) {
       events.push(`Skipped ${symbol}: ${probGate.reason ?? 'not enough edge right now.'}`)
       continue
     }
+
+    // Reverse-order legs: with the per-pair cap above two, every leg past the
+    // second alternates direction (long, long, short, long…), building a
+    // balanced two-way book on a pair that keeps signalling.
+    const side = reverseOrderLeg(signalSide, openOnSymbol, perPairCap)
 
     const res = openPosition(
       next,
@@ -1433,7 +1459,11 @@ export function runRobotCycle(
       continue
     }
     next = res.state
-    events.push(`Opened ${symbol} ${side} at ${price.toFixed(5)}.`)
+    events.push(
+      side === signalSide
+        ? `Opened ${symbol} ${side} at ${price.toFixed(5)}.`
+        : `Opened ${symbol} ${side} at ${price.toFixed(5)} (reverse order — leg ${openOnSymbol + 1} of ${perPairCap}).`,
+    )
   }
 
   return { state: next, events }
