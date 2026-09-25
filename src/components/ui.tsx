@@ -15,9 +15,17 @@ import { cn } from '../lib/cn'
 
 /* ----------------------------------- Card ---------------------------------- */
 
-export function Card({ className, children }: { className?: string; children?: ReactNode }) {
+export function Card({
+  id,
+  className,
+  children,
+}: {
+  id?: string
+  className?: string
+  children?: ReactNode
+}) {
   return (
-    <div className={cn('surface-premium rounded-2xl border border-border/70 p-5', className)}>
+    <div id={id} className={cn('surface-premium rounded-2xl border border-border/70 p-5', className)}>
       {children}
     </div>
   )

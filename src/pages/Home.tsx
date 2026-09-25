@@ -9,6 +9,7 @@ import {
   Bot,
   LineChart,
   ShieldCheck,
+  Smartphone,
   Sparkles,
   Target,
   Trophy,
@@ -224,6 +225,37 @@ export function Home() {
               <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{p.desc}</p>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* Android app CTA */}
+      <section className="mt-14">
+        <div className="surface-premium surface-hover relative flex flex-col gap-5 overflow-hidden rounded-2xl border border-accent/25 p-6 sm:flex-row sm:items-center sm:justify-between sm:p-7">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute -right-10 -top-16 h-40 w-40 rounded-full bg-accent/10 blur-[70px]"
+          />
+          <div className="relative flex items-start gap-4">
+            <div className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-border/60 bg-background/50 text-accent shadow-sm">
+              <Smartphone className="h-5 w-5" aria-hidden="true" />
+            </div>
+            <div>
+              <h2 className="font-heading text-lg font-semibold tracking-tight text-foreground">
+                Get the Android app
+              </h2>
+              <p className="mt-1 max-w-md text-sm leading-relaxed text-muted-foreground">
+                ANA24 ships as a native Android build of this exact app — same dashboard, same
+                robot, and it keeps working offline. Install it straight from the repo, no Play
+                Store and no signing needed.
+              </p>
+            </div>
+          </div>
+          <Link to="/help#android" className="relative shrink-0">
+            <Button variant="secondary">
+              Build the APK
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
+            </Button>
+          </Link>
         </div>
       </section>
 
