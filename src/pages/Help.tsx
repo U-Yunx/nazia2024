@@ -4,7 +4,7 @@
  */
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronDown, HelpCircle } from 'lucide-react'
+import { ChevronDown, Download, HelpCircle, Smartphone } from 'lucide-react'
 import { cn } from '../lib/cn'
 import { Button, Card, CardContent, CardHeader, CardTitle, PageHeader } from '../components/ui'
 
@@ -79,6 +79,60 @@ export function Help() {
               )
             })}
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Smartphone className="h-4 w-4 text-accent" aria-hidden="true" />
+            Get the Android app
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            ANA24 is also packaged as a native Android APK — a Capacitor build of this
+            exact app, so the UI is identical and it runs offline. You build it locally
+            from the repo; a test install needs no Play Store and no signing.
+          </p>
+          <ol className="list-decimal space-y-1.5 pl-5 text-sm text-muted-foreground">
+            <li>
+              Create{' '}
+              <code className="rounded bg-secondary/40 px-1 py-0.5 font-mono text-xs text-foreground">.env.local</code>{' '}
+              in the repo root with the public values below.
+            </li>
+            <li>
+              <code className="rounded bg-secondary/40 px-1 py-0.5 font-mono text-xs text-foreground">npm install</code>, then once
+              per machine:{' '}
+              <code className="rounded bg-secondary/40 px-1 py-0.5 font-mono text-xs text-foreground">npm run cap:add:android</code>
+              .
+            </li>
+            <li>
+              Build with{' '}
+              <code className="rounded bg-secondary/40 px-1 py-0.5 font-mono text-xs text-foreground">npm run apk:debug</code> —
+              the APK lands in{' '}
+              <code className="rounded bg-secondary/40 px-1 py-0.5 font-mono text-xs text-foreground">
+                android/app/build/outputs/apk/debug/
+              </code>
+              .
+            </li>
+          </ol>
+          <pre className="overflow-x-auto rounded-xl border border-border/70 bg-background/60 p-3 font-mono text-xs leading-relaxed text-muted-foreground">
+{`VITE_SUPABASE_URL=https://xopygzpepikerwqxzqzu.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhvcHlnenBlcGlrZXJ3cXh6cXp1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5ODYzMzMsImV4cCI6MjEwMzU2MjMzM30.8jh0Ux_fcb-LJGqtUZVAUqN9fHDNHSffsKlLndzSLzk`}
+          </pre>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            These are the same public keys shipped in the web app's browser bundle — safe
+            to put in a local build file.
+          </p>
+          <a
+            href="/ANDROID_APK.md"
+            download
+            className="btn-lift inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-xl border border-border/80 bg-secondary/40 px-4 text-sm font-semibold tracking-tight text-foreground backdrop-blur-sm transition-colors hover:border-accent/40 hover:bg-secondary/60"
+          >
+            <Download className="h-4 w-4" aria-hidden="true" />
+            Full build guide
+          </a>
         </CardContent>
       </Card>
 
