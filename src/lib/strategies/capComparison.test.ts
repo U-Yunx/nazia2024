@@ -5,8 +5,10 @@ import { computeSignal } from './signals'
 import { runMultiBacktest, type MultiBacktestSettings } from './backtest'
 import {
   bestCapRowIndex,
+  capAdvice,
   comparePerPairCaps,
   DEFAULT_CAP_COMPARISON,
+  legSequence,
   type CapComparisonRow,
 } from './capComparison'
 
@@ -194,5 +196,102 @@ describe('runMultiBacktest — reverse-order (zig-zag) legs', () => {
     expect(result.metrics.totalTrades).toBe(4)
     expect(result.trades.every((t) => t.side === 'long')).toBe(true)
     expect(result.trades.every((t) => t.reason === 'end')).toBe(true)
+  })
+})
+
+describe('legSequence', () => {
+  it('mirrors the live book when zig-zag is on and stacks when it is off', () => {
+    expect(legSequence('long', 4, true)).toEqual(['long', 'long', 'short', 'long'])
+    expect(legSequence('long', 4, false)).toEqual(['long', 'long', 'long', 'long'])
+    // A sell signal mirrors the pattern, and stacks short when off.
+    expect(legSequence('short', 3, true)).toEqual(['short', 'short', 'long'])
+    expect(legSequence('short', 3, false)).toEqual(['short', 'short', 'short'])
+    expect(legSequence('long', 0, true)).toEqual([])
+  })
+})
+
+describe('comparePerPairCaps — zigZag override', () => {
+  it('pins the one-way stack at a cap that would otherwise alternate', () => {
+    const rows = comparePerPairCaps(BARS, STRATEGY, BASE, { zigZag: false })
+    expect(rows.map((r) => r.zigZag)).toEqual([false, false, false])
+    expect(rows[2].sequence).toEqual(['long', 'long', 'long', 'long'])
+    // Same cap, no alternating book: only long legs, all closed at the end.
+    expect(rows[2].result.trades.every((t) => t.side === 'long')).toBe(true)
+    expect(rows[2].result.trades.every((t) => t.reason === 'end')).toBe(true)
+  })
+
+  it('forces the alternating book below the zig-zag line', () => {
+    const rows = comparePerPairCaps(BARS, STRATEGY, BASE, { zigZag: true })
+    expect(rows.map((r) => r.zigZag)).toEqual([true, true, true])
+    expect(rows[0].sequence).toEqual(['long'])
+    expect(rows[1].sequence).toEqual(['long', 'long'])
+  })
+
+  it('reproduces the live rule when no override is given', () => {
+    const live = comparePerPairCaps(BARS, STRATEGY, BASE)
+    const forced = comparePerPairCaps(BARS, STRATEGY, BASE, { zigZag: true })
+    expect(live[2].result.metrics).toEqual(forced[2].result.metrics)
+  })
+
+  it('matches a direct one-way run at the same cap', () => {
+    const rows = comparePerPairCaps(BARS, STRATEGY, BASE, { caps: [4], zigZag: false })
+    const direct = runMultiBacktest(BARS, STRATEGY, { ...BASE, maxPerPair: 4, zigZag: false })
+    expect(rows[0].result.metrics).toEqual(direct.metrics)
+  })
+})
+
+describe('capAdvice', () => {
+  const adviceFor = (netProfits: number[], totalTrades = 3) =>
+    capAdvice(
+      netProfits.map(
+        (netProfit, i) =>
+          ({
+            cap: i + 1,
+            tradeMode: 'concurrent',
+            zigZag: false,
+            sequence: [],
+            result: { metrics: { netProfit, maxDrawdownPct: 5, totalTrades } },
+          }) as unknown as CapComparisonRow,
+      ),
+    )
+
+  it('points at the highest net profit and names the runner-up', () => {
+    const advice = adviceFor([10, 40, 25])
+    expect(advice.bestIndex).toBe(1)
+    expect(advice.best?.cap).toBe(2)
+    expect(advice.runnerUp?.cap).toBe(3)
+    expect(advice.profitable).toBe(true)
+    expect(advice.empty).toBe(false)
+  })
+
+  it('reports an unprofitable comparison instead of hiding it', () => {
+    const advice = adviceFor([-30, -12, -50])
+    expect(advice.best?.cap).toBe(2)
+    expect(advice.profitable).toBe(false)
+    expect(advice.empty).toBe(false)
+  })
+
+  it('flags an empty comparison when no cap traded', () => {
+    const advice = adviceFor([0, 0], 0)
+    expect(advice.empty).toBe(true)
+    expect(advice.profitable).toBe(false)
+  })
+
+  it('has no runner-up for a single row and handles an empty list', () => {
+    expect(adviceFor([5]).runnerUp).toBeNull()
+    const none = capAdvice([])
+    expect(none.best).toBeNull()
+    expect(none.bestIndex).toBe(-1)
+    expect(none.empty).toBe(true)
+  })
+
+  it('recommends a real cap from the live comparison', () => {
+    const advice = capAdvice(comparePerPairCaps(BARS, STRATEGY, BASE))
+    expect(advice.best).not.toBeNull()
+    expect(advice.empty).toBe(false)
+    expect(advice.runnerUp).not.toBeNull()
+    expect(advice.rows).toHaveLength(DEFAULT_CAP_COMPARISON.length)
+    // The fixture's dips all end profitable, so the advice is a positive one.
+    expect(advice.profitable).toBe(true)
   })
 })

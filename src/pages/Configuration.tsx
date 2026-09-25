@@ -6,19 +6,62 @@
  * key.
  */
 import { useCallback, useEffect, useState } from 'react'
-import { ArrowLeftRight, Check, Layers, RefreshCw, Save, ShieldCheck, SlidersHorizontal, Sparkles, Zap, Wrench, ListChecks } from 'lucide-react'
+import { ArrowLeftRight, Check, Layers, ListChecks, RefreshCw, Save, Scale, ShieldCheck, SlidersHorizontal, Sparkles, Zap, Wrench } from 'lucide-react'
 import { useRobotPrefs, methodLabel } from '../lib/trading/robotPrefs'
 import { ZIG_ZAG_MIN_PER_PAIR, zigZagSequence } from '../lib/trading/engine'
 import { ROBOT_PRESETS, loadPresetMode, savePresetMode, type RobotPresetKey } from '../lib/trading/robotPresets'
 import { WATCHLIST, isCryptoPair } from '../lib/watchlist'
 import { activateFreeMarketData, fetchMarketDataConfig, reconfigureMarketData } from '../lib/platform'
 import type { MarketDataConfig } from '../lib/platform'
-import type { StrategyType, TradingMethod } from '../lib/types'
+import type { Bar, Interval, StrategyConfig, StrategyType, TradingMethod } from '../lib/types'
 import type { TradeMode } from '../lib/trading/types'
-import { STRATEGY_META, STRATEGY_TYPES } from '../lib/strategies'
+import { defaultParams, STRATEGY_META, STRATEGY_TYPES } from '../lib/strategies'
+import { capAdvice, comparePerPairCaps, type CapAdvice } from '../lib/strategies/capComparison'
+import { fetchTimeSeries } from '../hooks/useMarketData'
+import { formatPct, formatUsd } from '../lib/format'
 import { cn } from '../lib/cn'
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, PageHeader, Select } from '../components/ui'
 import { ApiTokensCard } from '../components/ApiTokensCard'
+
+/** Caps the advice check compares — below the zig-zag line and well past it. */
+const ADVICE_CAPS = [1, 2, 4, 8]
+/** Bars pulled per pair: enough for every indicator to warm up. */
+const ADVICE_BARS = 200
+/** Pairs checked at once, so the button always answers quickly. */
+const ADVICE_MAX_PAIRS = 4
+/** Round-trip cost assumption, matching the Backtester's default. */
+const ADVICE_COST_PER_TRADE = 2.5
+
+/**
+ * A human sentence for the cap advice — never a bare number, and never a
+ * "best" when nothing traded or every cap lost. Names what the numbers came
+ * from (bars, pairs, costs) so the recommendation can be judged, not just read.
+ */
+function adviceCopy(advice: CapAdvice, pairsChecked: number): string {
+  const best = advice.best
+  if (!best || advice.empty) {
+    return 'No signals fired on the recent bars for these pairs, so there is nothing to compare yet. Add another pair or two, or try the other trading style.'
+  }
+  const m = best.result.metrics
+  const pairs = `${pairsChecked} pair${pairsChecked === 1 ? '' : 's'}`
+  const zigZagNote = best.zigZag
+    ? ' That cap also runs reverse-order (zig-zag) legs, so the extra book is two-way.'
+    : ''
+  if (!advice.profitable) {
+    return `Every cap lost money on the last ${ADVICE_BARS} bars once ${formatUsd(ADVICE_COST_PER_TRADE)} per round trip was charged. Cap ${best.cap} lost the least (${formatUsd(m.netProfit)} over ${m.totalTrades} trades on ${pairs}) — trading smaller, or on fewer pairs, costs you less than adding legs.`
+  }
+  const head = `Cap ${best.cap} earned the most after costs: ${formatUsd(m.netProfit)} net (${formatPct(m.totalReturnPct)} return, ${formatPct(m.maxDrawdownPct)} max drawdown) over ${m.totalTrades} trades on ${pairs}.`
+  let behind = ''
+  if (advice.runnerUp) {
+    const ru = advice.runnerUp
+    const gap = formatUsd(m.netProfit - ru.result.metrics.netProfit)
+    behind =
+      ru.cap > best.cap
+        ? ` Cap ${ru.cap} — with more legs — finished ${gap} behind, so the extra positions cost more than they earned.`
+        : ` Cap ${ru.cap}, holding fewer positions, finished ${gap} behind — the extra legs paid for themselves.`
+  }
+  return head + behind + zigZagNote
+}
 
 export function Configuration() {
   const {
@@ -73,6 +116,67 @@ export function Configuration() {
     best: Sparkles,
     common: Layers,
     manual: SlidersHorizontal,
+  }
+
+  // "Which cap pays best" — opt-in so the page never fetches bars on its own.
+  // Runs the same cap comparison the Backtester card shows, on recent bars for
+  // the pairs, strategy and style selected here, with costs charged per close.
+  const [advice, setAdvice] = useState<CapAdvice | null>(null)
+  const [advicePairs, setAdvicePairs] = useState(0)
+  const [adviceLoading, setAdviceLoading] = useState(false)
+  const [adviceErr, setAdviceErr] = useState<string | null>(null)
+
+  const checkCaps = async () => {
+    setAdviceLoading(true)
+    setAdviceErr(null)
+    const chosen = prefs.autoPickPairs
+      ? WATCHLIST.slice(0, Math.max(1, prefs.pairCount)).map((p) => p.symbol)
+      : prefs.pairs.length > 0
+        ? prefs.pairs
+        : [WATCHLIST[0].symbol]
+    const pairs = chosen.slice(0, ADVICE_MAX_PAIRS)
+    // Mirror what the robot would trade: the style's timeframe and the strategy
+    // it would pick (auto mode evaluates every strategy, so RSI stands in here).
+    const interval: Interval = prefs.method === 'scalping' ? '5min' : '1h'
+    const type: StrategyType = prefs.strategyMode === 'manual' ? prefs.manualStrategy : 'RSI'
+    const config: StrategyConfig = { pair: pairs[0], interval, type, params: defaultParams(type) }
+    try {
+      const fetched = await Promise.all(
+        pairs.map(async (symbol) => {
+          const res = await fetchTimeSeries({ symbol, interval, outputsize: ADVICE_BARS })
+          return [symbol, res.data ?? []] as const
+        }),
+      )
+      const barsBySymbol: Record<string, Bar[]> = Object.fromEntries(
+        fetched.filter(([, bars]) => bars.length >= 30),
+      )
+      if (Object.keys(barsBySymbol).length === 0) {
+        setAdvice(null)
+        setAdviceErr(
+          'Could not load recent bars for these pairs — enable the market data source on this page, then try again.',
+        )
+        return
+      }
+      const rows = comparePerPairCaps(
+        barsBySymbol,
+        { ...config, pair: Object.keys(barsBySymbol)[0] },
+        {
+          pairs: Object.keys(barsBySymbol),
+          tradeMode: prefs.tradeMode,
+          maxPerPair: prefs.maxPerPair,
+          maxOpenTrades: prefs.maxOpenTrades,
+          costPerTrade: ADVICE_COST_PER_TRADE,
+        },
+        { caps: ADVICE_CAPS },
+      )
+      setAdvicePairs(Object.keys(barsBySymbol).length)
+      setAdvice(capAdvice(rows))
+    } catch {
+      setAdvice(null)
+      setAdviceErr('Could not run the cap check right now — try again in a moment.')
+    } finally {
+      setAdviceLoading(false)
+    }
   }
 
   return (
@@ -358,6 +462,40 @@ export function Configuration() {
                 onChange={(e) => setMaxOpenTrades(Math.max(0, Math.round(Number(e.target.value))))}
               />
             </div>
+
+            <div className="mt-4 rounded-lg border border-border bg-secondary/30 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="flex items-center gap-2 text-sm font-semibold">
+                    <Scale className="h-4 w-4 text-accent" aria-hidden="true" />
+                    Which cap pays best?
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    Backtests your current pairs and style at {ADVICE_CAPS.join(', ')} positions per pair, charging{' '}
+                    {formatUsd(ADVICE_COST_PER_TRADE)} of round-trip costs on every close, and recommends the cap that
+                    finished ahead.
+                  </p>
+                </div>
+                <Button variant="secondary" size="sm" onClick={() => void checkCaps()} loading={adviceLoading}>
+                  <Scale className="h-4 w-4" aria-hidden="true" />
+                  Check caps
+                </Button>
+              </div>
+              {adviceErr && (
+                <p role="alert" className="mt-3 rounded-lg border border-amber/40 bg-amber/10 px-3 py-2 text-xs text-amber">
+                  {adviceErr}
+                </p>
+              )}
+              {advice && !adviceErr && (
+                <p
+                  role="status"
+                  className="mt-3 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-xs leading-relaxed text-foreground"
+                >
+                  {adviceCopy(advice, advicePairs)}
+                </p>
+              )}
+            </div>
+
             <p className="mt-3 text-xs text-muted-foreground">
               {prefs.tradeMode === 'sequential'
                 ? 'Sequential holds a single position per pair, so the per-pair cap is fixed at 1 — the global cap above still limits the whole robot.'

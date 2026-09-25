@@ -2,11 +2,13 @@
  * Per-pair cap comparison table. Re-runs the current backtest at one, two and
  * four positions per pair so the effect of concurrency — and of the
  * reverse-order (zig-zag) legs that engage above two — can be read side by side
- * instead of guessed at. Everything is computed client-side from bars already
- * loaded by the Backtester page.
+ * instead of guessed at. A toggle pins the comparison either to the live book
+ * (zig-zag above two) or to a plain one-way stack, so the same cap can be A/B'd
+ * with and without the alternating legs. Everything is computed client-side
+ * from bars already loaded by the Backtester page.
  */
-import { useMemo } from 'react'
-import { Scale } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { ArrowLeftRight, Scale } from 'lucide-react'
 import type { Bar, StrategyConfig } from '../lib/types'
 import type { MultiBacktestSettings } from '../lib/strategies/backtest'
 import { bestCapRowIndex, comparePerPairCaps } from '../lib/strategies/capComparison'
@@ -44,9 +46,15 @@ export function CapComparisonCard({
   settings: MultiBacktestSettings
 }) {
   const loaded = Object.keys(barsBySymbol).length
+  // Live book (reverse-order legs above two per pair) vs a plain one-way stack
+  // at the same caps — so the effect of the alternating legs is visible too.
+  const [stack, setStack] = useState(false)
   const rows = useMemo(
-    () => (loaded >= 2 ? comparePerPairCaps(barsBySymbol, strategy, settings) : []),
-    [barsBySymbol, strategy, settings, loaded],
+    () =>
+      loaded >= 2
+        ? comparePerPairCaps(barsBySymbol, strategy, settings, { zigZag: stack ? false : undefined })
+        : [],
+    [barsBySymbol, strategy, settings, loaded, stack],
   )
 
   if (rows.length === 0) return null
@@ -63,11 +71,46 @@ export function CapComparisonCard({
         <span className="text-xs text-muted-foreground">Same bars, same strategy, same costs</span>
       </CardHeader>
       <CardContent className="space-y-3">
+        <div
+          className="flex flex-wrap items-center gap-2"
+          role="group"
+          aria-label="Reverse-order (zig-zag) legs"
+        >
+          <ArrowLeftRight className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+          <span className="text-xs font-medium text-muted-foreground">Reverse-order legs</span>
+          <button
+            type="button"
+            onClick={() => setStack(false)}
+            aria-pressed={!stack}
+            className={cn(
+              'cursor-pointer rounded-lg border px-2.5 py-1 text-xs font-semibold transition-all duration-150 active:scale-[0.97]',
+              !stack
+                ? 'border-accent bg-accent/15 text-accent'
+                : 'border-border bg-secondary/40 text-muted-foreground hover:text-foreground',
+            )}
+          >
+            As live
+          </button>
+          <button
+            type="button"
+            onClick={() => setStack(true)}
+            aria-pressed={stack}
+            className={cn(
+              'cursor-pointer rounded-lg border px-2.5 py-1 text-xs font-semibold transition-all duration-150 active:scale-[0.97]',
+              stack
+                ? 'border-accent bg-accent/15 text-accent'
+                : 'border-border bg-secondary/40 text-muted-foreground hover:text-foreground',
+            )}
+          >
+            One-way stack
+          </button>
+        </div>
+
         <div className="-mx-1 overflow-x-auto">
           <table className="w-full min-w-[640px] border-collapse text-sm">
             <caption className="sr-only">
               Backtest results for holding one, two and four positions per pair on the same
-              historical bars.
+              historical bars, with {stack ? 'every leg following the signal' : 'the live reverse-order legs'}.
             </caption>
             <thead>
               <tr className="border-b border-border text-left text-[11px] uppercase tracking-wide text-muted-foreground">
@@ -123,7 +166,13 @@ export function CapComparisonCard({
                       </span>
                     </th>
                     <td className="px-3 py-2.5 text-muted-foreground">
-                      {row.zigZag ? 'Concurrent · zig-zag' : row.tradeMode === 'sequential' ? 'Sequential' : 'Concurrent'}
+                      {row.zigZag
+                        ? 'Concurrent · zig-zag'
+                        : row.tradeMode === 'sequential'
+                          ? 'Sequential'
+                          : stack
+                            ? 'Concurrent · one-way'
+                            : 'Concurrent'}
                     </td>
                     <td className="px-3 py-2.5">
                       <LegChips legs={row.sequence} />
@@ -161,15 +210,29 @@ export function CapComparisonCard({
         </div>
 
         <p className="text-xs text-muted-foreground">
-          {anyTrades ? (
-            <>
-              Cap 3 and above engages <span className="text-foreground">reverse-order legs</span> — the first two
-              follow the signal, every leg after that alternates (L, L, S, L…), and a reversal closes only the legs
-              facing the wrong way. &ldquo;Best&rdquo; is the highest net profit, with the shallower drawdown winning
-              ties ({formatNum(rows[best]?.result.metrics.profitFactor ?? 0, 2)} profit factor on the leader).
-            </>
-          ) : (
+          {!anyTrades ? (
             <>No signals fired on these bars — try another timeframe or pair to compare caps.</>
+          ) : (
+            <>
+              {stack ? (
+                <>
+                  Every leg follows the signal, so a pair that keeps signalling fills an entirely{' '}
+                  <span className="text-foreground">one-way stack</span> (L, L, L, L…). Switch back to{' '}
+                  <span className="text-foreground">As live</span> to see the same caps with reverse-order legs, where
+                  the first two follow the signal and every leg after that alternates (L, L, S, L…) and a reversal
+                  closes only the legs facing the wrong way.
+                </>
+              ) : (
+                <>
+                  With reverse-order legs at cap 3 and above, the first two legs follow the signal and every leg after
+                  that alternates (L, L, S, L…), and a reversal closes only the legs facing the wrong way. Switch to{' '}
+                  <span className="text-foreground">One-way stack</span> to see the same caps with every leg on the
+                  signal side.
+                </>
+              )}{' '}
+              &ldquo;Best&rdquo; is the highest net profit, with the shallower drawdown winning ties (
+              {formatNum(rows[best]?.result.metrics.profitFactor ?? 0, 2)} profit factor on the leader).
+            </>
           )}
         </p>
       </CardContent>
