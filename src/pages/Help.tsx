@@ -2,11 +2,10 @@
  * Help — a small FAQ covering the essentials: paper trading, the robot, risk
  * controls, packages and payouts. Links out to Contact for anything deeper.
  */
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ChevronDown, HelpCircle, Smartphone } from 'lucide-react'
+import { ChevronDown, HelpCircle } from 'lucide-react'
 import { cn } from '../lib/cn'
-import { AndroidDownload } from '../components/AndroidDownload'
 import { Button, Card, CardContent, CardHeader, CardTitle, PageHeader } from '../components/ui'
 
 const FAQS: { q: string; a: string }[] = [
@@ -38,22 +37,6 @@ const FAQS: { q: string; a: string }[] = [
 
 export function Help() {
   const [open, setOpen] = useState<number | null>(0)
-
-  // Deep links such as /help#android (used by the landing page's Android CTA)
-  // need an explicit scroll: the router does not restore hash anchors itself.
-  useEffect(() => {
-    const scrollToHash = () => {
-      const id = window.location.hash.slice(1)
-      if (!id) return
-      const target = document.getElementById(id)
-      if (!target) return
-      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' })
-    }
-    scrollToHash()
-    window.addEventListener('hashchange', scrollToHash)
-    return () => window.removeEventListener('hashchange', scrollToHash)
-  }, [])
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -96,18 +79,6 @@ export function Help() {
               )
             })}
           </div>
-        </CardContent>
-      </Card>
-
-      <Card id="android" className="scroll-mt-24">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Smartphone className="h-4 w-4 text-accent" aria-hidden="true" />
-            Get the Android app
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <AndroidDownload />
         </CardContent>
       </Card>
 

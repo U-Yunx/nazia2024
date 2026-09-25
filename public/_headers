@@ -37,15 +37,3 @@
 
 /sitemap.xml
   Cache-Control: public, max-age=3600
-
-# Published Android build (see scripts/publish-apk.mjs). The correct MIME type
-# is what makes a phone offer to install the file instead of downloading a blob;
-# the file name carries the version, so a short edge cache is safe.
-/downloads/*.apk
-  Content-Type: application/vnd.android.package-archive
-  Cache-Control: public, max-age=3600
-
-# The release manifest decides whether the download buttons appear at all, so it
-# must never be served stale.
-/downloads/latest.json
-  Cache-Control: no-cache

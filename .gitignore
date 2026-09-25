@@ -25,15 +25,6 @@ dist-ssr
 # Playwright CLI runtime artifacts (snapshots/screenshots/videos)
 .playwright-cli
 
-# Capacitor's generated Android project and its release signing material. Both
-# are local artifacts — the APK can only be built on a machine with an Android
-# SDK, and the keystore identifies the app across updates, so it must never be
-# committed. (The *published* APK under public/downloads/ IS committed.)
-android/
-*.keystore
-*.jks
-keystore.properties
-
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
