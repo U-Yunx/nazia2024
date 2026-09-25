@@ -13,6 +13,7 @@ import { formatUsd } from '../lib/format'
 import { cn } from '../lib/cn'
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Skeleton } from '../components/ui'
 import { QuoteTable } from '../components/QuoteTable'
+import { DashboardLeaderboard } from '../components/DashboardLeaderboard'
 
 function AccessBadge({ status }: { status: string }) {
   const map: Record<string, { label: string; cls: string }> = {
@@ -116,6 +117,9 @@ export function Dashboard() {
           desc="Review your robot's sessions and equity curve."
         />
       </div>
+
+      {/* Community leaderboard */}
+      <DashboardLeaderboard />
 
       {/* Watchlist */}
       <QuoteTable quotes={quotes} loading={quotesLoading} onSelect={() => undefined} />
