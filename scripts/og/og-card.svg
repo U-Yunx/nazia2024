@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" fill="none">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0B1120"/>
+      <stop offset="0.55" stop-color="#0F1730"/>
+      <stop offset="1" stop-color="#191F42"/>
+    </linearGradient>
+    <radialGradient id="glowCyan" cx="0.85" cy="0.18" r="0.55">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowIndigo" cx="0.12" cy="0.12" r="0.42">
+      <stop offset="0" stop-color="#6366F1" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#6366F1" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowPink" cx="0.78" cy="0.9" r="0.4">
+      <stop offset="0" stop-color="#F472B6" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#F472B6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="lineGrad" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#818CF8"/>
+    </linearGradient>
+    <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </linearGradient>
+    <pattern id="grid" width="120" height="64" patternUnits="userSpaceOnUse">
+      <path d="M0 64 H120" stroke="#FFFFFF" stroke-opacity="0.035"/>
+      <path d="M120 0 V64" stroke="#FFFFFF" stroke-opacity="0.02"/>
+    </pattern>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="630" fill="url(#bgGrad)"/>
+  <rect width="1200" height="630" fill="url(#glowCyan)"/>
+  <rect width="1200" height="630" fill="url(#glowIndigo)"/>
+  <rect width="1200" height="630" fill="url(#glowPink)"/>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+
+  <!-- Brand block (left) -->
+  <g transform="translate(96,100)">
+    <rect width="84" height="84" rx="20" fill="#0B1220" stroke="#5B6478" stroke-opacity="0.25" stroke-width="1.5"/>
+    <path d="M18.4 55.1 L34.1 39.4 L44.6 49.9 L65.6 28.9" stroke="#22D3EE" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="65.6" cy="28.9" r="5.25" fill="#4ADE80"/>
+  </g>
+  <text x="208" y="136" font-family="Inter, 'Inter Variable', Arial, sans-serif" font-weight="800" font-size="46" fill="#F8FAFC">ANA24</text>
+  <text x="96" y="190" font-family="Inter, 'Inter Variable', Arial, sans-serif" font-weight="500" font-size="24" fill="#A5B4FC">AI Forex &amp; Crypto Trading Robot</text>
+
+  <!-- Feature chips -->
+  <g font-family="Inter, 'Inter Variable', Arial, sans-serif" font-weight="600" font-size="16" fill="#C7D2FE">
+    <rect x="96" y="222" width="202" height="40" rx="20" fill="#818CF8" fill-opacity="0.10" stroke="#818CF8" stroke-opacity="0.35" stroke-width="1.5"/>
+    <circle cx="116" cy="242" r="5" fill="#4ADE80"/>
+    <text x="132" y="247">Free Paper Account</text>
+
+    <rect x="316" y="222" width="124" height="40" rx="20" fill="#818CF8" fill-opacity="0.10" stroke="#818CF8" stroke-opacity="0.35" stroke-width="1.5"/>
+    <circle cx="336" cy="242" r="5" fill="#22D3EE"/>
+    <text x="352" y="247">Backtest</text>
+
+    <rect x="458" y="222" width="148" height="40" rx="20" fill="#818CF8" fill-opacity="0.10" stroke="#818CF8" stroke-opacity="0.35" stroke-width="1.5"/>
+    <circle cx="478" cy="242" r="5" fill="#F472B6"/>
+    <text x="494" y="247">Live Signals</text>
+  </g>
+  <text x="96" y="294" font-family="Inter, 'Inter Variable', Arial, sans-serif" font-weight="400" font-size="16" fill="#64748B">Risk-first automation for forex &amp; crypto — no API keys needed to start.</text>
+
+  <text x="96" y="570" font-family="Inter, 'Inter Variable', Arial, sans-serif" font-weight="500" font-size="13" letter-spacing="3" fill="#475569">AUTOMATED FOREX &amp; CRYPTO TRADING</text>
+
+  <!-- Equity panel (right) -->
+  <rect x="660" y="104" width="444" height="420" rx="22" fill="#0E1626" fill-opacity="0.6" stroke="#94A3B8" stroke-opacity="0.16" stroke-width="1.5"/>
+
+  <text x="690" y="140" font-family="Inter, 'Inter Variable', Arial, sans-serif" font-weight="600" font-size="13" letter-spacing="2" fill="#64748B">PORTFOLIO EQUITY</text>
+  <circle cx="1024" cy="140" r="5" fill="#22D3EE"/>
+  <text x="1038" y="145" font-family="Inter, 'Inter Variable', Arial, sans-serif" font-weight="700" font-size="13" letter-spacing="1" fill="#22D3EE">LIVE</text>
+
+  <text x="690" y="196" font-family="Inter, 'Inter Variable', Arial, sans-serif" font-weight="700" font-size="34" fill="#4ADE80">+24.8%</text>
+  <text x="690" y="220" font-family="Inter, 'Inter Variable', Arial, sans-serif" font-weight="400" font-size="13" fill="#64748B">Last 30 days</text>
+
+  <!-- Chart grid -->
+  <g stroke="#FFFFFF" stroke-opacity="0.05">
+    <line x1="690" y1="282" x2="1068" y2="282"/>
+    <line x1="690" y1="336" x2="1068" y2="336"/>
+    <line x1="690" y1="390" x2="1068" y2="390"/>
+    <line x1="690" y1="444" x2="1068" y2="444"/>
+  </g>
+
+  <!-- Candlesticks (subtle market texture) -->
+  <g stroke-linecap="round" stroke-width="2" opacity="0.35">
+    <line x1="700" y1="400" x2="700" y2="470" stroke="#22D3EE"/><rect x="695" y="420" width="10" height="40" rx="2" fill="#22D3EE"/>
+    <line x1="748" y1="380" x2="748" y2="470" stroke="#22D3EE"/><rect x="743" y="400" width="10" height="30" rx="2" fill="#22D3EE"/>
+    <line x1="796" y1="410" x2="796" y2="470" stroke="#F472B6"/><rect x="791" y="430" width="10" height="38" rx="2" fill="#F472B6"/>
+    <line x1="844" y1="360" x2="844" y2="470" stroke="#22D3EE"/><rect x="839" y="390" width="10" height="40" rx="2" fill="#22D3EE"/>
+    <line x1="892" y1="380" x2="892" y2="470" stroke="#22D3EE"/><rect x="887" y="420" width="10" height="25" rx="2" fill="#22D3EE"/>
+    <line x1="940" y1="340" x2="940" y2="470" stroke="#22D3EE"/><rect x="935" y="370" width="10" height="40" rx="2" fill="#22D3EE"/>
+    <line x1="988" y1="360" x2="988" y2="470" stroke="#F472B6"/><rect x="983" y="380" width="10" height="40" rx="2" fill="#F472B6"/>
+    <line x1="1036" y1="320" x2="1036" y2="470" stroke="#22D3EE"/><rect x="1031" y="350" width="10" height="40" rx="2" fill="#22D3EE"/>
+  </g>
+
+  <!-- Equity curve -->
+  <polygon points="690,462 736,446 782,454 828,420 874,430 920,386 966,394 1012,342 1068,308 1068,480 690,480" fill="url(#areaGrad)"/>
+  <polyline points="690,462 736,446 782,454 828,420 874,430 920,386 966,394 1012,342 1068,308" stroke="url(#lineGrad)" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" fill="none"/>
+  <circle cx="1068" cy="308" r="22" fill="#4ADE80" fill-opacity="0.12"/>
+  <circle cx="1068" cy="308" r="14" fill="none" stroke="#4ADE80" stroke-opacity="0.4" stroke-width="2"/>
+  <circle cx="1068" cy="308" r="6" fill="#4ADE80"/>
+
+  <!-- Panel stats -->
+  <text x="690" y="512" font-family="Inter, 'Inter Variable', Arial, sans-serif" font-weight="500" font-size="13" fill="#64748B">WIN RATE <tspan font-weight="700" fill="#C7D2FE">68.4%</tspan></text>
+  <text x="1068" y="512" text-anchor="end" font-family="Inter, 'Inter Variable', Arial, sans-serif" font-weight="500" font-size="13" fill="#64748B">PROFIT FACTOR <tspan font-weight="700" fill="#C7D2FE">1.9</tspan></text>
+</svg>
