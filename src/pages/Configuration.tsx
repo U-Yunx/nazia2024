@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ArrowLeftRight, Check, Layers, RefreshCw, Save, ShieldCheck, SlidersHorizontal, Sparkles, Zap, Wrench, ListChecks } from 'lucide-react'
 import { useRobotPrefs, methodLabel } from '../lib/trading/robotPrefs'
-import { ZIG_ZAG_MIN_PER_PAIR } from '../lib/trading/engine'
+import { ZIG_ZAG_MIN_PER_PAIR, zigZagSequence } from '../lib/trading/engine'
 import { ROBOT_PRESETS, loadPresetMode, savePresetMode, type RobotPresetKey } from '../lib/trading/robotPresets'
 import { WATCHLIST, isCryptoPair } from '../lib/watchlist'
 import { activateFreeMarketData, fetchMarketDataConfig, reconfigureMarketData } from '../lib/platform'
@@ -365,12 +365,32 @@ export function Configuration() {
               {' '}Both caps are enforced by the trading engine on every cycle, so a busy market can never over-leverage the account.
             </p>
             {prefs.tradeMode === 'concurrent' && prefs.maxPerPair >= ZIG_ZAG_MIN_PER_PAIR && (
-              <p className="mt-2 flex items-start gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-foreground">
-                <ArrowLeftRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />
-                Reverse-order (zig-zag) legs are on — with more than 2 positions per pair the first two follow the
-                signal and every extra one alternates: long, long, short, long… Each leg keeps its own stop and
-                target, so a pair that keeps signalling builds a balanced book instead of stacking one way.
-              </p>
+              <div className="mt-2 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-foreground">
+                <p className="flex items-start gap-2">
+                  <ArrowLeftRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />
+                  Reverse-order (zig-zag) legs are on — the first two legs follow the signal and every extra
+                  one alternates, so a pair that keeps signalling fills this book:
+                </p>
+                <div
+                  className="mt-2 flex flex-wrap items-center gap-1"
+                  aria-label={`Fill order with ${prefs.maxPerPair} positions per pair`}
+                >
+                  {zigZagSequence('long', prefs.maxPerPair).map((side, i) => (
+                    <span
+                      key={i}
+                      className={
+                        'inline-flex h-5 min-w-5 items-center justify-center rounded border px-1 font-mono text-[10px] font-bold ' +
+                        (side === 'long' ? 'border-up/40 bg-up/15 text-up' : 'border-down/40 bg-down/15 text-down')
+                      }
+                    >
+                      {side === 'long' ? 'L' : 'S'}
+                    </span>
+                  ))}
+                  <span className="ml-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                    {prefs.maxPerPair} per pair · each leg keeps its own stop and target
+                  </span>
+                </div>
+              </div>
             )}
             {prefs.maxOpenTrades === 0 && (
               <p className="mt-3 flex items-start gap-2 text-xs text-muted-foreground">

@@ -13,6 +13,7 @@ import type {
 } from '../types'
 import { computeSignal } from './signals'
 import type { RobotConfig } from '../trading/types'
+import { reverseOrderLeg, ZIG_ZAG_MIN_PER_PAIR } from '../trading/engine'
 
 export { computeIndicators } from './indicators'
 
@@ -39,6 +40,16 @@ export type MultiBacktestSettings = Pick<RobotConfig, 'pairs' | 'tradeMode' | 'm
    * Deducted from equity on every simulated close — 0 = cost-free.
    */
   costPerTrade?: number
+  /**
+   * Reverse-order (zig-zag) legs — mirrors the live robot. Once the concurrent
+   * per-pair cap allows a third leg, the first two legs follow the signal and
+   * every one after that alternates side (long, long, short, long…), so a pair
+   * that keeps signalling builds a two-way book instead of a one-way stack.
+   * Defaults to the live rule (on at `ZIG_ZAG_MIN_PER_PAIR`, off below it);
+   * pass `false` to A/B an alternating book against a plain stack at the same
+   * cap.
+   */
+  zigZag?: boolean
 }
 
 interface OpenMultiTrade {
@@ -54,7 +65,9 @@ interface OpenMultiTrade {
  * equity curve and are subject to the same per-pair cap (sequential = 1,
  * concurrent = maxPerPair) and global max-open-trades cap — mirroring the live
  * engine's `runRobotCycle`. A single-pair watchlist delegates to `runBacktest`
- * so existing results are byte-for-byte identical.
+ * so existing results are byte-for-byte identical. Above two positions per pair
+ * the legs alternate direction (see `zigZag`), and a reversal closes only the
+ * legs facing the wrong way.
  */
 export function runMultiBacktest(
   barsBySymbol: Record<string, Bar[]>,
@@ -89,6 +102,10 @@ export function runMultiBacktest(
   const trades: Trade[] = []
   const equityCurve: EquityPoint[] = []
   const perPairCap = settings.tradeMode === 'concurrent' ? settings.maxPerPair : 1
+  // Zig-zag defaults to the live rule: engaged automatically in concurrent
+  // mode once the per-pair cap allows a third leg, off below it. Pass
+  // `zigZag: false` to A/B the alternating book against a plain one-way stack.
+  const zigZag = settings.zigZag ?? (settings.tradeMode === 'concurrent' && perPairCap >= ZIG_ZAG_MIN_PER_PAIR)
   const costPerTrade = Math.max(0, settings.costPerTrade ?? 0)
   let equity = startEquity
   let peak = startEquity
@@ -111,14 +128,21 @@ export function runMultiBacktest(
     const bars = barsBySymbol[symbol] as Bar[]
     const { signal } = computeSignal(bars.slice(0, idx + 1), { ...config, pair: symbol })
     const mine = open.filter((o) => o.symbol === symbol)
-    const flip =
-      mine.some((o) => o.side === 'long' && signal === 'sell') ||
-      mine.some((o) => o.side === 'short' && signal === 'buy')
     const endOfData = idx === lastIdx[symbol]
+    // Close only the legs facing the wrong way on a reversal — a position
+    // already aligned with the signal rides on. Without zig-zag every position
+    // on a pair shares a side, so a flip cuts them all exactly as before; with
+    // a mixed book only the opposing legs are closed.
+    const opposing = mine.filter(
+      (o) => (o.side === 'long' && signal === 'sell') || (o.side === 'short' && signal === 'buy'),
+    )
+    const flip = opposing.length > 0
+    const closing = endOfData ? mine : opposing
 
-    // Close this symbol's positions on a flip or the end of its data.
-    if ((flip || endOfData) && mine.length > 0) {
-      for (const o of mine) {
+    // Close this symbol's opposing positions on a reversal, or all of them at
+    // the end of its data.
+    if (closing.length > 0) {
+      for (const o of closing) {
         const pnlPts = o.side === 'long' ? bar.close - o.entryPrice : o.entryPrice - bar.close
         const pnlPct = (pnlPts / o.entryPrice) * 100
         const pnl = (equity * pnlPct) / 100
@@ -147,7 +171,7 @@ export function runMultiBacktest(
           grossLoss += -pnl
         }
       }
-      open = open.filter((o) => o.symbol !== symbol)
+      open = open.filter((o) => !closing.includes(o))
       mark(bar.time)
     }
 
@@ -157,9 +181,12 @@ export function runMultiBacktest(
       const underPerPair = openForSymbol < perPairCap
       const underGlobal = settings.maxOpenTrades <= 0 || open.length < settings.maxOpenTrades
       if (underPerPair && underGlobal) {
+        const signalSide = signal === 'buy' ? 'long' : 'short'
         open.push({
           symbol,
-          side: signal === 'buy' ? 'long' : 'short',
+          // Reverse-order legs (mirrors the live engine): the first two legs
+          // follow the signal, every one after that alternates side.
+          side: zigZag ? reverseOrderLeg(signalSide, openForSymbol, perPairCap) : signalSide,
           entryTime: bar.time,
           entryPrice: bar.close,
         })

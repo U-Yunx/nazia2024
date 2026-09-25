@@ -778,6 +778,17 @@ export function reverseOrderLeg(side: Side, legIndex: number, maxPerPair: number
 }
 
 /**
+ * The order sequence a single pair fills for a given per-pair cap — legs 0 and
+ * 1 follow the signal, every leg after that alternates (see `reverseOrderLeg`).
+ * With a cap of 1 or 2 the sequence is one-way, so nothing changes for
+ * sequential and 2-per-pair runs. Used to preview the zig-zag in the UI.
+ */
+export function zigZagSequence(side: Side, maxPerPair: number, count = maxPerPair): Side[] {
+  const legs = Math.max(0, Math.min(count, Math.max(0, maxPerPair)))
+  return Array.from({ length: legs }, (_, i) => reverseOrderLeg(side, i, maxPerPair))
+}
+
+/**
  * Run one multi-pair robot cycle: evaluate every pair on the watchlist and
  * open a trade on each qualifying pair, subject to the per-pair cap
  * (config.maxPerPair — 1 by default, raise it to hold several positions per

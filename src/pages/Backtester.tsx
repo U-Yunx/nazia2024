@@ -16,6 +16,7 @@ import { cn } from '../lib/cn'
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, EmptyState, Input, PageHeader } from '../components/ui'
 import { StrategyForm } from '../components/StrategyForm'
 import { MetricsCards } from '../components/MetricsCards'
+import { CapComparisonCard } from '../components/CapComparisonCard'
 import { CandleChart } from '../components/CandleChart'
 import { EquityChart } from '../components/EquityChart'
 import { TradesTable } from '../components/TradesTable'
@@ -260,6 +261,8 @@ export function Backtester() {
                     : []),
                 ]}
               />
+
+              <CapComparisonCard barsBySymbol={barsBySymbol} strategy={strategy} settings={settings} />
 
               <Card>
                 <CardHeader>
