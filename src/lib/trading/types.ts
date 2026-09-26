@@ -38,6 +38,13 @@ export type CloseReason =
    * was closed at market and the robot stood down.
    */
   | 'margin'
+  /**
+   * Auto-reverse ("reverse open position trading"): the position was closed
+   * because it moved `risk.reverseTriggerPips` against the robot's entry while
+   * `risk.autoReverse` was activated — the robot immediately opened the
+   * opposite direction at the same size to ride the reversal.
+   */
+  | 'reverse'
 
 export type BrokerMode = 'paper' | 'managed' | 'oanda' | 'mt'
 
@@ -288,7 +295,25 @@ export interface RiskConfig {
   partialClosePct: number
   /** First target as a multiple of the stop distance (1 = one R / risk unit). */
   partialTpRatio: number
+  /**
+   * Auto-reverse ("reverse open position trading"). When activated, the robot
+   * closes a strategy-tagged position that has moved `reverseTriggerPips`
+   * against its entry and immediately opens the OPPOSITE direction at the same
+   * size — riding the reversal instead of waiting for the stop. It runs
+   * automatically (autorun) on every mark-to-market pass while the robot is
+   * running (`autoTrade`), never touches manual positions, and the reversed
+   * open still passes every risk gate (caps, daily loss, circuit breaker).
+   * Off by default. Optional so saved risk configs written before this feature
+   * load unchanged.
+   */
+  autoReverse?: boolean
+  /** Adverse pips from entry that triggers an auto-reverse (off when ≤ 0). */
+  reverseTriggerPips?: number
 }
+
+/** Default adverse pips from entry that triggers an auto-reverse when the
+ *  account does not carry its own `reverseTriggerPips` value yet. */
+export const DEFAULT_REVERSE_TRIGGER_PIPS = 15
 
 export const DEFAULT_RISK: RiskConfig = {
   kind: 'standard',
@@ -323,6 +348,11 @@ export const DEFAULT_RISK: RiskConfig = {
   partialTakeProfit: false,
   partialClosePct: 50,
   partialTpRatio: 1,
+  // Auto-reverse is off by default — flipping a loser 1:1 into the opposite
+  // direction past the trigger pips is aggressive, so it is always an
+  // explicit activation.
+  autoReverse: false,
+  reverseTriggerPips: DEFAULT_REVERSE_TRIGGER_PIPS,
 }
 
 /** The full persisted state of a paper account. */

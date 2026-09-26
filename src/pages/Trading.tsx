@@ -1580,6 +1580,7 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
       (account.risk.profitPullbackPct ?? 0) > 0 ? `${account.risk.profitPullbackPct}% pull-back lock` : null,
       account.risk.peakReturnClose ? `return-to-peak (${account.risk.peakReturnGivebackPct ?? 10}% give-back)` : null,
       account.risk.partialTakeProfit ? `scale-out ${account.risk.partialClosePct ?? 50}% at 1R` : null,
+      account.risk.autoReverse ? `auto-reverse after ${account.risk.reverseTriggerPips ?? 15} pips` : null,
     ].filter(Boolean) as string[]
     return [
       { label: 'Mode', value: mode === 'paper' ? 'Paper — simulated money' : mode === 'managed' ? 'Managed live — real-size ledger' : `Live ${liveLabel} — ${liveConn?.account_type === 'live' ? 'REAL money' : 'demo'}` },
@@ -1668,6 +1669,18 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
     ) : null
 
   // Shared robot control card — used by both paper and live modes.
+  //
+  // "Max open positions" — the robot-wide cap, settable right where the robot
+  // is started. One number backs BOTH the robot cycle cap (prefs.maxOpenTrades)
+  // and the engine's enforced account cap (risk.maxOpenPositions), so what the
+  // user picks here is exactly what actually opens. 0 = as many as signals
+  // qualify, bounded by a high safety floor so a busy market can never
+  // over-leverage the account by mistake.
+  const ROBOT_UNLIMITED_POSITIONS_FLOOR = 50
+  const setMaxOpenPositions = (n: number) => {
+    setMaxOpenTrades(n)
+    setRisk({ maxOpenPositions: n === 0 ? ROBOT_UNLIMITED_POSITIONS_FLOOR : n })
+  }
   const robotCard = (
     <CollapsibleCard
       title="Robot"
@@ -2102,6 +2115,43 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
                   aria-label="More positions per pair"
                   onClick={() => setMaxPerPair(Math.min(tier.limited ? STARTER_MAX_PER_PAIR : (unrestricted ? 100 : 10), prefs.maxPerPair + 1))}
                   disabled={prefs.maxPerPair >= (tier.limited ? STARTER_MAX_PER_PAIR : (unrestricted ? 100 : 10))}
+                >
+                  +
+                </Button>
+              </div>
+            </div>
+
+                        {/* Max open positions — the robot-wide cap, made settable right
+                where the robot is started (one number backs both the robot
+                cycle cap and the account risk cap the engine enforces, so the
+                number here is the number that opens). */}
+            <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-secondary/40 px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-foreground">Max open positions</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  The most positions the whole robot holds open at once — 0 = as many as signals qualify. The Risk
+                  panel's account cap mirrors this number, so what you pick here is what the engine enforces.
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  aria-label="Fewer open positions"
+                  onClick={() => setMaxOpenPositions(Math.max(0, prefs.maxOpenTrades - 1))}
+                  disabled={prefs.maxOpenTrades <= 0}
+                >
+                  −
+                </Button>
+                <span className="w-10 text-center text-sm font-semibold tnum">
+                  {prefs.maxOpenTrades > 0 ? prefs.maxOpenTrades : 'All'}
+                </span>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  aria-label="More open positions"
+                  onClick={() => setMaxOpenPositions(Math.min(unrestricted ? 999 : 50, prefs.maxOpenTrades + 1))}
+                  disabled={prefs.maxOpenTrades >= (unrestricted ? 999 : 50)}
                 >
                   +
                 </Button>

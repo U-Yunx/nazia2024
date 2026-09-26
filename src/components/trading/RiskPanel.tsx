@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Check, RotateCcw, ShieldAlert } from 'lucide-react'
 import type { RiskConfig } from '../../lib/trading/types'
-import { DEFAULT_RISK } from '../../lib/trading/types'
+import { DEFAULT_REVERSE_TRIGGER_PIPS, DEFAULT_RISK } from '../../lib/trading/types'
 import { cn } from '../../lib/cn'
 import { Button, Input } from '../ui'
 import { CollapsibleCard } from './CollapsibleCard'
@@ -271,6 +271,50 @@ export function RiskPanel({ risk, onChange, onReset, isLive, unrestricted = fals
                 <div className="flex items-end pb-1 text-[11px] text-muted-foreground">
                   The trade must dip this % off its best profit before a return to the peak counts as
                   a close — keeps noise at the high from closing winners.
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Auto-reverse ("reverse open position trading") — the robot's
+              comeback rule. When activated, a strategy-tagged position that is
+              down the trigger pips from its entry is closed and re-opened in
+              the OPPOSITE direction at the same size, automatically, while the
+              robot runs. Manual trades are never touched, and the reversed
+              open still passes every risk gate. */}
+          <div className="col-span-2 rounded-lg border border-amber/30 bg-amber/5 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold text-foreground">Auto-reverse losing positions</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  When a robot position sinks the trigger distance from its entry, the robot closes it and opens the
+                  SAME size in the opposite direction — riding the reversal instead of waiting for the stop. Runs
+                  automatically while the robot is active (paper &amp; managed accounts). Manual trades are never touched.
+                </p>
+              </div>
+              <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  checked={draft.autoReverse === true}
+                  onChange={(e) => patch({ autoReverse: e.target.checked })}
+                  className="h-4 w-4 cursor-pointer rounded border-border bg-background accent-[var(--color-accent)]"
+                />
+                On
+              </label>
+            </div>
+            {draft.autoReverse === true && (
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <Field
+                  label="Reverse after"
+                  value={draft.reverseTriggerPips ?? DEFAULT_REVERSE_TRIGGER_PIPS}
+                  onChange={(v) => patch({ reverseTriggerPips: Math.max(1, v) })}
+                  min={1}
+                  step={1}
+                  suffix="pips down"
+                />
+                <div className="flex items-end pb-1 text-[11px] text-muted-foreground">
+                  Set it inside your stop distance to flip before the stop is hit. Keep it above 0 so a
+                  sub-pip wiggle can't churn the book.
                 </div>
               </div>
             )}

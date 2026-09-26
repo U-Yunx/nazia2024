@@ -21,6 +21,7 @@ const REASON_LABEL: Record<string, string> = {
   take_profit: 'Take profit',
   target: 'Money target',
   manual: 'Manual',
+  reverse: 'Auto-reverse',
   margin: 'Margin call',
   pullback: 'Profit pullback',
   peak_return: 'Returned to peak',

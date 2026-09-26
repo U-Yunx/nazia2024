@@ -15,7 +15,7 @@ import type {
   RobotCycleInput,
   Side,
 } from './types'
-import { DEFAULT_RISK, PROFIT_PROBABILITY_THRESHOLD } from './types'
+import { DEFAULT_REVERSE_TRIGGER_PIPS, DEFAULT_RISK, PROFIT_PROBABILITY_THRESHOLD } from './types'
 import { consecutiveLosses, perTradeTargetUsd, pnlUsd, pipSize, stopTakePrices } from './risk'
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
@@ -430,6 +430,83 @@ function trackPriceMarks(state: AccountState, rates: RatesMap): AccountState {
   return changed ? { ...state, positions } : state
 }
 
+/**
+ * Auto-reverse ("flip a loser") — the robot's comeback rule.
+ *
+ * While the robot is RUNNING with `risk.autoReverse` activated, any
+ * strategy-tagged position that is down `risk.reverseTriggerPips` pips from
+ * its entry is closed at market (reason 'reverse') and immediately re-opened
+ * in the OPPOSITE direction at the same size, with the same stop distance and
+ * risk:reward — riding the reversal instead of waiting for the stop. It runs
+ * automatically (autorun) on every mark-to-market pass of the platform's own
+ * ledgers (paper / managed / background runner).
+ *
+ * Safety rails, all deliberate:
+ *  - Only robot-opened (strategy-tagged) positions are ever flipped — manual
+ *    trades the user placed are never touched.
+ *  - It only runs while `autoTrade` is on: a paused robot flips nothing.
+ *  - The reversed open still passes EVERY risk gate (per-pair cap, account
+ *    max-open-positions, daily loss limit, consecutive-loss breaker). A
+ *    blocked reverse open simply leaves the position flattened.
+ *  - Reversal preserves the pair's position count (close one leg, open one),
+ *    so a busy pair can never accumulate extra legs from the rule.
+ */
+export function autoReversePositions(
+  state: AccountState,
+  rates: RatesMap,
+): { state: AccountState; reversed: ClosedTrade[] } {
+  const trigger = state.risk.autoReverse
+    ? state.risk.reverseTriggerPips ?? DEFAULT_REVERSE_TRIGGER_PIPS
+    : 0
+  if (!(trigger > 0) || !state.risk.autoTrade || state.positions.length === 0) {
+    return { state, reversed: [] }
+  }
+
+  let next = state
+  const reversed: ClosedTrade[] = []
+  for (const p of [...next.positions]) {
+    // The robot only ever flips ITS OWN trades — strategy-tagged, never manual.
+    if (!p.strategy || p.strategy === 'manual') continue
+    const cur = rates[p.symbol]
+    if (cur == null) continue
+    const pip = pipSize(p.symbol)
+    const adversePips = (p.side === 'long' ? p.entryPrice - cur : cur - p.entryPrice) / pip
+    if (adversePips < trigger) continue
+
+    // The pair keeps exactly as many positions as it had: cap = its current
+    // open count, so after the close the reverse open always fits back.
+    const perPairCap = Math.max(1, next.positions.filter((x) => x.symbol === p.symbol).length)
+
+    // Close the bleeding leg at market, then flip it.
+    const closeRes = closePosition(next, p.id, { price: cur, reason: 'reverse', rates })
+    if (closeRes.trade) reversed.push(closeRes.trade)
+    next = closeRes.state
+
+    // Same risk geometry as the original leg: the same stop distance from
+    // entry, the same risk:reward multiple, the same size — just flipped.
+    const stopDist = Math.abs(p.entryPrice - p.stopPrice) / pip
+    const stopPips = Math.max(1, stopDist || state.risk.defaultStopPips)
+    const openRes = openPosition(
+      next,
+      {
+        symbol: p.symbol,
+        side: p.side === 'long' ? 'short' : 'long',
+        entryPrice: cur,
+        stopPips,
+        takeProfitPips: Math.max(0, Math.round(stopPips * state.risk.takeProfitRatio)),
+        units: p.units,
+        strategy: p.strategy,
+      },
+      rates,
+      { maxPerPair: perPairCap },
+    )
+    // A blocked reverse open only FLATTENS the loser — the account is never
+    // levered past its limits by the comeback rule.
+    next = openRes.state
+  }
+  return next === state ? { state, reversed: [] } : { state: next, reversed }
+}
+
 /** Check SL/TP against the latest rates and close anything that was hit. */
 export function markToMarket(
   state: AccountState,
@@ -571,6 +648,22 @@ export function markToMarket(
       next = res.state
     }
   }
+
+  // Auto-reverse ("reverse open position trading") — once the regular exits
+  // have had their say, a robot position that is still bleeding past the
+  // trigger pips is closed and flipped into the opposite direction at the
+  // same size, automatically, while the robot runs. Runs AFTER the normal
+  // rules so a legit stop / target / pull-back / drawdown close always wins,
+  // and only on the platform's own ledgers (the live broker adapters refresh
+  // the mirror instead of running the engine).
+  if (state.risk.autoReverse) {
+    const rev = autoReversePositions(next, rates)
+    if (rev.state !== next) {
+      closed.push(...rev.reversed)
+      next = rev.state
+    }
+  }
+
   return { state: next, closed }
 }
 

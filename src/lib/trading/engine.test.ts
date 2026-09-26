@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   applySignal,
+  autoReversePositions,
   canOpen,
   closeAllPositions,
   closePosition,
@@ -919,5 +920,116 @@ describe('partial take-profit / scale-out', () => {
     const full = markToMarket(opened, { ...rates, 'EUR/USD': 1.104 })
     expect(full.closed).toHaveLength(1)
     expect(full.closed[0].units).toBe(1)
+  })
+})
+
+describe('auto-reverse ("reverse open position trading")', () => {
+  // 1000 units EUR/USD with a 10-pip trigger: entry 1.1, price 1.099 → 10
+  // adverse pips. Stop at 1.098 stays untouched so only the reversal fires.
+  const armed = (acc = createAccount(10_000)) => {
+    acc.risk.autoTrade = true
+    acc.risk.autoReverse = true
+    acc.risk.reverseTriggerPips = 10
+    return acc
+  }
+  const openRobotLong = (acc = armed()) =>
+    openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
+      strategy: 'MA',
+    }, rates).state
+
+  it('closes a losing robot position and opens the opposite side at the same size', () => {
+    const opened = openRobotLong()
+    const { closed, state } = markToMarket(opened, { ...rates, 'EUR/USD': 1.099 })
+    expect(closed).toHaveLength(1)
+    expect(closed[0].closeReason).toBe('reverse')
+    expect(closed[0].pnl).toBeCloseTo(-1, 5) // (1.099 − 1.1) × 1000 × 1
+    // The flip keeps one position, now short, same size, same strategy.
+    expect(state.positions).toHaveLength(1)
+    const p = state.positions[0]
+    expect(p.side).toBe('short')
+    expect(p.units).toBe(1000)
+    expect(p.strategy).toBe('MA')
+    expect(p.entryPrice).toBeCloseTo(1.099, 6)
+    // Same risk geometry as the original leg: 20-pip stop, 2R target.
+    expect(p.stopPrice).toBeCloseTo(1.101, 6) // 1.099 + 20 pips
+    expect(p.takeProfitPrice).toBeCloseTo(1.095, 6) // 1.099 − 40 pips
+  })
+
+  it('does nothing when auto-reverse is off', () => {
+    const acc = createAccount(10_000)
+    acc.risk.autoTrade = true // running, but the rule is not activated
+    const opened = openRobotLong(acc)
+    const { closed, state } = markToMarket(opened, { ...rates, 'EUR/USD': 1.099 })
+    expect(closed).toHaveLength(0)
+    expect(state.positions).toHaveLength(1)
+    expect(state.positions[0].side).toBe('long')
+  })
+
+  it('does nothing while the robot is not running (autorun only)', () => {
+    const acc = createAccount(10_000)
+    acc.risk.autoReverse = true // activated but the robot is paused
+    acc.risk.reverseTriggerPips = 10
+    const opened = openRobotLong(acc)
+    const { closed, state } = markToMarket(opened, { ...rates, 'EUR/USD': 1.099 })
+    expect(closed).toHaveLength(0)
+    expect(state.positions).toHaveLength(1)
+  })
+
+  it('never flips a manual position the user placed', () => {
+    const acc = armed()
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
+      strategy: 'manual',
+    }, rates)
+    const { closed, state } = markToMarket(opened, { ...rates, 'EUR/USD': 1.099 })
+    expect(closed).toHaveLength(0)
+    expect(state.positions).toHaveLength(1)
+    expect(state.positions[0].side).toBe('long')
+  })
+
+  it('stays put below the trigger — a 5-pip dip does not flip', () => {
+    const opened = openRobotLong()
+    const { closed, state } = markToMarket(opened, { ...rates, 'EUR/USD': 1.1005 })
+    expect(closed).toHaveLength(0)
+    expect(state.positions).toHaveLength(1)
+    expect(state.positions[0].side).toBe('long')
+  })
+
+  it('lets a real stop-loss close win before the reversal fires', () => {
+    const opened = openRobotLong()
+    // 1.0975 is past BOTH the 10-pip trigger and the 20-pip stop — the stop
+    // close must win, so the position closes without flipping.
+    const { closed, state } = markToMarket(opened, { ...rates, 'EUR/USD': 1.0975 })
+    expect(closed).toHaveLength(1)
+    expect(closed[0].closeReason).toBe('stop_loss')
+    expect(state.positions).toHaveLength(0)
+  })
+
+  it('flattens the loser when the account risk cap blocks the reverse open', () => {
+    const acc = armed()
+    const { state: opened } = openPosition(acc, {
+      symbol: 'EUR/USD', side: 'long', entryPrice: 1.1, stopPips: 20, takeProfitPips: 40, units: 1000,
+      strategy: 'MA',
+    }, rates)
+    const second = openPosition(opened, {
+      symbol: 'GBP/USD', side: 'short', entryPrice: 1.27, stopPips: 20, takeProfitPips: 40, units: 1000,
+      strategy: 'MA',
+    }, rates)
+    expect(second.error).toBeNull()
+    // Two positions open, but the account cap is tightened to 1 — the flip
+    // cannot re-enter, so the loser is flattened instead.
+    const atCap = { ...second.state, risk: { ...second.state.risk, maxOpenPositions: 1 } }
+    const { closed, state } = markToMarket(atCap, { ...rates, 'EUR/USD': 1.099 })
+    expect(closed).toHaveLength(1)
+    expect(closed[0].closeReason).toBe('reverse')
+    expect(state.positions).toHaveLength(1) // only the GBP/USD leg remains
+  })
+
+  it('autoReversePositions is a no-op on a clean account', () => {
+    const acc = armed()
+    const res = autoReversePositions(acc, rates)
+    expect(res.state).toBe(acc)
+    expect(res.reversed).toHaveLength(0)
   })
 })

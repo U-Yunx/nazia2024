@@ -454,7 +454,7 @@ export function Configuration() {
                 onChange={(e) => setMaxPerPair(Math.max(1, Math.round(Number(e.target.value))))}
               />
               <Input
-                label="Max open trades (whole robot)"
+                label="Max open positions (whole robot)"
                 type="number"
                 min={0}
                 step={1}
@@ -533,8 +533,9 @@ export function Configuration() {
             {prefs.maxOpenTrades === 0 && (
               <p className="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
                 <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />
-                Set to 0 for unlimited open trades — the robot may open as many positions as signals qualify,
-                still bounded by the per-pair cap and your risk settings.
+                Set to 0 for unlimited open positions — the robot may open as many as signals qualify,
+                still bounded by the per-pair cap and your risk settings (the Risk panel's account-wide
+                cap applies on top — the lower number wins).
               </p>
             )}
             {prefs.tradeMode === 'concurrent' && prefs.maxOpenTrades > 0 && prefs.maxPerPair > prefs.maxOpenTrades && (
