@@ -15,8 +15,8 @@ import type {
   RobotCycleInput,
   Side,
 } from './types'
-import { DEFAULT_REVERSE_TRIGGER_PIPS, DEFAULT_RISK, PROFIT_PROBABILITY_THRESHOLD } from './types'
-import { consecutiveLosses, perTradeTargetUsd, pnlUsd, pipSize, stopTakePrices } from './risk'
+import { DEFAULT_HEDGE_TRIGGER_PIPS, DEFAULT_REVERSE_TRIGGER_PIPS, DEFAULT_RISK, PROFIT_PROBABILITY_THRESHOLD } from './types'
+import { consecutiveLosses, effectiveRiskPct, perTradeTargetUsd, pipValueUsd, pnlUsd, pipSize, stopTakePrices, suggestPositionUnits } from './risk'
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 
@@ -507,11 +507,108 @@ export function autoReversePositions(
   return next === state ? { state, reversed: [] } : { state: next, reversed }
 }
 
+/**
+ * Hedge on loss ("open the opposite trade") — the robot's counterweight rule.
+ *
+ * While the robot is RUNNING with `risk.hedgeEnabled` activated, any
+ * strategy-tagged position that is down `risk.hedgeTriggerPips` pips from its
+ * entry gets an OPPOSITE-direction position opened ALONGSIDE it — the loser
+ * STAYS open (unlike auto-reverse, which flattens it first). The hedge is
+ * sized risk-based: `effectiveRiskPct` of current equity against its own stop
+ * distance (the loser's stop distance, or the account default), so a bigger
+ * account opens a bigger counterweight. It runs automatically (autorun) on
+ * every mark-to-market pass of the platform's own ledgers (paper / managed /
+ * background runner).
+ *
+ * Safety rails, all deliberate:
+ *  - Only robot-opened (strategy-tagged) positions are ever hedged — manual
+ *    trades the user placed are never touched.
+ *  - It only runs while `autoTrade` is on: a paused robot hedges nothing.
+ *  - The hedge DELIBERATELY BYPASSES the per-pair cap (`maxPerPair: Infinity`)
+ *    — this is the whole point: a sequential pair capped at 1 can still hold a
+ *    2-leg long/short book. Every OTHER risk gate still applies: the account
+ *    global max-open-positions cap, the daily loss limit and the
+ *    consecutive-loss breaker all veto the hedge open like any other entry.
+ *  - It never stacks a third leg: a hedge only fires when NO opposite position
+ *    exists on the pair yet, so a hedged pair is bounded at 2 legs and the
+ *    hedge can never hedge itself (its opposite leg is already open).
+ */
+export function hedgePositions(
+  state: AccountState,
+  rates: RatesMap,
+): { state: AccountState; hedged: Position[] } {
+  const trigger = state.risk.hedgeEnabled
+    ? state.risk.hedgeTriggerPips ?? DEFAULT_HEDGE_TRIGGER_PIPS
+    : 0
+  if (!(trigger > 0) || !state.risk.autoTrade || state.positions.length === 0) {
+    return { state, hedged: [] }
+  }
+
+  let next = state
+  const hedged: Position[] = []
+  for (const p of [...next.positions]) {
+    // The robot only ever hedges ITS OWN trades — strategy-tagged, never manual.
+    if (!p.strategy || p.strategy === 'manual') continue
+    const cur = rates[p.symbol]
+    if (cur == null) continue
+    const pip = pipSize(p.symbol)
+    const adversePips = (p.side === 'long' ? p.entryPrice - cur : cur - p.entryPrice) / pip
+    if (adversePips < trigger) continue
+
+    // One hedge per pair — skip when an opposite leg is already open. This is
+    // what keeps the book bounded at two legs: the hedge itself has its
+    // counterpart open, so it can never spawn another hedge.
+    const oppositeOpen = next.positions.some((x) => x.symbol === p.symbol && x.side !== p.side)
+    if (oppositeOpen) continue
+
+    // Risk-based sizing against the hedge's OWN stop: same stop distance as
+    // the losing leg (its plan, its geometry), falling back to the account
+    // default when the leg has no usable stop.
+    const stopDist = Math.abs(p.entryPrice - p.stopPrice) / pip
+    const stopPips = Math.max(1, stopDist || state.risk.defaultStopPips)
+    const pipValue = pipValueUsd(p.symbol, rates)
+    if (pipValue == null) continue
+    const units = suggestPositionUnits({
+      equity: equity(next, rates),
+      riskPct: effectiveRiskPct(next),
+      stopPips,
+      pipValue,
+    })
+    if (units <= 0) continue
+
+    const side: Side = p.side === 'long' ? 'short' : 'long'
+    const openRes = openPosition(
+      next,
+      {
+        symbol: p.symbol,
+        side,
+        entryPrice: cur,
+        stopPips,
+        takeProfitPips: Math.max(0, Math.round(stopPips * state.risk.takeProfitRatio)),
+        units,
+        strategy: p.strategy,
+      },
+      rates,
+      // The per-pair cap is intentionally lifted for the hedge — every other
+      // risk gate (global cap, daily loss, circuit breaker) still applies.
+      { maxPerPair: Number.POSITIVE_INFINITY },
+    )
+    // A blocked hedge open (global cap reached, daily loss limit hit…) simply
+    // leaves the loser un-hedged this pass — the account is never levered past
+    // its limits by the counterweight rule.
+    if (openRes.error) continue
+    next = openRes.state
+    const opened = next.positions.find((x) => x.symbol === p.symbol && x.side === side)
+    if (opened) hedged.push(opened)
+  }
+  return next === state ? { state, hedged: [] } : { state: next, hedged }
+}
+
 /** Check SL/TP against the latest rates and close anything that was hit. */
 export function markToMarket(
   state: AccountState,
   rates: RatesMap,
-): { state: AccountState; closed: ClosedTrade[] } {
+): { state: AccountState; closed: ClosedTrade[]; hedged?: Position[] } {
   let next = state
   const closed: ClosedTrade[] = []
   // Emergency margin closeout: the moment balance OR equity reaches the
@@ -664,7 +761,23 @@ export function markToMarket(
     }
   }
 
-  return { state: next, closed }
+  // Hedge on loss ("open the opposite trade") — after auto-reverse has had its
+  // say, a robot position that is still bleeding past the trigger pips gets an
+  // OPPOSITE leg opened ALONGSIDE it (the loser stays open), sized risk-based
+  // and bypassing the per-pair cap. Runs AFTER the normal rules and
+  // auto-reverse so a legit stop / target / pull-back / drawdown close always
+  // wins first, and only on the platform's own ledgers (the live broker
+  // adapters refresh the mirror instead of running the engine).
+  const hedged: Position[] = []
+  if (state.risk.hedgeEnabled) {
+    const hg = hedgePositions(next, rates)
+    if (hg.state !== next) {
+      hedged.push(...hg.hedged)
+      next = hg.state
+    }
+  }
+
+  return { state: next, closed, ...(hedged.length > 0 ? { hedged } : {}) }
 }
 
 /** Move trailing stops toward the best price so profits are locked in. */

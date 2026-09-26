@@ -21,6 +21,14 @@ export type AnalystVerdict =
   | 'cut_loss'
   | 'reduce_risk'
   | 'stand_pat'
+  /**
+   * Entry-gate verdicts: returned only when the Deep Analyst is asked to vet a
+   * NEW trade before the robot opens it (the `entry` mode of the Edge
+   * Function). 'enter' = the AI approves opening the trade now; 'skip' = stand
+   * the trade aside (the robot's strict AI veto).
+   */
+  | 'enter'
+  | 'skip'
 
 export interface AnalystLevel {
   label: string
@@ -100,6 +108,39 @@ export interface DeepAnalystContext {
     partialClosePct: number
     partialTpRatio: number
   }
+  strategyLabel?: string
+}
+
+/**
+ * Fact sheet for the ENTRY-GATE mode of the Deep Analyst Edge Function: the
+ * robot is about to open a NEW trade and needs a disciplined enter / skip
+ * verdict. `entry` carries the planned trade plus the signal-strength
+ * ingredients the robot already computed (score, momentum, RSI, trend,
+ * volatility) so the AI — and the deterministic fallback — judge the same
+ * setup the engine is about to act on.
+ */
+export interface DeepAnalystEntryContext {
+  entry: {
+    symbol: string
+    side: Side
+    price: number
+    stopPips: number
+    takeProfitPips: number
+    units: number
+    strategy?: string
+    score?: number
+    momentum?: number
+    rsi?: number
+    trend?: number
+    volatilityPct?: number
+  }
+  market: {
+    mark: number
+    atrPct?: number | null
+    trendPct?: number | null
+    marketOpen?: boolean
+  }
+  account: DeepAnalystContext['account']
   strategyLabel?: string
 }
 

@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Check, RotateCcw, ShieldAlert } from 'lucide-react'
 import type { RiskConfig } from '../../lib/trading/types'
-import { DEFAULT_REVERSE_TRIGGER_PIPS, DEFAULT_RISK } from '../../lib/trading/types'
+import { DEFAULT_HEDGE_TRIGGER_PIPS, DEFAULT_REVERSE_TRIGGER_PIPS, DEFAULT_RISK } from '../../lib/trading/types'
 import { cn } from '../../lib/cn'
 import { Button, Input } from '../ui'
 import { CollapsibleCard } from './CollapsibleCard'
@@ -23,6 +23,9 @@ interface Props {
   isLive: boolean
   /** Superadmins trade unrestricted — the usual UI safety clamps are lifted. */
   unrestricted?: boolean
+  /** Whether the trader is signed in — when false and the Deep Analyst gate is
+   *  on, the panel warns that the strict gate blocks every robot entry. */
+  signedIn?: boolean
 }
 
 function Field({
@@ -55,7 +58,7 @@ function Field({
   )
 }
 
-export function RiskPanel({ risk, onChange, onReset, isLive, unrestricted = false }: Props) {
+export function RiskPanel({ risk, onChange, onReset, isLive, unrestricted = false, signedIn }: Props) {
   // Local draft: the robot keeps enforcing `risk` until the user hits Apply.
   const [draft, setDraft] = useState<RiskConfig>(risk)
   const [dirty, setDirty] = useState(false)
@@ -317,6 +320,80 @@ export function RiskPanel({ risk, onChange, onReset, isLive, unrestricted = fals
                   sub-pip wiggle can't churn the book.
                 </div>
               </div>
+            )}
+          </div>
+
+          {/* Hedge on loss ("open the opposite trade") — unlike auto-reverse the
+              losing position STAYS open and the robot opens the opposite
+              direction ALONGSIDE it, sized risk-based, bypassing the per-pair
+              cap (a sequential pair capped at 1 can still hold a 2-leg book). */}
+          <div className="col-span-2 rounded-lg border border-indigo/30 bg-indigo/5 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold text-foreground">Hedge on loss (open opposite trade)</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  When a robot position sinks the trigger distance from its entry, the robot opens the OPPOSITE
+                  direction ALONGSIDE it — the loser stays open, sized risk-based. Works even on pairs capped at
+                  1 position (the hedge deliberately bypasses the per-pair cap). Runs automatically while the
+                  robot is active (paper &amp; managed accounts). Manual trades are never touched.
+                </p>
+              </div>
+              <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  checked={draft.hedgeEnabled === true}
+                  onChange={(e) => patch({ hedgeEnabled: e.target.checked })}
+                  className="h-4 w-4 cursor-pointer rounded border-border bg-background accent-[var(--color-accent)]"
+                />
+                On
+              </label>
+            </div>
+            {draft.hedgeEnabled === true && (
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <Field
+                  label="Hedge after"
+                  value={draft.hedgeTriggerPips ?? DEFAULT_HEDGE_TRIGGER_PIPS}
+                  onChange={(v) => patch({ hedgeTriggerPips: Math.max(1, v) })}
+                  min={1}
+                  step={1}
+                  suffix="pips down"
+                />
+                <div className="flex items-end pb-1 text-[11px] text-muted-foreground">
+                  The hedge is sized risk-based (% of equity against its own stop) and only opens once per pair —
+                  an existing opposite position blocks another hedge, so the book never stacks a third leg.
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Deep Analyst entry gate — the robot's strict AI veto. Every entry
+              is vetted by the Deep Analyst before it opens; a 'skip' verdict
+              stands the trade aside, and while signed out the robot opens
+              NOTHING until the trader signs in (strict mode). */}
+          <div className="col-span-2 rounded-lg border border-violet/30 bg-violet/5 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold text-foreground">Deep Analyst entry gate (AI veto)</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  Every robot trade is analysed by the Deep Analyst before it opens — if the AI flags the setup,
+                  the robot stands aside. STRICT: while you're signed out the robot opens no trades at all until
+                  you sign in.
+                </p>
+              </div>
+              <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  checked={draft.deepAnalystGate === true}
+                  onChange={(e) => patch({ deepAnalystGate: e.target.checked })}
+                  className="h-4 w-4 cursor-pointer rounded border-border bg-background accent-[var(--color-accent)]"
+                />
+                On
+              </label>
+            </div>
+            {draft.deepAnalystGate === true && signedIn === false && (
+              <p className="mt-3 rounded-lg border border-amber/30 bg-amber/10 px-3 py-2 text-[11px] text-amber">
+                You're signed out — with the strict gate on, the robot will not open any trades until you sign in.
+              </p>
             )}
           </div>
 

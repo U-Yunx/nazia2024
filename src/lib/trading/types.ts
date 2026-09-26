@@ -309,11 +309,41 @@ export interface RiskConfig {
   autoReverse?: boolean
   /** Adverse pips from entry that triggers an auto-reverse (off when ≤ 0). */
   reverseTriggerPips?: number
+  /**
+   * Hedge on loss ("open the opposite trade"). When activated, a
+   * strategy-tagged position that has moved `hedgeTriggerPips` against its
+   * entry gets an OPPOSITE-direction position opened ALONGSIDE it — the loser
+   * stays open (unlike auto-reverse, which closes it). The hedge is sized
+   * risk-based (% of equity against its own stop distance), deliberately
+   * BYPASSES the per-pair cap (so a sequential pair capped at 1 can still
+   * hold a 2-leg book), and never stacks a third leg: it only fires when no
+   * opposite position exists on the pair yet. Every other risk gate (global
+   * max-open-positions, daily loss limit, circuit breaker) still applies.
+   * Runs automatically while the robot is running (`autoTrade`) and never
+   * touches manual positions. Off by default. Optional so saved risk configs
+   * written before this feature load unchanged.
+   */
+  hedgeEnabled?: boolean
+  /** Adverse pips from entry that opens the opposite (hedge) leg (off ≤ 0). */
+  hedgeTriggerPips?: number
+  /**
+   * Deep Analyst entry gate ("auto deep analyst for the robot"). When
+   * activated, every robot entry is vetted by the Deep Analyst Edge Function
+   * before it opens — a 'skip' verdict stands the trade aside. STRICT mode:
+   * when the trader is not signed in (AI unavailable), the robot opens NO
+   * trades at all until they sign in. Off by default. Optional so saved risk
+   * configs written before this feature load unchanged.
+   */
+  deepAnalystGate?: boolean
 }
 
 /** Default adverse pips from entry that triggers an auto-reverse when the
  *  account does not carry its own `reverseTriggerPips` value yet. */
 export const DEFAULT_REVERSE_TRIGGER_PIPS = 15
+
+/** Default adverse pips from entry that opens the opposite (hedge) leg when
+ *  the account does not carry its own `hedgeTriggerPips` value yet. */
+export const DEFAULT_HEDGE_TRIGGER_PIPS = 30
 
 export const DEFAULT_RISK: RiskConfig = {
   kind: 'standard',
@@ -353,6 +383,13 @@ export const DEFAULT_RISK: RiskConfig = {
   // explicit activation.
   autoReverse: false,
   reverseTriggerPips: DEFAULT_REVERSE_TRIGGER_PIPS,
+  // Hedge-on-loss is off by default — opening a second leg on a pair that is
+  // capped at 1 position is aggressive, so it is always an explicit
+  // activation. The Deep Analyst entry gate is off too; when enabled it is a
+  // strict AI veto (no opens until the trader signs in).
+  hedgeEnabled: false,
+  hedgeTriggerPips: DEFAULT_HEDGE_TRIGGER_PIPS,
+  deepAnalystGate: false,
 }
 
 /** The full persisted state of a paper account. */

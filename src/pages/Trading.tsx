@@ -36,6 +36,7 @@ import { manualTargets } from '../lib/trading/manualMethod'
 import { fetchTimeSeries, useQuotes } from '../hooks/useMarketData'
 import { useSelectedStrategy } from '../hooks/useSelectedStrategy'
 import { isAdminRole, isSuperAdminRole } from '../lib/roles'
+import { gateRobotEntry } from '../lib/trading/aiEntryGate'
 import { useAuth } from '../hooks/useAuth'
 import { useAccess, useAddonPurchases, useBrokers, useProfile, useSubscriptions } from '../hooks/usePlatform'
 import { acceptRisk, hasActiveCopyTrading } from '../lib/platform'
@@ -1405,10 +1406,33 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
             maxPerPair: robotCaps.maxPerPair,
             maxOpenTrades: robotCaps.maxOpenTrades,
           }
-          const { events } = await runCycle(cycleInputs, config)
-          if (events.length) {
-            pushLog(events)
-            noteRun()
+          // Deep Analyst entry gate — the robot's strict AI veto. When the gate
+          // is on, every entry is vetted by the Deep Analyst before it opens;
+          // when the trader is signed out, the robot opens NOTHING until they
+          // sign in (strict mode). A vetoed pair is logged, not silently
+          // dropped.
+          let inputsToRun = cycleInputs
+          if (account.risk.deepAnalystGate) {
+            if (!user) {
+              pushLog(['Deep Analyst entry gate is on — sign in to unlock robot trading (strict gate).'])
+              inputsToRun = []
+            } else {
+              const gated = await Promise.all(
+                cycleInputs.map((input) => gateRobotEntry(input, account).then((v) => ({ input, v }))),
+              )
+              inputsToRun = []
+              for (const { input, v } of gated) {
+                if (v.allowed) inputsToRun.push(input)
+                else pushLog([`${input.symbol}: ${v.reason}`])
+              }
+            }
+          }
+          if (inputsToRun.length > 0) {
+            const { events } = await runCycle(inputsToRun, config)
+            if (events.length) {
+              pushLog(events)
+              noteRun()
+            }
           }
         }
       } finally {
