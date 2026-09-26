@@ -1,46 +1,191 @@
+/* ANA24 — trading platform theme.
+ *
+ * Dark-first adaptation of design-system/MASTER.md: the generator returned a
+ * light palette, but the stated user preference is a dark fintech terminal, so
+ * the semantic tokens below keep the generated indigo/violet/cyan brand family
+ * while inverting surfaces to deep navy-indigo. Deviation logged in MASTER.md.
+ *
+ * The font @import MUST stay above `@import "tailwindcss"` — Tailwind inlines
+ * its own import, so anything after it is dropped by the bundler.
+ */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 @import "tailwindcss";
 
-/* THESE ARE PLACEHOLDER FOR EMPTY APP, FEEL FREE TO REPLACE WITH DESIRED DESIGN */
-
 @theme {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --color-text-muted: var(--text-muted);
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-heading: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* Brand — indigo → violet → cyan (gradients use primary→secondary→accent). */
+  --color-primary: oklch(0.56 0.205 277.12);
+  --color-on-primary: oklch(1 0 0);
+  --color-secondary: oklch(0.6801 0.1583 276.93);
+  --color-accent: oklch(0.78 0.13 197);
+  --color-cyan: oklch(0.82 0.13 195);
+  --color-pink: oklch(0.73 0.18 350);
+
+  /* Surfaces — deep navy-indigo, dark-first. */
+  --color-background: oklch(0.185 0.028 277);
+  --color-foreground: oklch(0.96 0.012 277);
+  --color-muted: oklch(0.27 0.032 277);
+  --color-muted-foreground: oklch(0.735 0.03 277);
+  --color-border: oklch(0.33 0.04 277);
+
+  /* Status */
+  --color-destructive: oklch(0.63 0.2 25);
+  --color-ring: oklch(0.62 0.19 277);
+
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --animate-shimmer: shimmer 1.6s linear infinite;
+
+  @keyframes shimmer {
+    from { background-position: -200% 0; }
+    to { background-position: 200% 0; }
+  }
 }
 
-:root {
-  --text-muted: oklch(0.554 0.046 257.417);
-  --dotgrid-surface: oklch(0.97 0 0);
-  --dotgrid-glow-strong: oklch(0.45 0.05 250 / 12%);
-  --dotgrid-glow-mid: oklch(0.45 0.05 250 / 7%);
-  --dotgrid-glow-soft: oklch(0.45 0.05 250 / 4%);
-  --dotgrid-glow-faint: oklch(0.45 0.05 250 / 2%);
-  --dotgrid-dot: oklch(0 0 0 / 20%);
-}
-
+/* Deeper surfaces when the host iframe asks for dark explicitly. */
 .dark {
-  --text-muted: oklch(0.9015 0.0154 241.79);
-  --dotgrid-surface: oklch(0.1638 0 0);
-  --dotgrid-glow-strong: oklch(0.41 0.14 250 / 45%);
-  --dotgrid-glow-mid: oklch(0.41 0.14 250 / 22%);
-  --dotgrid-glow-soft: oklch(0.41 0.14 250 / 10%);
-  --dotgrid-glow-faint: oklch(0.41 0.14 250 / 4%);
-  --dotgrid-dot: oklch(0.41 0.14 250 / 4%);
+  --color-background: oklch(0.17 0.026 277);
+  --color-muted: oklch(0.25 0.03 277);
 }
 
-.bg-dotgrid-glow {
-  background-color: var(--dotgrid-surface);
-  background-image:
-    radial-gradient(
-      circle at 50% 118%,
-      var(--dotgrid-glow-strong) 0%,
-      var(--dotgrid-glow-mid) 22%,
-      var(--dotgrid-glow-soft) 32%,
-      var(--dotgrid-glow-faint) 38%,
-      transparent 45%
-    ),
-    radial-gradient(var(--dotgrid-dot) 1px, transparent 1px);
-  background-size:
-    100% 100%,
-    16px 16px;
-  background-position: center, center;
+html {
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Soft radial base so dense data areas still have depth behind them. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -20;
+  pointer-events: none;
+  background-image: radial-gradient(
+    120% 80% at 50% -10%,
+    color-mix(in oklab, var(--color-primary) 22%, transparent) 0%,
+    color-mix(in oklab, var(--color-secondary) 10%, transparent) 38%,
+    transparent 70%
+  );
+}
+
+/* ------------------------------- Custom utilities -------------------------
+ * Deliberately free of border/radius declarations: components pair these with
+ * Tailwind's `border-*`/`rounded-*` utilities, and unlayered CSS here would
+ * otherwise win over the utilities layer and silently override them.
+ * ------------------------------------------------------------------------ */
+
+/* Base elevated surface: hairline top highlight + light violet wash. */
+.surface {
+  background-color: color-mix(in oklab, var(--color-background) 88%, var(--color-muted) 12%);
+  background-image: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--color-secondary) 8%, transparent),
+    transparent 62%
+  );
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.04),
+    0 1px 2px rgb(0 0 0 / 0.3);
+}
+
+/* Premium card: stronger wash, deeper shadow, subtle blur. */
+.surface-premium {
+  background-color: color-mix(in oklab, var(--color-background) 82%, var(--color-muted) 18%);
+  background-image: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--color-secondary) 11%, transparent),
+    transparent 58%
+  );
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    0 18px 40px -24px rgb(0 0 0 / 0.75);
+  backdrop-filter: blur(6px);
+}
+
+/* Lift for interactive surfaces — pointer devices only, so touch never sticks. */
+.surface-hover {
+  transition:
+    transform 200ms var(--ease-out),
+    box-shadow 200ms var(--ease-out);
+}
+
+/* Pressable affordance: reacts on hover, gives scale feedback on press. */
+.btn-lift {
+  transition:
+    transform 150ms var(--ease-out),
+    box-shadow 200ms var(--ease-out),
+    background-color 200ms var(--ease-out),
+    border-color 200ms var(--ease-out);
+}
+
+.btn-lift:active {
+  transform: scale(0.97);
+}
+
+@media (hover: hover) {
+  .surface-hover:hover {
+    transform: translateY(-2px);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.07),
+      0 24px 48px -24px rgb(0 0 0 / 0.8);
+  }
+
+  .btn-lift:hover {
+    transform: translateY(-1px);
+  }
+}
+
+/* Accent glow — used on the brand mark and highlighted CTAs. */
+.shadow-glow {
+  box-shadow:
+    0 0 24px -6px color-mix(in oklab, var(--color-accent) 65%, transparent),
+    0 10px 30px -16px color-mix(in oklab, var(--color-primary) 85%, transparent);
+}
+
+/* Gradient rule under page headers. */
+.hairline {
+  height: 1px;
+  background-image: linear-gradient(
+    90deg,
+    var(--color-primary),
+    var(--color-accent),
+    transparent
+  );
+}
+
+/* Skeleton loading — animated sweep for content that has not arrived yet. */
+.shimmer {
+  background-color: color-mix(in oklab, var(--color-muted) 70%, transparent);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in oklab, var(--color-foreground) 8%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: var(--animate-shimmer);
+}
+
+/* Respect users who ask for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  .surface-hover,
+  .btn-lift {
+    transition: none;
+  }
+
+  .surface-hover:hover,
+  .btn-lift:hover,
+  .btn-lift:active {
+    transform: none;
+  }
+
+  .shimmer {
+    animation: none;
+  }
 }
