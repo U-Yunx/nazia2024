@@ -6,24 +6,15 @@
   "scripts": {
     "dev": "vite optimize && vite",
     "build": "vite build",
-    "test": "vitest run",
-    "preview": "vite preview",
-    "og": "node scripts/og/render-og.mjs"
+    "preview": "vite preview"
   },
   "dependencies": {
-    "@expo-google-fonts/inter": "^0.4.2",
-    "@supabase/supabase-js": "^2.117.2",
     "@tailwindcss/vite": "^4.1.18",
-    "lightweight-charts": "^5.2.1",
-    "lucide-react": "^1.48.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^7.18.4",
-    "sharp": "^0.35.4",
     "tailwindcss": "^4.1.18"
   },
   "devDependencies": {
-    "@playwright/cli": "^0.1.21",
     "@types/node": "^24.10.1",
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.1",
@@ -31,7 +22,6 @@
     "globals": "^16.5.0",
     "typescript": "~5.9.3",
     "vite": "^7.2.4",
-    "vite-plugin-svgr": "^4.5.0",
-    "vitest": "^4.1.11"
+    "vite-plugin-svgr": "^4.5.0"
   }
 }
