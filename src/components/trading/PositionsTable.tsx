@@ -5,7 +5,8 @@
  * robot's trade mode and per-pair cap, and the card header shows the global
  * cap. Empty state explains that nothing is open yet and how to open a trade.
  */
-import { X } from 'lucide-react'
+import { Fragment, useState } from 'react'
+import { Sparkles, X } from 'lucide-react'
 import type { AccountState, Position, RatesMap, TradeMode } from '../../lib/trading/types'
 import { MIN_TRADE_BALANCE_USD, ZIG_ZAG_MIN_PER_PAIR } from '../../lib/trading/engine'
 import { pnlUsd } from '../../lib/trading/risk'
@@ -13,6 +14,7 @@ import { formatDateTime, formatPct, formatPrice, formatUnits, formatUsd } from '
 import { cn } from '../../lib/cn'
 import { Badge, Button, EmptyState } from '../ui'
 import { CollapsibleCard } from './CollapsibleCard'
+import { DeepAnalystPanel } from './DeepAnalystPanel'
 
 export interface RobotCaps {
   tradeMode: TradeMode
@@ -44,6 +46,8 @@ export function PositionsTable({
   robotCaps?: RobotCaps
 }) {
   const { positions } = account
+  // Which position row has its Deep Analyst panel expanded (one at a time).
+  const [expandedId, setExpandedId] = useState<string | null>(null)
   // Pull-back lock status for the rows: when armed (> $1 profit reached), show
   // the peak and the $ level it will close at (peak × give-back). Mirrors the
   // engine rule exactly so the UI tells the trader what the robot will do.
@@ -146,8 +150,10 @@ export function PositionsTable({
                         {rows.map((p) => {
                           const mark = rates[p.symbol] ?? p.entryPrice
                           const pnl = pnlUsd(p.side, p.entryPrice, mark, p.units, p.symbol, rates)
+                          const expanded = expandedId === p.id
                           return (
-                            <tr key={p.id} className="border-b border-border/60 last:border-b-0">
+                            <Fragment key={p.id}>
+                            <tr className={cn('border-b border-border/60 last:border-b-0', expanded && 'bg-secondary/10')}>
                               <td className="whitespace-nowrap py-3 pr-4">
                                 <span
                                   className={cn(
@@ -201,19 +207,51 @@ export function PositionsTable({
                                 {formatDateTime(p.entryTime)}
                               </td>
                               <td className="whitespace-nowrap py-3 text-right">
-                                <Button
-                                  variant="danger"
-                                  size="sm"
-                                  onClick={() => onClose(p.id)}
-                                  disabled={locked}
-                                  title={locked ? 'Trading is locked below $1 balance' : undefined}
-                                  aria-label={`Close ${p.symbol} position`}
-                                >
-                                  <X className="h-3.5 w-3.5" aria-hidden="true" />
-                                  Close
-                                </Button>
+                                <div className="flex items-center justify-end gap-1.5">
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setExpandedId(expanded ? null : p.id)}
+                                    aria-expanded={expanded}
+                                    aria-controls={`deep-analyst-${p.id}`}
+                                    title="Deep Analyst — AI management strategy for this position"
+                                    aria-label={`Deep Analyst for ${p.symbol} position`}
+                                  >
+                                    <Sparkles className={cn('h-3.5 w-3.5 transition-colors duration-150', expanded ? 'text-accent' : '')} aria-hidden="true" />
+                                    {expanded ? 'Close' : 'Analyst'}
+                                  </Button>
+                                  <Button
+                                    variant="danger"
+                                    size="sm"
+                                    onClick={() => onClose(p.id)}
+                                    disabled={locked}
+                                    title={locked ? 'Trading is locked below $1 balance' : undefined}
+                                    aria-label={`Close ${p.symbol} position`}
+                                  >
+                                    <X className="h-3.5 w-3.5" aria-hidden="true" />
+                                    Close
+                                  </Button>
+                                </div>
                               </td>
                             </tr>
+                            {expanded && (
+                              <tr>
+                                <td
+                                  id={`deep-analyst-${p.id}`}
+                                  colSpan={8}
+                                  className="border-b border-border/60 bg-secondary/10 px-3 pb-3 pt-1"
+                                >
+                                  <DeepAnalystPanel
+                                    position={p}
+                                    mark={mark}
+                                    account={account}
+                                    rates={rates}
+                                    strategyLabel={p.strategy}
+                                  />
+                                </td>
+                              </tr>
+                            )}
+                            </Fragment>
                           )
                         })}
                       </tbody>
