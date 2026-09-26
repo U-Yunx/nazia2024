@@ -204,9 +204,42 @@ async function resolveUserId(req: Request): Promise<string | null> {
   return null;
 }
 
-/** True when the caller is allowed to use the (billable) AI path. */
-async function isAiAuthorized(req: Request): Promise<boolean> {
-  return (await resolveUserId(req)) !== null;
+/**
+ * Records a completed analysis for a signed-in user (fire-and-forget — a
+ * failing insert never breaks the response). Anonymous callers are skipped.
+ */
+async function persistRun(
+  req: Request,
+  userId: string | null,
+  ctx: DeepAnalystRequest,
+  strategy: AnalystStrategy,
+  engine: string,
+  model: string | null,
+): Promise<void> {
+  if (!userId || !SUPABASE_URL || !ANON_KEY) return;
+  try {
+    const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
+    if (!token) return;
+    // User-scoped client: RLS on deep_analyst_runs ties every row to its owner.
+    const supabase = createClient(SUPABASE_URL, ANON_KEY, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    });
+    const { error } = await supabase.from("deep_analyst_runs").insert({
+      user_id: userId,
+      symbol: str(ctx.position?.symbol),
+      side: ctx.position?.side === "short" ? "short" : "long",
+      entry_price: ctx.position?.entryPrice ?? null,
+      mark: ctx.market?.mark ?? null,
+      engine,
+      ai_used: engine !== "deterministic",
+      model: model ?? null,
+      request: ctx,
+      strategy,
+    });
+    if (error) console.error("deep-analyst persistRun error", error);
+  } catch (err) {
+    console.error("deep-analyst persistRun", err);
+  }
 }
 
 // --- Strategy normalization ---------------------------------------------------
@@ -533,7 +566,8 @@ Deno.serve(async (req: Request) => {
   try {
     // Anyone with a valid project key may use the (free) deterministic engine;
     // only real signed-in users unlock the (billable) AI path.
-    const aiAllowed = await isAiAuthorized(req);
+    const userId = await resolveUserId(req);
+    const aiAllowed = userId !== null;
     let body: Record<string, unknown> = {};
     try {
       body = (await req.json()) as Record<string, unknown>;
@@ -549,6 +583,7 @@ Deno.serve(async (req: Request) => {
     // No key configured (or anonymous caller): deterministic engine, always.
     if (!keyConfigured || !aiAllowed) {
       const strategy = deterministicStrategy(ctx);
+      await persistRun(req, userId, ctx, strategy, "deterministic", null);
       return json({
         ok: true,
         engine: "deterministic",
@@ -563,11 +598,13 @@ Deno.serve(async (req: Request) => {
 
     try {
       const { engine, model, strategy } = await callLlm(buildPrompt(ctx));
+      await persistRun(req, userId, ctx, strategy, engine, model);
       return json({ ok: true, engine, model, strategy });
     } catch (err) {
       console.error("deep-analyst LLM error", err);
       // LLM down → serve the deterministic engine rather than a dead button.
       const strategy = deterministicStrategy(ctx);
+      await persistRun(req, userId, ctx, strategy, "deterministic", null);
       return json({
         ok: true,
         engine: "deterministic",

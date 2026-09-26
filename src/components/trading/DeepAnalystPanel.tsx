@@ -13,9 +13,11 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { BrainCircuit, Info, RefreshCw, Sparkles, TriangleAlert, X } from 'lucide-react'
+import { BrainCircuit, Clock, Info, RefreshCw, Sparkles, TriangleAlert, X } from 'lucide-react'
 import { fn } from '../../lib/functions'
 import { buildDeepAnalystContext, type AnalystStrategy, type DeepAnalystResponse } from '../../lib/deepAnalyst'
+import { engineLabel, fetchAnalystHistory, runToResponse, type AnalystRun } from '../../lib/deepAnalystHistory'
+import { isSupabaseConfigured, supabase } from '../../lib/supabase'
 import { useAuth } from '../../hooks/useAuth'
 import { fetchTimeSeries } from '../../hooks/useMarketData'
 import { formatPrice, formatUsd, timeAgo } from '../../lib/format'
@@ -62,6 +64,8 @@ export function DeepAnalystPanel({
 }) {
   const { user } = useAuth()
   const [state, setState] = useState<PanelState>({ phase: 'idle' })
+  // Past analyses for the signed-in user (null = not loaded yet).
+  const [history, setHistory] = useState<AnalystRun[] | null>(null)
   const pnl = pnlUsd(position.side, position.entryPrice, mark, position.units, position.symbol, rates)
   const mounted = useRef(true)
   useEffect(() => {
@@ -70,6 +74,22 @@ export function DeepAnalystPanel({
       mounted.current = false
     }
   }, [])
+
+  // Load the signed-in user's past analyses once. Offline/unconfigured →
+  // empty list, never an error.
+  useEffect(() => {
+    if (!user?.id || !isSupabaseConfigured) {
+      setHistory([])
+      return
+    }
+    let cancelled = false
+    void fetchAnalystHistory(supabase, 6).then((runs) => {
+      if (!cancelled) setHistory(runs)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [user?.id])
 
   const analyze = useCallback(async () => {
     if (state.phase === 'loading') return
@@ -186,6 +206,58 @@ export function DeepAnalystPanel({
 
       {state.phase === 'done' && meta && (
         <ResultView result={state.result} meta={meta} signedIn={!!user} onRefresh={() => void analyze()} />
+      )}
+
+      {user && (
+        <HistorySection
+          runs={history}
+          onSelect={(run) =>
+            setState({ phase: 'done', result: runToResponse(run), at: Date.parse(run.created_at) })
+          }
+        />
+      )}
+    </div>
+  )
+}
+
+function HistorySection({ runs, onSelect }: { runs: AnalystRun[] | null; onSelect: (run: AnalystRun) => void }) {
+  if (runs === null) return null
+  return (
+    <div className="mt-4 border-t border-border/60 pt-3">
+      <p className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+        <Clock className="h-3 w-3" aria-hidden="true" />
+        Recent analyses
+      </p>
+      {runs.length === 0 ? (
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          No past analyses yet — run your first one and it will be saved here for later review.
+        </p>
+      ) : (
+        <ul className="mt-1.5 space-y-1">
+          {runs.map((r) => {
+            const meta = VERDICT_META[r.strategy.verdict]
+            return (
+              <li key={r.id}>
+                <button
+                  type="button"
+                  onClick={() => onSelect(r)}
+                  className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg border border-border/60 bg-secondary/30 px-2.5 py-1.5 text-left text-xs transition-colors duration-150 hover:border-accent/40 hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  title={`View the ${r.symbol} analysis from ${timeAgo(r.created_at)}`}
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="font-semibold text-foreground">{r.symbol}</span>
+                    <span className="uppercase text-muted-foreground">{r.side}</span>
+                    <Badge className="border-border bg-muted text-muted-foreground">{engineLabel(r.engine)}</Badge>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <Badge className={cn('border', meta.className)}>{meta.label}</Badge>
+                    <span className="whitespace-nowrap text-muted-foreground">{timeAgo(r.created_at)}</span>
+                  </span>
+                </button>
+              </li>
+            )
+          })}
+        </ul>
       )}
     </div>
   )
