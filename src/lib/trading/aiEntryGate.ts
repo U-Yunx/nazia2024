@@ -108,7 +108,6 @@ export async function gateRobotEntry(
   account: AccountState,
 ): Promise<EntryGateVerdict> {
   const side: Side = input.signal === 'buy' ? 'long' : 'short'
-  const key = entryCacheKey(input.symbol, side)
 
   const hit = cachedEntryVerdict(input.symbol, side)
   if (hit) {

@@ -40,10 +40,12 @@ type AnalystVerdict =
   | "trail"
   | "cut_loss"
   | "reduce_risk"
-  | "stand_pat";
+  | "stand_pat"
+  | "enter"
+  | "skip";
 
 const VERDICTS: AnalystVerdict[] = [
-  "hold", "take_profit", "partial_take_profit", "trail", "cut_loss", "reduce_risk", "stand_pat",
+  "hold", "take_profit", "partial_take_profit", "trail", "cut_loss", "reduce_risk", "stand_pat", "enter", "skip",
 ];
 
 interface AnalystLevel {
@@ -64,6 +66,23 @@ interface AnalystStrategy {
 }
 
 interface DeepAnalystRequest {
+  /** ENTRY mode: the robot is vetting a PLANNED trade before it opens. The
+   *  analyst answers only 'enter' (open it) or 'skip' (stand aside — STRICT:
+   *  anything unclear or unavailable is a skip, never a pass). */
+  entry?: {
+    symbol?: string;
+    side?: Side;
+    price?: number;
+    stopPips?: number;
+    takeProfitPips?: number;
+    units?: number;
+    strategy?: string;
+    score?: number | null;
+    momentum?: number | null;
+    rsi?: number | null;
+    trend?: number | null;
+    volatilityPct?: number | null;
+  };
   position?: {
     id?: string;
     symbol?: string;
@@ -217,6 +236,9 @@ async function persistRun(
   model: string | null,
 ): Promise<void> {
   if (!userId || !SUPABASE_URL || !ANON_KEY) return;
+  // Entry-mode verdicts are transient gate decisions — the client caches them
+  // itself and there is no open position to attach a run to.
+  if (ctx.entry) return;
   try {
     const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
     if (!token) return;
@@ -243,11 +265,11 @@ async function persistRun(
 }
 
 // --- Strategy normalization ---------------------------------------------------
-function normalizeStrategy(raw: unknown): AnalystStrategy {
+function normalizeStrategy(raw: unknown, entryMode = false): AnalystStrategy {
   const r = (raw ?? {}) as Record<string, unknown>;
   const verdict = VERDICTS.includes(str(r.verdict) as AnalystVerdict)
     ? (str(r.verdict) as AnalystVerdict)
-    : "stand_pat";
+    : entryMode ? "skip" : "stand_pat"; // strict: unknown verdicts fail the gate
   const targetsRaw = Array.isArray(r.targets) ? r.targets : [];
   const targets: AnalystLevel[] = targetsRaw
     .map((t) => {
@@ -258,13 +280,13 @@ function normalizeStrategy(raw: unknown): AnalystStrategy {
   const stopRaw = (r.stop ?? {}) as Record<string, unknown>;
   return {
     verdict,
-    action: str(r.action) || "Hold the position and manage the stop.",
+    action: str(r.action) || (entryMode ? "Stand aside — the setup did not clear the gate." : "Hold the position and manage the stop."),
     confidence: clampConfidence(r.confidence),
     targets,
     stop: { price: round2(stopRaw.price), note: str(stopRaw.note) },
     reasoning: strArray(r.reasoning),
     risks: strArray(r.risks, 4),
-    timeframe: str(r.timeframe) || "next few hours",
+    timeframe: str(r.timeframe) || (entryMode ? "this entry" : "next few hours"),
   };
 }
 
@@ -368,7 +390,7 @@ async function callOpenAi(prompt: string): Promise<string> {
   return text;
 }
 
-async function callLlm(prompt: string): Promise<{ engine: string; model: string; strategy: AnalystStrategy }> {
+async function callLlm(prompt: string, entryMode = false): Promise<{ engine: string; model: string; strategy: AnalystStrategy }> {
   let rawText: string;
   let engine: string;
   let model: string;
@@ -384,7 +406,7 @@ async function callLlm(prompt: string): Promise<{ engine: string; model: string;
     throw new Error("No LLM key configured");
   }
   const parsed = JSON.parse(rawText) as unknown;
-  return { engine, model, strategy: normalizeStrategy(parsed) };
+  return { engine, model, strategy: normalizeStrategy(parsed, entryMode) };
 }
 
 function buildPrompt(ctx: DeepAnalystRequest): string {
@@ -438,6 +460,101 @@ function buildPrompt(ctx: DeepAnalystRequest): string {
     "",
     'Respond ONLY with JSON matching this schema: {"verdict":"hold"|"take_profit"|"partial_take_profit"|"trail"|"cut_loss"|"reduce_risk"|"stand_pat","action":"one imperative headline sentence","confidence":0-100,"targets":[{"label":"string","price":number|null,"note":"string"}],"stop":{"price":number|null,"note":"string"},"reasoning":["3-6 short bullets"],"risks":["1-3 bullets"],"timeframe":"e.g. next 4h / next session"}. No markdown, no text outside the JSON object.',
   ].join("\n");
+}
+
+// --- ENTRY mode: the robot's strict AI veto on planned trades ---------------
+function buildEntryPrompt(ctx: DeepAnalystRequest): string {
+  const e = ctx.entry ?? {};
+  const mkt = ctx.market ?? {};
+  const acc = ctx.account ?? {};
+  const stopPips = num(e.stopPips) ?? 0;
+  const tpPips = num(e.takeProfitPips) ?? 0;
+  const rr = stopPips > 0 ? tpPips / stopPips : 0;
+  const facts: string[] = [
+    `Instrument: ${e.symbol ?? "?"} — PLANNED ${e.side === "short" ? "SHORT" : "LONG"} entry at ${e.price ?? "?"}, ${e.units ?? 0} units`,
+    `Stop ${stopPips} pips · take-profit ${tpPips} pips · reward/risk ${rr.toFixed(2)}R`,
+    `Signal score ${e.score != null ? e.score.toFixed(0) + "/100" : "?"} · momentum ${e.momentum != null ? e.momentum.toFixed(2) : "?"} · RSI ${e.rsi != null ? e.rsi.toFixed(0) : "?"}`,
+    `Price vs 20-bar average: ${mkt.trendPct != null ? (mkt.trendPct >= 0 ? "+" : "") + mkt.trendPct.toFixed(2) + "%" : "?"} · volatility ${mkt.atrPct != null ? mkt.atrPct.toFixed(2) + "%/bar" : "?"}`,
+    `Opened by strategy: ${e.strategy ?? "?"}`,
+  ];
+  if (acc.equity != null) facts.push(`Account equity ${acc.equity} USD, risking ${acc.riskPerTradePct ?? 1}% per trade`);
+
+  return [
+    "You are the Deep Analyst entry gate for a retail trading platform (FX, metals and crypto). The ROBOT wants to open a NEW trade and you must VET it. You only analyze; you never execute.",
+    "",
+    "FACTS:",
+    ...facts.map((f) => `- ${f}`),
+    "",
+    "DECISION RULES (STRICT, fail-closed):",
+    '1. Reply "enter" ONLY when the setup is clearly sound: the trend supports the direction, reward/risk is acceptable (>= 1R, preferably >= 1.5R), volatility is orderly, RSI is not overbought/oversold against the entry, and the signal score is decent.',
+    '2. Reply "skip" when anything is marginal, unclear or unavailable — a wrong entry costs money; standing aside costs nothing.',
+    "3. Never suggest a different direction, size, stop or target — you only approve or veto THIS exact trade.",
+    "4. Confidence = how clearly the data supports YOUR call (0-100), not certainty about direction.",
+    "",
+    'Respond ONLY with JSON matching this schema: {"verdict":"enter"|"skip","action":"one imperative headline sentence","confidence":0-100,"targets":[],"stop":{"price":null,"note":"string"},"reasoning":["2-4 short bullets"],"risks":["1-2 bullets"],"timeframe":"this entry"}. No markdown, no text outside the JSON object.',
+  ].join("\n");
+}
+
+/**
+ * Deterministic entry gate — the same fail-closed decision made by rules when
+ * no LLM key is configured (or the LLM is unreachable). Conservative on
+ * purpose: it only approves setups that pass every gate.
+ */
+function entryDeterministicStrategy(ctx: DeepAnalystRequest): AnalystStrategy {
+  const e = ctx.entry ?? {};
+  const mkt = ctx.market ?? {};
+  const stopPips = num(e.stopPips) ?? 0;
+  const tpPips = num(e.takeProfitPips) ?? 0;
+  const rr = stopPips > 0 ? tpPips / stopPips : 0;
+  const side = e.side === "short" ? -1 : 1;
+  // trendPct arrives as a percentage (client sends trend * 100); convert back.
+  const trend = mkt.trendPct != null ? mkt.trendPct / 100 : num(e.trend);
+  const vol = mkt.atrPct ?? num(e.volatilityPct);
+  const rsi = num(e.rsi);
+  const score = num(e.score);
+  const momentum = num(e.momentum);
+
+  const reasons: string[] = [];
+  if (stopPips <= 0) reasons.push("no valid stop distance");
+  if (tpPips <= 0) reasons.push("no take-profit distance");
+  if (rr > 0 && rr < 1) reasons.push(`reward/risk is only ${rr.toFixed(2)}R`);
+  if (trend != null && ((side > 0 && trend < -0.15) || (side < 0 && trend > 0.15))) {
+    reasons.push(`price trends against the ${e.side} trade`);
+  }
+  if (vol != null && vol > 2.5) reasons.push(`volatility is high (${vol.toFixed(2)}%/bar)`);
+  if (rsi != null && ((side > 0 && rsi > 78) || (side < 0 && rsi < 22))) reasons.push(`RSI ${rsi.toFixed(0)} is extended against the entry`);
+  if (score != null && score < 55) reasons.push(`strategy score is only ${score.toFixed(0)}/100`);
+  if (momentum != null && momentum < 0.1) reasons.push("momentum is weak");
+
+  const reasoning: string[] = [];
+  const risks: string[] = [];
+  let verdict: AnalystVerdict = "enter";
+  let action = "The setup clears the gate — open the trade as planned.";
+  if (reasons.length > 0) {
+    verdict = "skip";
+    action = "Stand aside — " + reasons.join("; ") + ".";
+    reasoning.push(...reasons.map((r) => `Skip: ${r}.`));
+    risks.push("Opening anyway risks a low-quality trade the gate exists to filter.");
+  } else {
+    reasoning.push(`Stop ${stopPips} pips · target ${tpPips} pips · reward/risk ${rr.toFixed(2)}R`);
+    if (score != null) reasoning.push(`Strategy score ${score.toFixed(0)}/100${momentum != null ? ` · momentum ${momentum.toFixed(2)}` : ""}`);
+    if (trend != null) {
+      reasoning.push(`Price sits ${Math.abs(trend * 100).toFixed(2)}% ${trend >= 0 ? "above" : "below"} its 20-bar average — ${trend >= 0 ? "favours longs" : "favours shorts"}.`);
+    }
+    if (vol != null) reasoning.push(`Volatility ${vol.toFixed(2)}%/bar — within the gate's limits.`);
+    risks.push("Markets can gap through stops in fast news — the stop distance stays the real protection.");
+  }
+
+  return {
+    verdict,
+    action,
+    confidence: verdict === "enter" ? 68 : 82,
+    targets: [],
+    stop: { price: null, note: verdict === "enter" ? "Keep the planned stop." : "No entry — no stop to manage." },
+    reasoning: reasoning.slice(0, 4),
+    risks: risks.slice(0, 2),
+    timeframe: "this entry",
+  };
 }
 
 // --- Deterministic fallback (no LLM key, or anonymous caller) ------------------
@@ -545,6 +662,7 @@ function deterministicStrategy(ctx: DeepAnalystRequest): AnalystStrategy {
 // --- Request plumbing ----------------------------------------------------------
 function readContext(body: Record<string, unknown>): DeepAnalystRequest {
   return {
+    entry: (body.entry ?? undefined) as DeepAnalystRequest["entry"],
     position: (body.position ?? {}) as DeepAnalystRequest["position"],
     market: (body.market ?? {}) as DeepAnalystRequest["market"],
     account: (body.account ?? {}) as DeepAnalystRequest["account"],
@@ -553,6 +671,15 @@ function readContext(body: Record<string, unknown>): DeepAnalystRequest {
 }
 
 function validateContext(ctx: DeepAnalystRequest): string | null {
+  // ENTRY mode validates the planned trade (no open position needed).
+  if (ctx.entry) {
+    const e = ctx.entry;
+    if (!str(e.symbol)) return "Missing entry.symbol.";
+    if (e.side !== "long" && e.side !== "short") return "Missing or invalid entry.side.";
+    if (num(e.price) == null) return "Missing entry.price.";
+    if (num(e.stopPips) == null || num(e.stopPips) <= 0) return "Missing or invalid entry.stopPips.";
+    return null;
+  }
   const pos = ctx.position ?? {};
   if (!str(pos.symbol)) return "Missing position.symbol.";
   if (pos.side !== "long" && pos.side !== "short") return "Missing or invalid position.side.";
@@ -580,6 +707,41 @@ Deno.serve(async (req: Request) => {
 
     const keyConfigured = Boolean(GEMINI_KEY || OPENAI_KEY);
 
+    // ENTRY MODE — the robot's strict AI veto on planned trades. STRICT:
+    // anything unclear, unavailable or unanalysed is a SKIP, never a pass.
+    if (ctx.entry) {
+      // Signed out + AI configured → the client blocks ALL robot entries
+      // until the trader signs in (the strict signed-out rule).
+      if (keyConfigured && !aiAllowed) {
+        return json({
+          ok: true,
+          engine: "entry-gate",
+          ai_requires_login: true,
+          note: "Sign in to unlock AI-vetted robot entries (strict gate).",
+          strategy: entryDeterministicStrategy(ctx),
+        });
+      }
+      if (!keyConfigured) {
+        const strategy = entryDeterministicStrategy(ctx);
+        return json({ ok: true, engine: "deterministic", ai_available: false, strategy });
+      }
+      try {
+        const { engine, model, strategy } = await callLlm(buildEntryPrompt(ctx), true);
+        return json({ ok: true, engine, model, strategy });
+      } catch (err) {
+        console.error("deep-analyst entry LLM error", err);
+        const strategy = entryDeterministicStrategy(ctx);
+        return json({
+          ok: true,
+          engine: "deterministic",
+          degraded: true,
+          note: "The AI service was unreachable — the entry gate used its built-in rules instead.",
+          strategy,
+        });
+      }
+    }
+
+    // POSITION MODE — management strategy for an open trade.
     // No key configured (or anonymous caller): deterministic engine, always.
     if (!keyConfigured || !aiAllowed) {
       const strategy = deterministicStrategy(ctx);

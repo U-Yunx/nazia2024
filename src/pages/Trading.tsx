@@ -2906,6 +2906,7 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
           onReset={() => handleReset(acc.initialBalance)}
           isLive={mode !== 'paper'}
           unrestricted={unrestricted}
+          signedIn={Boolean(user)}
         />
         <div className="space-y-6 lg:col-span-2">
           <LiveChartPanel initialSymbol={strategy.pair} initialInterval={strategy.interval} rates={rates} />

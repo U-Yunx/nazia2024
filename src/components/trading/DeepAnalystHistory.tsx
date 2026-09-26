@@ -31,6 +31,8 @@ export const VERDICT_META: Record<
   cut_loss: { label: 'Cut the loss', className: 'border-down/40 bg-down/10 text-down', hint: 'Exit the loser now' },
   reduce_risk: { label: 'Reduce risk', className: 'border-amber/40 bg-amber/10 text-amber', hint: 'Tighten stop / trim size' },
   stand_pat: { label: 'Stand pat', className: 'border-border bg-muted text-muted-foreground', hint: "No clear edge — don't force it" },
+  enter: { label: 'Enter', className: 'border-up/40 bg-up/10 text-up', hint: 'AI approved — open the trade' },
+  skip: { label: 'Skip', className: 'border-border bg-muted text-muted-foreground', hint: 'AI vetoed — stand aside' },
 }
 
 export function HistorySection({
