@@ -28,6 +28,7 @@ function session(partial: Partial<RobotSessionRow>): RobotSessionRow {
     method: 'auto',
     strategy: 'ema-cross',
     started_at: '2026-03-01T10:00:00Z',
+    ended_at: null,
     initial_balance: 10_000,
     final_balance: null,
     pnl: 0,

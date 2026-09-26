@@ -33,6 +33,7 @@ import { MyAds } from './pages/MyAds'
 import { Notifications } from './pages/Notifications'
 import { Packages } from './pages/Packages'
 import { Performance } from './pages/Performance'
+import { Analytics } from './pages/Analytics'
 import { Profile } from './pages/Profile'
 import { Referrals } from './pages/Referrals'
 import { Robots } from './pages/Robots'
@@ -72,6 +73,7 @@ const router = createBrowserRouter([
       { path: 'trading', element: <TradingHub /> },
       { path: 'robots', element: <Robots /> },
       { path: 'performance', element: <Performance /> },
+      { path: 'analytics', element: <Analytics /> },
       { path: 'signals', element: <Signals /> },
       { path: 'backtester', element: <Backtester /> },
       { path: 'strategies', element: <Strategies /> },
