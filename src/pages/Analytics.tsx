@@ -429,9 +429,14 @@ export function Analytics() {
         <CardContent>
           {!user ? (
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-sm text-muted-foreground">
-                Sign in and your Deep Analyst runs are recorded here, so you can review past verdicts without the trade open.
-              </p>
+              <div className="flex items-start gap-3">
+                <div className="rounded-lg bg-secondary p-2 text-muted-foreground">
+                  <BrainCircuit className="h-4 w-4" />
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Sign in to see your past Deep Analyst runs here — no open trade required.
+                </p>
+              </div>
               <Link to="/auth">
                 <Button size="sm">Sign in</Button>
               </Link>
@@ -444,13 +449,18 @@ export function Analytics() {
             </div>
           ) : runs.length === 0 ? (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-dashed border-border bg-secondary/10 px-4 py-3">
-              <p className="text-sm text-muted-foreground">
-                No saved analyses yet — open a position in{' '}
-                <Link to="/trading" className="font-semibold text-accent underline underline-offset-2">
-                  Manual trading
-                </Link>{' '}
-                or any robot tab, run Deep Analyst, and it lands here for later review.
-              </p>
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 rounded-lg bg-secondary p-2 text-muted-foreground">
+                  <BrainCircuit className="h-4 w-4" />
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  No saved analyses yet — open a position in{' '}
+                  <Link to="/trading" className="font-semibold text-accent underline underline-offset-2">
+                    Manual trading
+                  </Link>{' '}
+                  or any robot tab, run Deep Analyst, and it lands here for later review.
+                </p>
+              </div>
               <Link to="/trading">
                 <Button size="sm">
                   <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
