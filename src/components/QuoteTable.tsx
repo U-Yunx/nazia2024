@@ -54,7 +54,8 @@ export function QuoteTable({
                   const quote = quotes?.find((q) => q.symbol === p.symbol)
                   const price = quote?.price
                   const change = quote?.percent_change ?? quote?.change ?? 0
-                  const rowClass = onSelect && price != null ? 'cursor-pointer hover:bg-muted/40' : ''
+                  const isCrypto = isCryptoPair(p.symbol)
+                  const rowClass = onSelect && price != null ? 'cursor-pointer hover:bg-muted/40' : 'transition-colors duration-150'
                   return (
                     <tr
                       key={p.symbol}
@@ -62,32 +63,44 @@ export function QuoteTable({
                       onClick={onSelect && price != null ? () => onSelect(p.symbol) : undefined}
                     >
                       <td className="py-2.5 pr-4">
-                        <span className="font-medium text-foreground">{p.symbol}</span>
+                        <span className={cn('font-semibold', isCrypto ? 'text-cyan' : 'text-foreground')}>{p.symbol}</span>
                         <span className="ml-2 hidden text-xs text-muted-foreground sm:inline">{p.name}</span>
                       </td>
                       <td className="py-2.5 pr-4">
-                        <Badge className={cn(isCryptoPair(p.symbol) ? 'border-accent/30 text-accent' : '')}>
-                          {isCryptoPair(p.symbol) ? 'Crypto' : 'Forex'}
+                        <Badge className={isCrypto ? 'border-cyan/50 bg-cyan/10 text-cyan' : 'border-primary/50 bg-primary/10 text-primary'}>
+                          {isCrypto ? 'Crypto' : 'Forex'}
                         </Badge>
                       </td>
                       <td className="tnum py-2.5 pr-4 text-right font-mono text-foreground">
                         {price != null ? formatPrice(price) : '—'}
                       </td>
-                      <td
-                        className={cn(
-                          'tnum py-2.5 pr-4 text-right font-mono',
-                          price != null && (change < 0 ? 'text-down' : 'text-up'),
+                      <td className="py-2.5 pr-4 text-right">
+                        {price != null ? (
+                          <span
+                            className={cn(
+                              'tnum inline-block rounded-md px-1.5 py-0.5 font-mono',
+                              change < 0 ? 'bg-down/10 text-down' : change > 0 ? 'bg-up/10 text-up' : 'bg-muted/50 text-muted-foreground',
+                            )}
+                          >
+                            {formatChange(change)}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
                         )}
-                      >
-                        {price != null ? formatChange(change) : '—'}
                       </td>
-                      <td
-                        className={cn(
-                          'tnum py-2.5 text-right font-mono',
-                          price != null && (change < 0 ? 'text-down' : 'text-up'),
+                      <td className="py-2.5 text-right">
+                        {price != null ? (
+                          <span
+                            className={cn(
+                              'tnum inline-block rounded-md px-1.5 py-0.5 font-mono',
+                              change < 0 ? 'bg-down/10 text-down' : change > 0 ? 'bg-up/10 text-up' : 'bg-muted/50 text-muted-foreground',
+                            )}
+                          >
+                            {formatPct(change)}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
                         )}
-                      >
-                        {price != null ? formatPct(change) : '—'}
                       </td>
                     </tr>
                   )

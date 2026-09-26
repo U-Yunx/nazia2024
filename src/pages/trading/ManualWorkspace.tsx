@@ -24,7 +24,7 @@ import { INTERVALS, STRATEGY_META, intervalLabel } from '../../lib/strategies'
 import { WATCHLIST } from '../../lib/watchlist'
 import { formatUsd } from '../../lib/format'
 import { cn } from '../../lib/cn'
-import { isAdminRole } from '../../lib/roles'
+import { isAdminRole, isSuperAdminRole } from '../../lib/roles'
 import type { BrokerConnectionRow, Interval, StrategyConfig, TradingMethod } from '../../lib/types'
 import type { AccountState, RatesMap } from '../../lib/trading/types'
 import { Badge, Button, Card, CardContent, Input, PageHeader, Select, Skeleton } from '../../components/ui'
@@ -313,6 +313,7 @@ export function ManualWorkspace() {
           onChange={setRisk}
           onReset={() => reset(acc.initialBalance)}
           isLive={mode !== 'paper'}
+          unrestricted={isSuperAdminRole(profile?.role)}
         />
         <div className="space-y-6 lg:col-span-2">
           <LiveChartPanel initialSymbol={strategy.pair} initialInterval={strategy.interval} rates={rates} />

@@ -15,8 +15,8 @@ import {
 } from 'lightweight-charts'
 import type { Bar } from '../lib/types'
 
-const UP = '#4ade80'
-const DOWN = '#f87171'
+const UP = '#34d399'
+const DOWN = '#fb7185'
 
 function toCandle(b: Bar): CandlestickData {
   // Bars are ISO strings; day bars are date-only. lightweight-charts accepts

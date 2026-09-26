@@ -21,9 +21,24 @@ const SORT_OPTIONS: { value: MarketSort; label: string }[] = [
 ]
 
 function scoreColor(p: number): string {
-  if (p >= 70) return 'bg-emerald-500'
-  if (p >= 55) return 'bg-accent'
-  return 'bg-muted-foreground/60'
+  if (p >= 75) return 'bg-gradient-to-r from-emerald-400 to-emerald-500'
+  if (p >= 60) return 'bg-gradient-to-r from-cyan-400 to-cyan-500'
+  if (p >= 45) return 'bg-gradient-to-r from-amber-400 to-amber-500'
+  return 'bg-gradient-to-r from-rose-400 to-rose-500'
+}
+
+function scoreText(p: number): string {
+  if (p >= 75) return 'text-up'
+  if (p >= 60) return 'text-cyan'
+  if (p >= 45) return 'text-amber'
+  return 'text-down'
+}
+
+/** Asset-class badge tone — cyan crypto, amber metal, indigo forex. */
+function assetBadgeClass(isCrypto: boolean, isMetal: boolean): string {
+  if (isCrypto) return 'border-cyan/50 bg-cyan/10 text-cyan'
+  if (isMetal) return 'border-amber/50 bg-amber/10 text-amber'
+  return 'border-primary/50 bg-primary/10 text-primary'
 }
 
 export function MarketPairsTable({ quotes }: { quotes: Quote[] | null }) {
@@ -93,20 +108,17 @@ export function MarketPairsTable({ quotes }: { quotes: Quote[] | null }) {
                 const isMetal = isMetalPair(symbol)
                 const isCrypto = isCryptoPair(symbol)
                 return (
-                  <tr key={symbol} className="border-b border-border/50 last:border-b-0">
+                  <tr key={symbol} className="border-b border-border/50 transition-colors duration-150 last:border-b-0 hover:bg-muted/30">
                     <td className="py-2.5 pr-4">
-                      <span className="font-medium text-foreground">{symbol}</span>
+                      <span className={cn('font-semibold', isCrypto ? 'text-cyan' : isMetal ? 'text-amber' : 'text-foreground')}>
+                        {symbol}
+                      </span>
                       <span className="ml-2 hidden text-xs text-muted-foreground sm:inline">
                         {WATCHLIST.find((p) => p.symbol === symbol)?.name}
                       </span>
                     </td>
                     <td className="py-2.5 pr-4">
-                      <Badge
-                        className={cn(
-                          isCrypto && 'border-accent/30 text-accent',
-                          isMetal && 'border-amber-400/40 bg-amber-400/5 text-amber-600',
-                        )}
-                      >
+                      <Badge className={assetBadgeClass(isCrypto, isMetal)}>
                         {isCrypto ? 'Crypto' : isMetal ? 'Metal' : 'Forex'}
                       </Badge>
                     </td>
@@ -114,9 +126,12 @@ export function MarketPairsTable({ quotes }: { quotes: Quote[] | null }) {
                       <span className="inline-flex items-center gap-1.5 text-xs">
                         <span
                           aria-hidden="true"
-                          className={cn('h-1.5 w-1.5 rounded-full', meta.active ? 'bg-emerald-500' : 'bg-muted-foreground/40')}
+                          className={cn(
+                            'h-1.5 w-1.5 rounded-full',
+                            meta.active ? 'bg-up animate-pulse-dot' : 'bg-muted-foreground/40',
+                          )}
                         />
-                        <span className={meta.active ? 'text-foreground' : 'text-muted-foreground'}>
+                        <span className={meta.active ? 'font-medium text-up' : 'text-muted-foreground'}>
                           {meta.active ? 'Open' : 'Closed'}
                         </span>
                       </span>
@@ -124,26 +139,40 @@ export function MarketPairsTable({ quotes }: { quotes: Quote[] | null }) {
                     <td className="tnum py-2.5 pr-4 text-right font-mono text-foreground">
                       {price != null ? formatPrice(price) : '—'}
                     </td>
-                    <td
-                      className={cn(
-                        'tnum py-2.5 pr-4 text-right font-mono',
-                        price != null && (change < 0 ? 'text-down' : 'text-up'),
+                    <td className="py-2.5 pr-4 text-right">
+                      {price != null ? (
+                        <span
+                          className={cn(
+                            'tnum inline-block rounded-md px-1.5 py-0.5 font-mono',
+                            change < 0 ? 'bg-down/10 text-down' : change > 0 ? 'bg-up/10 text-up' : 'bg-muted/50 text-muted-foreground',
+                          )}
+                        >
+                          {formatChange(change)}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
                       )}
-                    >
-                      {price != null ? formatChange(change) : '—'}
                     </td>
-                    <td
-                      className={cn(
-                        'tnum py-2.5 pr-4 text-right font-mono',
-                        price != null && (change < 0 ? 'text-down' : 'text-up'),
+                    <td className="py-2.5 pr-4 text-right">
+                      {price != null ? (
+                        <span
+                          className={cn(
+                            'tnum inline-block rounded-md px-1.5 py-0.5 font-mono',
+                            change < 0 ? 'bg-down/10 text-down' : change > 0 ? 'bg-up/10 text-up' : 'bg-muted/50 text-muted-foreground',
+                          )}
+                        >
+                          {formatPct(change)}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
                       )}
-                    >
-                      {price != null ? formatPct(change) : '—'}
                     </td>
                     <td className="py-2.5 text-right">
                       {price != null ? (
                         <span className="inline-flex items-center justify-end gap-2" title={`Probability of profit ~${meta.probability}%`}>
-                          <span className="tnum font-mono text-xs text-foreground">{meta.probability}</span>
+                          <span className={cn('tnum font-mono text-xs font-semibold', scoreText(meta.probability))}>
+                            {meta.probability}
+                          </span>
                           <span className="h-1 w-10 overflow-hidden rounded-full bg-muted" aria-hidden="true">
                             <span
                               className={cn('block h-full rounded-full', scoreColor(meta.probability))}

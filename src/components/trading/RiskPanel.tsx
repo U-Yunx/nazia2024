@@ -21,6 +21,8 @@ interface Props {
   onChange: (patch: Partial<RiskConfig>) => void
   onReset: () => void
   isLive: boolean
+  /** Superadmins trade unrestricted — the usual UI safety clamps are lifted. */
+  unrestricted?: boolean
 }
 
 function Field({
@@ -53,7 +55,7 @@ function Field({
   )
 }
 
-export function RiskPanel({ risk, onChange, onReset, isLive }: Props) {
+export function RiskPanel({ risk, onChange, onReset, isLive, unrestricted = false }: Props) {
   // Local draft: the robot keeps enforcing `risk` until the user hits Apply.
   const [draft, setDraft] = useState<RiskConfig>(risk)
   const [dirty, setDirty] = useState(false)
@@ -119,6 +121,7 @@ export function RiskPanel({ risk, onChange, onReset, isLive }: Props) {
             value={draft.riskPerTradePct}
             onChange={(v) => patch({ riskPerTradePct: v })}
             min={0}
+            max={unrestricted ? 100 : 10}
             step={0.1}
             suffix="%"
           />
@@ -127,7 +130,7 @@ export function RiskPanel({ risk, onChange, onReset, isLive }: Props) {
             value={draft.maxOpenPositions}
             onChange={(v) => patch({ maxOpenPositions: v })}
             min={1}
-            max={50}
+            max={unrestricted ? 999 : 50}
             step={1}
           />
           <Field
@@ -364,7 +367,7 @@ export function RiskPanel({ risk, onChange, onReset, isLive }: Props) {
             value={draft.maxConsecutiveLosses}
             onChange={(v) => patch({ maxConsecutiveLosses: Math.max(0, Math.round(v)) })}
             min={0}
-            max={10}
+            max={unrestricted ? 100 : 10}
             step={1}
             suffix="losses"
           />

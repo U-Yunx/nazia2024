@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Activity, Check, Copy, ListChecks, Lock, Pause, Play, ShieldAlert, Sliders, Sparkles, Target, Timer, Wallet, X } from 'lucide-react'
+import { Activity, Check, Copy, Crown, ListChecks, Lock, Pause, Play, ShieldAlert, Sliders, Sparkles, Target, Timer, Wallet, X } from 'lucide-react'
 import { DEFAULT_PAPER_BALANCE, usePaperAccount } from '../lib/trading/usePaperAccount'
 import { isStrategyType, methodInterval, methodLabel, methodRiskDefaults, useRobotPrefs } from '../lib/trading/robotPrefs'
 import { useRobotRecorder } from '../lib/trading/useRobotRecorder'
@@ -35,7 +35,7 @@ import { rankPairs, type RankedPair } from '../lib/trading/pairRanking'
 import { manualTargets } from '../lib/trading/manualMethod'
 import { fetchTimeSeries, useQuotes } from '../hooks/useMarketData'
 import { useSelectedStrategy } from '../hooks/useSelectedStrategy'
-import { isAdminRole } from '../lib/roles'
+import { isAdminRole, isSuperAdminRole } from '../lib/roles'
 import { useAuth } from '../hooks/useAuth'
 import { useAccess, useAddonPurchases, useBrokers, useProfile, useSubscriptions } from '../hooks/usePlatform'
 import { acceptRisk, hasActiveCopyTrading } from '../lib/platform'
@@ -368,6 +368,10 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
   // open positions on at most 6 pairs with 1 position per pair. Holding an
   // active subscription for 30+ days (or being an admin) lifts the cap.
   const tier = useMemo(() => robotTier(profile, subscriptions), [profile, subscriptions])
+  // Superadmins trade with no restrictions: the starter-tier market caps are
+  // already bypassed (admin role), and this lifts the remaining UI safety
+  // clamps — risk per trade %, positions per pair and the risk-panel limits.
+  const unrestricted = isSuperAdminRole(profile?.role)
   const robotCaps = useMemo(
     () =>
       effectiveRobotCaps(tier, {
@@ -574,7 +578,7 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
   const contractSize = contractSizeForKind(account?.risk.kind)
   const contractLabel = contractUnitsLabel(account?.risk.kind)
   const sizingMode = prefs.sizingMode ?? 'risk'
-  const riskPct = Math.min(10, Math.max(0.05, prefs.riskPerTradePct ?? 1))
+  const riskPct = Math.min(unrestricted ? 100 : 10, Math.max(0.05, prefs.riskPerTradePct ?? 1))
   const sizingValid = sizingMode === 'fixed' ? normalizeLots(prefs.lot) >= MIN_LOT : true
   const sizingLabel =
     sizingMode === 'fixed'
@@ -1931,7 +1935,7 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
                     id="robot-risk-pct"
                     type="number"
                     min={0.05}
-                    max={10}
+                    max={unrestricted ? 100 : 10}
                     step={0.5}
                     value={riskPct}
                     aria-label="Risk percent per trade"
@@ -2096,8 +2100,8 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
                   variant="secondary"
                   size="sm"
                   aria-label="More positions per pair"
-                  onClick={() => setMaxPerPair(Math.min(tier.limited ? STARTER_MAX_PER_PAIR : 10, prefs.maxPerPair + 1))}
-                  disabled={prefs.maxPerPair >= (tier.limited ? STARTER_MAX_PER_PAIR : 10)}
+                  onClick={() => setMaxPerPair(Math.min(tier.limited ? STARTER_MAX_PER_PAIR : (unrestricted ? 100 : 10), prefs.maxPerPair + 1))}
+                  disabled={prefs.maxPerPair >= (tier.limited ? STARTER_MAX_PER_PAIR : (unrestricted ? 100 : 10))}
                 >
                   +
                 </Button>
@@ -2827,6 +2831,7 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
           onChange={guardedSetRisk}
           onReset={() => handleReset(acc.initialBalance)}
           isLive={mode !== 'paper'}
+          unrestricted={unrestricted}
         />
         <div className="space-y-6 lg:col-span-2">
           <LiveChartPanel initialSymbol={strategy.pair} initialInterval={strategy.interval} rates={rates} />
@@ -2859,6 +2864,12 @@ export function Trading({ slot: slotProp = 1 }: { slot?: number } = {}) {
         }
         actions={
           <>
+            {unrestricted && (
+              <Badge className="border-pink/50 bg-pink/15 text-pink">
+                <Crown className="h-3.5 w-3.5" aria-hidden="true" />
+                Superadmin · unrestricted
+              </Badge>
+            )}
             <MethodToggle method={prefs.method} onChange={applyMethod} />
             <ModeToggle mode={mode} onChange={setBrokerMode} />
           </>

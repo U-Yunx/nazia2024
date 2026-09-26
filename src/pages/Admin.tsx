@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Settings as SettingsIcon,
   ShieldCheck,
+  SlidersHorizontal,
   Trash2,
   Unplug,
   Users,
@@ -79,6 +80,7 @@ import type {
   PackageRow,
   PaymentAccountRow,
   PaymentMethod,
+  SettingsRow,
   UserRole,
   WithdrawalAccountRow,
   MetaApiBridgeConfig,
@@ -89,7 +91,20 @@ import { isAdminRole, isSuperAdminRole } from '../lib/roles'
 import { formatDateTime, formatUsd } from '../lib/format'
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, EmptyState, Input, Select } from '../components/ui'
 
-type Tab = 'overview' | 'users' | 'subscriptions' | 'addons' | 'packages' | 'ads' | 'brokers' | 'commissions' | 'withdrawals' | 'identity' | 'payments' | 'settings'
+type Tab =
+  | 'overview'
+  | 'users'
+  | 'subscriptions'
+  | 'addons'
+  | 'packages'
+  | 'ads'
+  | 'brokers'
+  | 'commissions'
+  | 'withdrawals'
+  | 'identity'
+  | 'payments'
+  | 'settings'
+  | 'all-settings'
 
 const TABS: { id: Tab; label: string; icon: typeof Users }[] = [
   { id: 'overview', label: 'Overview', icon: BarChart3 },
@@ -104,6 +119,7 @@ const TABS: { id: Tab; label: string; icon: typeof Users }[] = [
   { id: 'identity', label: 'Identity', icon: ShieldCheck },
   { id: 'payments', label: 'Payments', icon: CreditCard },
   { id: 'settings', label: 'Settings', icon: SettingsIcon },
+  { id: 'all-settings', label: 'All settings', icon: SlidersHorizontal },
 ]
 
 const SUB_STATUS: Record<string, string> = {
@@ -145,7 +161,7 @@ export function Admin() {
       </header>
 
       <div className="flex flex-wrap gap-1 rounded-lg border border-border bg-secondary/40 p-1" role="tablist" aria-label="Admin sections">
-        {TABS.map((t) => {
+        {TABS.filter((t) => t.id !== 'all-settings' || isSuperAdminRole(profile?.role)).map((t) => {
           const Icon = t.icon
           return (
             <button
@@ -178,6 +194,7 @@ export function Admin() {
       {tab === 'identity' && <IdentityTab />}
       {tab === 'payments' && <PaymentsTab />}
       {tab === 'settings' && <SettingsTab />}
+      {tab === 'all-settings' && <AllSettingsTab />}
     </div>
   )
 }
@@ -1787,6 +1804,220 @@ function SettingsTab() {
       <MarketDataEditor />
 
       <ContactEditor />
+    </div>
+  )
+}
+
+/* ------------------------------- All settings ------------------------------ */
+
+/** Friendly labels for the known settings-table keys. */
+const SETTING_LABEL: Record<string, string> = {
+  trial: 'Free trial',
+  robot: 'Robot defaults',
+  risk_defaults: 'Risk defaults',
+  broker_bridge: 'Broker bridge',
+  metaapi_token_mode: 'MetaTrader token mode',
+}
+
+/**
+ * Superadmin-only "All settings" — every row in the `settings` table with an
+ * inline JSON editor, plus a read-only snapshot of the rest of the app's
+ * configuration (packages, add-ons, brokers, ads, payment accounts, contact).
+ * The tab itself is hidden from plain admins; the server's RLS still enforces
+ * admin-write on `settings`, so this is a convenience view, not a backdoor.
+ */
+function AllSettingsTab() {
+  const { settings, refresh } = useSettings()
+  const { packages } = usePackages()
+  const { addons } = useAddons()
+  const { brokers } = useBrokers(undefined)
+  const { ads } = useAds()
+  const { accounts: paymentAccounts } = usePaymentAccounts()
+  const { contact } = useContactSettings()
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [msg, setMsg] = useState<{ key: string; text: string; error?: boolean } | null>(null)
+  const [saving, setSaving] = useState<string | null>(null)
+
+  const saveRow = async (row: SettingsRow) => {
+    const raw = (drafts[row.key] ?? '').trim()
+    const text = raw === '' ? JSON.stringify(row.value, null, 2) : raw
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      setMsg({ key: row.key, text: "That isn't valid JSON — check the braces and commas.", error: true })
+      return
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      setMsg({ key: row.key, text: 'Settings values must be a JSON object, e.g. { "key": value }.', error: true })
+      return
+    }
+    setSaving(row.key)
+    setMsg(null)
+    const err = await saveSetting(row.key, parsed as Record<string, unknown>)
+    setSaving(null)
+    if (err) {
+      setMsg({ key: row.key, text: err, error: true })
+      return
+    }
+    setDrafts((d) => ({ ...d, [row.key]: '' }))
+    await refresh()
+    setMsg({ key: row.key, text: 'Saved.', error: false })
+    setTimeout(() => setMsg(null), 2500)
+  }
+
+  const trial = settingValue(settings, 'trial', { trial_minutes: 30 })
+  const robot = settingValue(settings, 'robot', { default_duration_minutes: 60, auto_tune_samples: 300 })
+  const riskDefaults = settingValue(settings, 'risk_defaults', { maxOpenPositions: 5, maxDailyLossPct: 5 })
+  const bridge = settingValue(settings, 'broker_bridge', { liveExecutionEnabled: true })
+
+  const summary = [
+    { label: 'Packages', value: packages.length, icon: Package },
+    { label: 'Add-ons', value: addons.length, icon: Layers },
+    { label: 'Brokers', value: brokers.length, icon: LayoutGrid },
+    { label: 'Ads', value: ads.length, icon: Megaphone },
+    { label: 'Payment accounts', value: paymentAccounts.length, icon: CreditCard },
+  ]
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>All app settings</CardTitle>
+          <Badge className="border-pink/40 bg-pink/15 text-pink">Superadmin only</Badge>
+        </CardHeader>
+        <CardContent>
+          {settings.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              No settings rows yet — save any platform setting above and it appears here.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {settings.map((row) => {
+                const pretty = JSON.stringify(row.value, null, 2)
+                const draft = drafts[row.key]
+                const rowMsg = msg?.key === row.key ? msg : null
+                return (
+                  <div key={row.key} className="rounded-lg border border-border bg-secondary/40 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="flex flex-wrap items-center gap-2 font-medium">
+                          <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-accent">{row.key}</code>
+                          <span className="text-xs text-muted-foreground">{SETTING_LABEL[row.key] ?? 'custom key'}</span>
+                        </p>
+                        <p className="mt-0.5 text-[11px] text-muted-foreground">Updated {formatDateTime(row.updated_at)}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {rowMsg && <span className={cn('text-xs', rowMsg.error ? 'text-red-300' : 'text-up')}>{rowMsg.text}</span>}
+                        <Button
+                          size="sm"
+                          onClick={() => void saveRow(row)}
+                          loading={saving === row.key}
+                          disabled={draft == null || draft.trim() === '' || draft.trim() === pretty}
+                        >
+                          Save
+                        </Button>
+                      </div>
+                    </div>
+                    <textarea
+                      aria-label={`${row.key} value (JSON)`}
+                      spellCheck={false}
+                      value={draft ?? pretty}
+                      onChange={(e) => setDrafts((d) => ({ ...d, [row.key]: e.target.value }))}
+                      rows={Math.min(10, Math.max(3, pretty.split('\n').length))}
+                      className="mt-2 w-full resize-y rounded-md border border-border bg-background/60 px-2.5 py-2 font-mono text-xs text-foreground outline-none transition-colors duration-150 focus:border-primary focus:ring-2 focus:ring-ring/40"
+                    />
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <CardTitle>Configuration summary</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 gap-3">
+              {summary.map((s) => {
+                const Icon = s.icon
+                return (
+                  <div key={s.label} className="rounded-lg border border-border bg-secondary/40 p-3">
+                    <Icon className="h-4 w-4 text-accent" aria-hidden="true" />
+                    <p className="mt-1 text-2xl font-bold tnum">{s.value}</p>
+                    <p className="text-[11px] text-muted-foreground">{s.label}</p>
+                  </div>
+                )
+              })}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Feature flags &amp; defaults</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <dl className="space-y-2 text-sm">
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">Free trial</dt>
+                <dd className="tnum font-medium">{String(trial.trial_minutes)} min</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">Robot auto-run default</dt>
+                <dd className="tnum font-medium">{String(robot.default_duration_minutes)} min</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">Auto-tune samples</dt>
+                <dd className="tnum font-medium">{String(robot.auto_tune_samples)} bars</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">Default max positions</dt>
+                <dd className="tnum font-medium">{String(riskDefaults.maxOpenPositions)}</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">Default daily loss limit</dt>
+                <dd className="tnum font-medium">{String(riskDefaults.maxDailyLossPct)}%</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">Live broker execution</dt>
+                <dd className={cn('font-medium', bridge.liveExecutionEnabled ? 'text-up' : 'text-down')}>
+                  {bridge.liveExecutionEnabled ? 'Enabled' : 'Disabled'}
+                </dd>
+              </div>
+            </dl>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Contact details</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {contact ? (
+              <dl className="space-y-2 text-sm">
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted-foreground">Email</dt>
+                  <dd className="truncate font-medium">{contact.email || '—'}</dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted-foreground">WhatsApp</dt>
+                  <dd className="truncate font-medium">{contact.whatsapp || '—'}</dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted-foreground">Phone</dt>
+                  <dd className="truncate font-medium">{contact.phone || '—'}</dd>
+                </div>
+              </dl>
+            ) : (
+              <p className="py-4 text-center text-sm text-muted-foreground">No contact settings saved yet.</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   )
 }

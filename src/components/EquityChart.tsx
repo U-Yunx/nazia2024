@@ -15,6 +15,8 @@ import {
 import type { EquityPoint } from '../lib/types'
 
 const ACCENT = '#22d3ee'
+const FILL_TOP = 'rgba(34,211,238,0.3)'
+const FILL_BOTTOM = 'rgba(129,140,248,0.03)'
 export function EquityChart({ points, height = 260 }: { points: EquityPoint[]; height?: number }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -43,8 +45,8 @@ export function EquityChart({ points, height = 260 }: { points: EquityPoint[]; h
     })
     const series = chart.addSeries(AreaSeries, {
       lineColor: ACCENT,
-      topColor: 'rgba(34,211,238,0.25)',
-      bottomColor: 'rgba(34,211,238,0.02)',
+      topColor: FILL_TOP,
+      bottomColor: FILL_BOTTOM,
       lineWidth: 2,
     })
     chartRef.current = chart

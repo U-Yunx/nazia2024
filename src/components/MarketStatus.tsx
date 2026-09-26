@@ -20,18 +20,18 @@ export function MarketStatus({ quotes }: { quotes: Quote[] | null }) {
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-border bg-secondary/30 px-4 py-2.5 text-xs text-muted-foreground">
       <span className="flex items-center gap-1.5">
         <span
-          className={cn('h-2 w-2 rounded-full', anyStale ? 'bg-amber' : 'bg-up')}
+          className={cn('h-2 w-2 rounded-full', anyStale ? 'bg-amber animate-pulse-dot' : 'bg-up animate-pulse-dot')}
           aria-hidden="true"
         />
-        {anyStale ? 'Stale feed' : 'Live feed'}
+        {anyStale ? <span className="font-medium text-amber">Stale feed</span> : <span className="font-medium text-up">Live feed</span>}
       </span>
-      <span className="tnum font-mono">
-        {live.length}/{WATCHLIST.length} pairs quoting
+      <span className="tnum font-mono text-foreground">
+        <span className="text-up">{live.length}</span>/{WATCHLIST.length} pairs quoting
       </span>
       <span>
-        {openCount} markets open now
+        <span className="font-semibold text-accent">{openCount}</span> markets open now
       </span>
-      {lastUpdated && <span className="ml-auto tnum font-mono">Updated {timeAgo(lastUpdated)}</span>}
+      {lastUpdated && <span className="ml-auto tnum font-mono text-foreground">Updated {timeAgo(lastUpdated)}</span>}
     </div>
   )
 }

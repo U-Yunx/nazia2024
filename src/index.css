@@ -34,12 +34,44 @@
   --color-destructive: oklch(0.63 0.2 25);
   --color-ring: oklch(0.62 0.19 277);
 
+  /* Market direction — powers text-up / bg-up/15 / text-down / border-down/40
+     across the market tables, signal badges, charts and trading panels. These
+     tokens were missing, so every green/red class silently rendered nothing;
+     adding them lights up the whole market UI with the app's vibrant status
+     colors (emerald for up, rose for down). */
+  --color-up: oklch(0.72 0.16 152);
+  --color-down: oklch(0.66 0.2 25);
+
   --ease-out: cubic-bezier(0, 0, 0.2, 1);
   --animate-shimmer: shimmer 1.6s linear infinite;
+  --animate-pulse-dot: pulse-dot 1.8s ease-in-out infinite;
+  --animate-pulse-glow: pulse-glow 2.4s ease-in-out infinite;
+  --animate-slide-down: slide-down 300ms var(--ease-out);
+  --animate-ticker: ticker 30s linear infinite;
 
   @keyframes shimmer {
     from { background-position: -200% 0; }
     to { background-position: 200% 0; }
+  }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+
+  @keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-up) 35%, transparent); }
+    50% { box-shadow: 0 0 16px 2px color-mix(in oklab, var(--color-up) 50%, transparent); }
+  }
+
+  @keyframes slide-down {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes ticker {
+    from { transform: translateX(0); }
+    to { transform: translateX(-50%); }
   }
 }
 
