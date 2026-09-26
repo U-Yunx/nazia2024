@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite optimize && vite",
     "build": "vite build",
+    "test": "vitest run",
     "preview": "vite preview",
     "og": "node scripts/og/render-og.mjs"
   },
