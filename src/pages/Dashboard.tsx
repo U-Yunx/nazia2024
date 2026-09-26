@@ -82,10 +82,10 @@ export function Dashboard() {
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <Stat label="Balance" value={balance != null ? formatUsd(balance) : '—'} />
-              <Stat label="Equity" value={formatUsd(eq)} />
-              <Stat label="Open positions" value={String(account?.positions.length ?? 0)} />
-              <Stat label="Closed trades" value={String(account?.trades.length ?? 0)} />
+              <Stat label="Balance" value={balance != null ? formatUsd(balance) : '—'} strip="from-accent to-cyan" />
+              <Stat label="Equity" value={formatUsd(eq)} strip="from-cyan to-teal" />
+              <Stat label="Open positions" value={String(account?.positions.length ?? 0)} strip="from-amber to-pink" />
+              <Stat label="Closed trades" value={String(account?.trades.length ?? 0)} strip="from-violet to-primary" />
             </div>
           )}
           <p className="mt-3 text-xs text-muted-foreground">
@@ -100,21 +100,27 @@ export function Dashboard() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <QuickLink
           to="/backtester"
-          icon={<LineChart className="h-5 w-5 text-accent" aria-hidden="true" />}
+          icon={<LineChart className="h-5 w-5 text-cyan" aria-hidden="true" />}
           title="Backtester"
           desc="Test any strategy against historical data."
+          wash="hover:border-cyan/50 group-hover:bg-cyan/15"
+          strip="from-cyan to-teal"
         />
         <QuickLink
           to="/signals"
-          icon={<Bot className="h-5 w-5 text-accent" aria-hidden="true" />}
+          icon={<Bot className="h-5 w-5 text-pink" aria-hidden="true" />}
           title="Live signals"
           desc="Watch indicator-driven buy/sell signals."
+          wash="hover:border-pink/50 group-hover:bg-pink/15"
+          strip="from-pink to-violet"
         />
         <QuickLink
           to="/performance"
-          icon={<ArrowRight className="h-5 w-5 text-accent" aria-hidden="true" />}
+          icon={<ArrowRight className="h-5 w-5 text-amber" aria-hidden="true" />}
           title="Performance"
           desc="Review your robot's sessions and equity curve."
+          wash="hover:border-amber/50 group-hover:bg-amber/15"
+          strip="from-amber to-up"
         />
       </div>
 
@@ -127,9 +133,10 @@ export function Dashboard() {
   )
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, strip }: { label: string; value: string; strip: string }) {
   return (
-    <div className="surface-premium rounded-xl border border-border/60 px-4 py-3">
+    <div className="surface-premium relative overflow-hidden rounded-xl border border-border/60 px-4 py-3">
+      <span aria-hidden="true" className={cn('absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r', strip)} />
       <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
       <p className="mt-1 tnum font-mono text-xl font-bold text-foreground">{value}</p>
     </div>
@@ -141,23 +148,29 @@ function QuickLink({
   icon,
   title,
   desc,
+  wash,
+  strip,
 }: {
   to: string
   icon: React.ReactNode
   title: string
   desc: string
+  wash: string
+  strip: string
 }) {
   return (
     <Link
       to={to}
       className={cn(
-        'surface-premium surface-hover group flex items-start gap-3 rounded-xl border border-border/60 p-4',
-        'transition-colors hover:border-accent/50',
+        'surface-premium surface-hover group relative flex items-start gap-3 overflow-hidden rounded-xl border border-border/60 p-4',
+        'transition-colors',
+        wash,
       )}
     >
-      <div className="rounded-lg bg-muted p-2 transition-colors duration-200 group-hover:bg-accent/15">{icon}</div>
+      <span aria-hidden="true" className={cn('absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r', strip)} />
+      <div className="rounded-lg bg-muted p-2 transition-colors duration-200">{icon}</div>
       <div>
-        <p className="font-medium text-foreground transition-colors duration-200 group-hover:text-accent">{title}</p>
+        <p className="font-medium text-foreground">{title}</p>
         <p className="mt-0.5 text-xs text-muted-foreground">{desc}</p>
       </div>
     </Link>

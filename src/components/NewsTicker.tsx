@@ -26,8 +26,8 @@ export function NewsTicker() {
 
   if (items.length === 0) {
     return (
-      <div className="flex h-9 items-center gap-2 overflow-hidden border-b border-border bg-muted/40 px-4 text-xs text-muted-foreground">
-        <span className="shrink-0 font-semibold uppercase tracking-wide text-accent">Markets</span>
+      <div className="flex h-9 items-center gap-2 overflow-hidden border-b border-border bg-gradient-to-r from-secondary/25 via-muted/40 to-secondary/25 px-4 text-xs text-muted-foreground">
+        <span className="shrink-0 font-semibold uppercase tracking-wide text-gradient">Markets</span>
         <span>Waiting for live quotes…</span>
       </div>
     )
@@ -51,8 +51,8 @@ export function NewsTicker() {
   )
 
   return (
-    <div className="flex h-9 items-center gap-2 overflow-hidden border-b border-border bg-muted/40 px-4 text-xs text-muted-foreground">
-      <span className="shrink-0 font-semibold uppercase tracking-wide text-accent">Markets</span>
+    <div className="flex h-9 items-center gap-2 overflow-hidden border-b border-border bg-gradient-to-r from-secondary/25 via-muted/40 to-secondary/25 px-4 text-xs text-muted-foreground">
+      <span className="shrink-0 font-semibold uppercase tracking-wide text-gradient">Markets</span>
       <div className="flex min-w-0 overflow-hidden" aria-label="Live market prices">
         <div className={cn('flex shrink-0', !prefersReduced.current && 'animate-ticker')}>
           {row('a')}

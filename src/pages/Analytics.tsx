@@ -38,6 +38,7 @@ function HealthRing({ score, label }: { score: number; label: string }) {
   const pct = Math.min(100, Math.max(0, score))
   const offset = c * (1 - pct / 100)
   const tier = pct >= 60 ? 'text-up' : pct >= 35 ? 'text-accent' : 'text-down'
+  const gradId = pct >= 60 ? 'ring-grad-up' : pct >= 35 ? 'ring-grad-accent' : 'ring-grad-down'
   return (
     <div
       className="relative h-36 w-36 shrink-0"
@@ -45,6 +46,23 @@ function HealthRing({ score, label }: { score: number; label: string }) {
       aria-label={`Robot health score ${pct} out of 100 — ${label}`}
     >
       <svg viewBox="0 0 120 120" className="h-full w-full -rotate-90">
+        <defs>
+          <linearGradient id="ring-grad-up" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="var(--color-up)" />
+            <stop offset="55%" stopColor="var(--color-teal)" />
+            <stop offset="100%" stopColor="var(--color-cyan)" />
+          </linearGradient>
+          <linearGradient id="ring-grad-accent" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="var(--color-accent)" />
+            <stop offset="55%" stopColor="var(--color-cyan)" />
+            <stop offset="100%" stopColor="var(--color-violet)" />
+          </linearGradient>
+          <linearGradient id="ring-grad-down" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="var(--color-down)" />
+            <stop offset="55%" stopColor="var(--color-pink)" />
+            <stop offset="100%" stopColor="var(--color-amber)" />
+          </linearGradient>
+        </defs>
         <circle
           cx="60"
           cy="60"
@@ -60,12 +78,13 @@ function HealthRing({ score, label }: { score: number; label: string }) {
           cy="60"
           r={r}
           fill="none"
-          stroke="currentColor"
+          stroke={`url(#${gradId})`}
           strokeWidth="10"
           strokeLinecap="round"
           strokeDasharray={c}
           strokeDashoffset={offset}
-          className={cn('transition-all duration-700 ease-out', tier)}
+          className="transition-all duration-700 ease-out"
+          style={{ filter: `drop-shadow(0 0 6px var(--color-${gradId.includes('up') ? 'up' : gradId.includes('down') ? 'down' : 'accent'})40%)` }}
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">

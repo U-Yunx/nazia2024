@@ -45,11 +45,34 @@ export function CardContent({ className, children }: { className?: string; child
 
 /* ---------------------------------- Badge ---------------------------------- */
 
-export function Badge({ className, children }: { className?: string; children?: ReactNode }) {
+export type BadgeTone = 'neutral' | 'accent' | 'up' | 'down' | 'amber' | 'violet' | 'cyan'
+
+const BADGE_TONES: Record<BadgeTone, string> = {
+  neutral:
+    'border-border/80 bg-secondary/40 text-muted-foreground',
+  accent:
+    'border-accent/40 bg-accent/15 text-accent shadow-[0_0_14px_-6px_var(--color-accent)]',
+  up: 'border-up/40 bg-up/15 text-up shadow-[0_0_14px_-6px_var(--color-up)]',
+  down: 'border-down/40 bg-down/15 text-down shadow-[0_0_14px_-6px_var(--color-down)]',
+  amber: 'border-amber/40 bg-amber/15 text-amber shadow-[0_0_14px_-6px_var(--color-amber)]',
+  violet: 'border-violet/40 bg-violet/15 text-violet shadow-[0_0_14px_-6px_var(--color-violet)]',
+  cyan: 'border-cyan/40 bg-cyan/15 text-cyan shadow-[0_0_14px_-6px_var(--color-cyan)]',
+}
+
+export function Badge({
+  tone = 'neutral',
+  className,
+  children,
+}: {
+  tone?: BadgeTone
+  className?: string
+  children?: ReactNode
+}) {
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 rounded-full border border-border/80 bg-secondary/40 px-2.5 py-0.5 text-xs font-medium text-muted-foreground backdrop-blur-sm',
+        'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium backdrop-blur-sm transition-colors duration-200',
+        BADGE_TONES[tone],
         className,
       )}
     >
@@ -71,9 +94,9 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   primary:
-    'btn-lift border border-white/10 bg-gradient-to-b from-primary via-primary to-primary/85 text-on-primary shadow-[0_10px_28px_-12px_var(--color-primary)] hover:shadow-[0_14px_34px_-10px_var(--color-primary),0_0_24px_-12px_var(--color-accent)]',
+    'btn-lift border border-white/10 bg-gradient-to-b from-secondary via-primary to-primary/75 text-on-primary shadow-[0_10px_28px_-12px_var(--color-primary),0_0_18px_-8px_var(--color-secondary)] hover:shadow-[0_14px_34px_-10px_var(--color-primary),0_0_24px_-10px_var(--color-accent)]',
   secondary:
-    'btn-lift border border-border/80 bg-secondary/40 text-foreground backdrop-blur-sm hover:border-accent/40 hover:bg-secondary/60',
+    'btn-lift border border-border/80 bg-secondary/40 text-foreground backdrop-blur-sm hover:border-accent/50 hover:bg-secondary/60 hover:text-accent',
   ghost: 'btn-lift border border-transparent bg-transparent text-muted-foreground hover:bg-secondary/40 hover:text-foreground',
   danger: 'btn-lift border border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20',
 }
@@ -213,7 +236,7 @@ export function EmptyState({
   return (
     <div className="surface flex flex-col items-center justify-center rounded-2xl border border-dashed border-border/70 px-6 py-14 text-center">
       {icon && (
-        <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-border/70 bg-secondary/40 text-accent shadow-sm">
+        <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-accent/30 bg-gradient-to-br from-accent/25 to-primary/15 text-accent shadow-[0_0_18px_-6px_var(--color-accent)]">
           {icon}
         </div>
       )}

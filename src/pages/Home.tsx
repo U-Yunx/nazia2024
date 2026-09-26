@@ -28,25 +28,29 @@ const PILLARS = [
     icon: Bot,
     title: 'Robot trading',
     desc: 'Run fully automated strategies on a paper account first, then connect a real broker when you are ready.',
-    gradient: 'from-primary/25 to-primary/5 border-primary/20',
+    gradient: 'from-primary/30 to-primary/10 border-primary/25',
+    iconCls: 'border-primary/30 bg-primary/15 text-primary',
   },
   {
     icon: Target,
     title: 'Auto-tune & backtest',
     desc: 'Stress-test any strategy against historical data and let the optimizer pick your best parameters.',
-    gradient: 'from-cyan/20 to-cyan/5 border-cyan/20',
+    gradient: 'from-cyan/25 to-cyan/10 border-cyan/25',
+    iconCls: 'border-cyan/30 bg-cyan/15 text-cyan',
   },
   {
     icon: LineChart,
     title: 'Live signals',
     desc: 'Real-time watchlist quotes and indicator-driven signals across forex and crypto pairs.',
-    gradient: 'from-amber/20 to-amber/5 border-amber/20',
+    gradient: 'from-amber/25 to-amber/10 border-amber/25',
+    iconCls: 'border-amber/30 bg-amber/15 text-amber',
   },
   {
     icon: ShieldCheck,
     title: 'Risk first',
     desc: 'Per-trade risk limits, trailing stops and daily loss caps protect your balance automatically.',
-    gradient: 'from-up/20 to-up/5 border-up/20',
+    gradient: 'from-up/25 to-up/10 border-up/25',
+    iconCls: 'border-up/30 bg-up/15 text-up',
   },
 ]
 
@@ -61,10 +65,11 @@ export function Home() {
       {/* Hero */}
       <section className="relative overflow-hidden text-center">
         <div aria-hidden="true" className="pointer-events-none absolute inset-0">
-          <div className="absolute -top-24 left-1/2 h-72 w-[560px] -translate-x-1/2 rounded-full bg-primary/20 blur-[110px]" />
-          <div className="absolute -right-16 top-40 h-56 w-56 rounded-full bg-accent/12 blur-[90px]" />
-          <div className="absolute -left-16 top-64 h-52 w-52 rounded-full bg-cyan/12 blur-[90px]" />
-          <div className="absolute bottom-0 right-1/3 h-44 w-44 rounded-full bg-pink/6 blur-[90px]" />
+          <div className="absolute -top-24 left-1/2 h-72 w-[560px] -translate-x-1/2 rounded-full bg-primary/25 blur-[110px]" />
+          <div className="absolute -right-16 top-40 h-56 w-56 rounded-full bg-accent/15 blur-[90px]" />
+          <div className="absolute -left-16 top-64 h-52 w-52 rounded-full bg-cyan/15 blur-[90px]" />
+          <div className="absolute bottom-0 right-1/3 h-44 w-44 rounded-full bg-pink/10 blur-[90px]" />
+          <div className="absolute bottom-10 left-1/4 h-40 w-40 rounded-full bg-amber/10 blur-[80px]" />
         </div>
         <div className="relative">
         <div className="surface-premium mx-auto mb-5 inline-flex items-center gap-2 rounded-full border border-accent/30 px-4 py-1.5 text-xs font-medium text-accent">
@@ -96,10 +101,10 @@ export function Home() {
 
         {/* Stats */}
         <div className="mx-auto mt-10 grid max-w-2xl grid-cols-2 gap-3 sm:grid-cols-4">
-          <Stat label="Traders" value={stats.registered.toLocaleString()} />
-          <Stat label="Active 24h" value={stats.active_24h.toLocaleString()} />
-          <Stat label="Active 7d" value={stats.active_7d.toLocaleString()} />
-          <Stat label="Active 30d" value={stats.active_30d.toLocaleString()} />
+          <Stat label="Traders" value={stats.registered.toLocaleString()} accent="from-accent to-cyan" />
+          <Stat label="Active 24h" value={stats.active_24h.toLocaleString()} accent="from-cyan to-teal" />
+          <Stat label="Active 7d" value={stats.active_7d.toLocaleString()} accent="from-amber to-pink" />
+          <Stat label="Active 30d" value={stats.active_30d.toLocaleString()} accent="from-violet to-primary" />
         </div>
         </div>
       </section>
@@ -217,7 +222,12 @@ export function Home() {
                 p.gradient,
               )}
             >
-              <div className="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-border/60 bg-background/50 text-accent shadow-sm transition-transform duration-200 ease-out group-hover:scale-105">
+              <div
+                className={cn(
+                  'mb-4 inline-flex h-10 w-10 items-center justify-center rounded-xl border bg-background/50 shadow-sm transition-transform duration-200 ease-out group-hover:scale-105',
+                  p.iconCls,
+                )}
+              >
                 <p.icon className="h-5 w-5" aria-hidden="true" />
               </div>
               <h3 className="font-heading text-lg font-semibold tracking-tight text-foreground">{p.title}</h3>
@@ -263,9 +273,13 @@ export function Home() {
   )
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, accent }: { label: string; value: string; accent: string }) {
   return (
-    <div className="surface-premium surface-hover rounded-xl border border-border/70 px-4 py-3.5">
+    <div className="surface-premium surface-hover relative overflow-hidden rounded-xl border border-border/70 px-4 py-3.5">
+      <span
+        aria-hidden="true"
+        className={cn('absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r', accent)}
+      />
       <p className="tnum font-mono text-xl font-bold tracking-tight text-foreground">{value}</p>
       <p className="mt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
     </div>
