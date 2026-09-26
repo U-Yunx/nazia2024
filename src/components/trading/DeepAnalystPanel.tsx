@@ -13,10 +13,11 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { BrainCircuit, Clock, Info, RefreshCw, Sparkles, TriangleAlert, X } from 'lucide-react'
+import { BrainCircuit, Info, RefreshCw, Sparkles, TriangleAlert, X } from 'lucide-react'
 import { fn } from '../../lib/functions'
 import { buildDeepAnalystContext, type AnalystStrategy, type DeepAnalystResponse } from '../../lib/deepAnalyst'
-import { engineLabel, fetchAnalystHistory, runToResponse, type AnalystRun } from '../../lib/deepAnalystHistory'
+import { fetchAnalystHistory, runToResponse, type AnalystRun } from '../../lib/deepAnalystHistory'
+import { HistorySection, VERDICT_META } from './DeepAnalystHistory'
 import { isSupabaseConfigured, supabase } from '../../lib/supabase'
 import { useAuth } from '../../hooks/useAuth'
 import { fetchTimeSeries } from '../../hooks/useMarketData'
@@ -25,23 +26,6 @@ import { pnlUsd } from '../../lib/trading/risk'
 import { cn } from '../../lib/cn'
 import type { AccountState, Position, RatesMap } from '../../lib/trading/types'
 import { Badge, Button, Skeleton } from '../ui'
-
-const VERDICT_META: Record<
-  AnalystStrategy['verdict'],
-  { label: string; className: string; hint: string }
-> = {
-  hold: { label: 'Hold', className: 'border-accent/40 bg-accent/10 text-accent', hint: 'Keep the position as is' },
-  take_profit: { label: 'Take profit', className: 'border-up/40 bg-up/10 text-up', hint: 'Bank the full profit now' },
-  partial_take_profit: {
-    label: 'Partial take-profit',
-    className: 'border-up/40 bg-up/10 text-up',
-    hint: 'Bank part, let the rest run',
-  },
-  trail: { label: 'Trail the stop', className: 'border-cyan/40 bg-cyan/10 text-cyan', hint: 'Lock gains, keep upside' },
-  cut_loss: { label: 'Cut the loss', className: 'border-down/40 bg-down/10 text-down', hint: 'Exit the loser now' },
-  reduce_risk: { label: 'Reduce risk', className: 'border-amber/40 bg-amber/10 text-amber', hint: 'Tighten stop / trim size' },
-  stand_pat: { label: 'Stand pat', className: 'border-border bg-muted text-muted-foreground', hint: "No clear edge — don't force it" },
-}
 
 type PanelState =
   | { phase: 'idle' }
@@ -215,49 +199,6 @@ export function DeepAnalystPanel({
             setState({ phase: 'done', result: runToResponse(run), at: Date.parse(run.created_at) })
           }
         />
-      )}
-    </div>
-  )
-}
-
-function HistorySection({ runs, onSelect }: { runs: AnalystRun[] | null; onSelect: (run: AnalystRun) => void }) {
-  if (runs === null) return null
-  return (
-    <div className="mt-4 border-t border-border/60 pt-3">
-      <p className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
-        <Clock className="h-3 w-3" aria-hidden="true" />
-        Recent analyses
-      </p>
-      {runs.length === 0 ? (
-        <p className="mt-1.5 text-xs text-muted-foreground">
-          No past analyses yet — run your first one and it will be saved here for later review.
-        </p>
-      ) : (
-        <ul className="mt-1.5 space-y-1">
-          {runs.map((r) => {
-            const meta = VERDICT_META[r.strategy.verdict]
-            return (
-              <li key={r.id}>
-                <button
-                  type="button"
-                  onClick={() => onSelect(r)}
-                  className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-lg border border-border/60 bg-secondary/30 px-2.5 py-1.5 text-left text-xs transition-colors duration-150 hover:border-accent/40 hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  title={`View the ${r.symbol} analysis from ${timeAgo(r.created_at)}`}
-                >
-                  <span className="flex min-w-0 items-center gap-2">
-                    <span className="font-semibold text-foreground">{r.symbol}</span>
-                    <span className="uppercase text-muted-foreground">{r.side}</span>
-                    <Badge className="border-border bg-muted text-muted-foreground">{engineLabel(r.engine)}</Badge>
-                  </span>
-                  <span className="flex shrink-0 items-center gap-2">
-                    <Badge className={cn('border', meta.className)}>{meta.label}</Badge>
-                    <span className="whitespace-nowrap text-muted-foreground">{timeAgo(r.created_at)}</span>
-                  </span>
-                </button>
-              </li>
-            )
-          })}
-        </ul>
       )}
     </div>
   )

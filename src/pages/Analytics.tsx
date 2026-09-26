@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Activity, Gauge, Play, ShieldAlert, TrendingUp } from 'lucide-react'
+import { Activity, BrainCircuit, Gauge, Play, ShieldAlert, Sparkles, TrendingUp, TriangleAlert, X } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { loadRobotHistory, type RobotPerformance } from '../lib/trading/robotHistory'
 import {
@@ -15,9 +15,12 @@ import {
   robotHealthScore,
   type DrawdownPoint,
 } from '../lib/trading/deepAnalysis'
-import { formatDateTime, formatUsd } from '../lib/format'
+import { formatDateTime, formatPrice, formatUsd, timeAgo } from '../lib/format'
 import { cn } from '../lib/cn'
-import { Button, Card, CardContent, CardHeader, CardTitle, EmptyState, PageHeader, Skeleton } from '../components/ui'
+import { fetchAnalystHistory, engineLabel, type AnalystRun } from '../lib/deepAnalystHistory'
+import { isSupabaseConfigured, supabase } from '../lib/supabase'
+import { HistorySection, VERDICT_META } from '../components/trading/DeepAnalystHistory'
+import { Badge, Button, Card, CardContent, CardHeader, CardTitle, EmptyState, PageHeader, Skeleton } from '../components/ui'
 import { MetricsCards, type MetricItem } from '../components/MetricsCards'
 import { EquityChart } from '../components/EquityChart'
 
@@ -163,12 +166,115 @@ function DrawdownChart({ series, height = 260 }: { series: DrawdownPoint[]; heig
   )
 }
 
+/* ------------------------- Saved analysis detail ------------------------- */
+
+function RunDetail({ run, onClose }: { run: AnalystRun; onClose: () => void }) {
+  const s = run.strategy
+  const meta = VERDICT_META[s.verdict]
+  return (
+    <div
+      className="rounded-xl border border-border bg-secondary/20 p-4"
+      role="region"
+      aria-label={`Analysis for ${run.symbol} — ${meta.label}`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <BrainCircuit className="h-4 w-4 text-accent" aria-hidden="true" />
+          {run.symbol}
+          <span className="text-xs font-normal uppercase text-muted-foreground">{run.side}</span>
+          <span className="text-[11px] font-normal text-muted-foreground">{timeAgo(run.created_at)}</span>
+        </p>
+        <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close analysis" title="Close">
+          <X className="h-4 w-4" aria-hidden="true" />
+        </Button>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span title={meta.hint}>
+          <Badge className={cn('border', meta.className)}>{meta.label}</Badge>
+        </span>
+        <span className="text-sm font-medium text-foreground">{s.action}</span>
+      </div>
+
+      {/* Confidence */}
+      <div className="mt-3">
+        <div className="flex items-center justify-between gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
+          <span>Confidence</span>
+          <span className="tnum font-semibold text-foreground">{s.confidence}%</span>
+        </div>
+        <div
+          className="mt-1 h-1.5 overflow-hidden rounded-full bg-secondary"
+          role="meter"
+          aria-valuenow={s.confidence}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label="Analysis confidence"
+        >
+          <div
+            className={cn('h-full rounded-full transition-all duration-300', s.confidence >= 60 ? 'bg-up' : 'bg-amber')}
+            style={{ width: `${s.confidence}%` }}
+          />
+        </div>
+      </div>
+
+      {/* Levels */}
+      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {s.targets.map((t, i) => (
+          <div key={`${run.id}-t-${i}`} className="rounded-lg border border-border bg-secondary/40 px-3 py-2">
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{t.label}</p>
+            <p className="tnum text-sm font-semibold text-foreground">
+              {t.price != null ? formatPrice(t.price) : '—'}
+            </p>
+            {t.note && <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{t.note}</p>}
+          </div>
+        ))}
+        <div className="rounded-lg border border-down/30 bg-down/5 px-3 py-2">
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Stop advice</p>
+          <p className="tnum text-sm font-semibold text-foreground">
+            {s.stop.price != null ? formatPrice(s.stop.price) : 'Keep current stop'}
+          </p>
+          {s.stop.note && <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{s.stop.note}</p>}
+        </div>
+      </div>
+
+      {/* Reasoning */}
+      {s.reasoning.length > 0 && (
+        <ul className="mt-3 space-y-1.5">
+          {s.reasoning.map((r, i) => (
+            <li key={`${run.id}-r-${i}`} className="flex items-start gap-2 text-xs text-muted-foreground">
+              <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-accent" aria-hidden="true" />
+              {r}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {s.risks.length > 0 && (
+        <p className="mt-3 flex items-start gap-2 rounded-lg border border-amber/30 bg-amber/5 px-3 py-2 text-xs text-amber">
+          <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span>
+            <span className="font-semibold">Risk check — </span>
+            {s.risks.join(' ')}
+          </span>
+        </p>
+      )}
+
+      <p className="mt-3 border-t border-border/60 pt-2 text-[10px] text-muted-foreground">
+        {run.entry_price != null && run.mark != null ? `Entry ${formatPrice(run.entry_price)} · mark ${formatPrice(run.mark)} · ` : ''}
+        {engineLabel(run.engine)} · saved {timeAgo(run.created_at)} · analysis only, not financial advice.
+      </p>
+    </div>
+  )
+}
+
 /* --------------------------------- Page ---------------------------------- */
 
 export function Analytics() {
   const { user } = useAuth()
   const [perf, setPerf] = useState<RobotPerformance | null>(null)
   const [loading, setLoading] = useState(true)
+  const [runs, setRuns] = useState<AnalystRun[] | null>(null)
+  const [selected, setSelected] = useState<AnalystRun | null>(null)
 
   useEffect(() => {
     if (!user) {
@@ -179,6 +285,23 @@ export function Analytics() {
       setPerf(p)
       setLoading(false)
     })
+  }, [user?.id])
+
+  // Load the signed-in user's saved Deep Analyst runs so verdicts can be
+  // reopened without a position open. Offline/unconfigured → empty list.
+  useEffect(() => {
+    setSelected(null)
+    if (!user?.id || !isSupabaseConfigured) {
+      setRuns([])
+      return
+    }
+    let cancelled = false
+    void fetchAnalystHistory(supabase, 12).then((r) => {
+      if (!cancelled) setRuns(r)
+    })
+    return () => {
+      cancelled = true
+    }
   }, [user?.id])
 
   const sessions = perf?.sessions ?? []
@@ -290,6 +413,61 @@ export function Analytics() {
                   </div>
                 )}
               </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Deep Analyst history — saved analyses reviewable without a position open */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Deep Analyst history</CardTitle>
+          <span className="text-xs text-muted-foreground">
+            Every analysis you run from a position panel is saved here — reopen the verdict and its exact levels anytime.
+          </span>
+        </CardHeader>
+        <CardContent>
+          {!user ? (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-muted-foreground">
+                Sign in and your Deep Analyst runs are recorded here, so you can review past verdicts without the trade open.
+              </p>
+              <Link to="/auth">
+                <Button size="sm">Sign in</Button>
+              </Link>
+            </div>
+          ) : runs === null ? (
+            <div className="space-y-2" aria-busy="true" aria-label="Loading saved analyses">
+              <Skeleton className="h-4 w-48 rounded" />
+              <Skeleton className="h-9 w-full rounded-lg" />
+              <Skeleton className="h-9 w-full rounded-lg" />
+            </div>
+          ) : runs.length === 0 ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-dashed border-border bg-secondary/10 px-4 py-3">
+              <p className="text-sm text-muted-foreground">
+                No saved analyses yet — open a position in{' '}
+                <Link to="/trading" className="font-semibold text-accent underline underline-offset-2">
+                  Manual trading
+                </Link>{' '}
+                or any robot tab, run Deep Analyst, and it lands here for later review.
+              </p>
+              <Link to="/trading">
+                <Button size="sm">
+                  <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                  Run an analysis
+                </Button>
+              </Link>
+            </div>
+          ) : (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <HistorySection runs={runs} onSelect={setSelected} selectedId={selected?.id ?? null} />
+              {selected ? (
+                <RunDetail run={selected} onClose={() => setSelected(null)} />
+              ) : (
+                <div className="flex min-h-28 items-center justify-center rounded-lg border border-dashed border-border bg-secondary/10 px-4 text-center text-xs text-muted-foreground">
+                  Select an analysis on the left to reopen its verdict and exact levels.
+                </div>
+              )}
             </div>
           )}
         </CardContent>
